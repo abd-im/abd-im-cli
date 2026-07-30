@@ -34,7 +34,6 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与路径 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | ABD-012 | blocked | US-02 | 在 `internal/capability/`、`internal/operation/` 和 `internal/capability/groupcreate/` 实现 capability manifest、通用副作用守卫、run-scoped `group.create` handler 与 operation/idempotency。 | ABD-005, ABD-006, ABD-009, ABD-010 | 只有 manifest 与 grant 共同允许的方法可执行；成员 ID 必须在 allowlist；未知结果不能用新 key 自动重建群。 |
 
 **Checkpoint**：通用 capability 执行面和首个写入 handler 可独立演示，并满足 SC-005。
 

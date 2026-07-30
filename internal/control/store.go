@@ -275,6 +275,23 @@ func (s *Store) OperationByIdempotencyKey(ctx context.Context, profileID, scope,
 	return operation, nil
 }
 
+// UnknownOperationByInputDigest finds a prior uncertain side effect with the
+// same canonical input. Callers must not retry it under a different key.
+func (s *Store) UnknownOperationByInputDigest(ctx context.Context, profileID, scope, digest string) (Operation, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, profile_id, scope, idempotency_key, input_digest, status, created_at, updated_at
+		FROM operations WHERE profile_id = ? AND scope = ? AND input_digest = ? AND status = 'unknown'
+		ORDER BY created_at ASC LIMIT 1`, profileID, scope, digest)
+	operation, err := scanOperation(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Operation{}, fmt.Errorf("%w: unknown operation input", ErrNotFound)
+	}
+	if err != nil {
+		return Operation{}, fmt.Errorf("get unknown operation by input: %w", err)
+	}
+	return operation, nil
+}
+
 // UpdateOperationStatus records a terminal or unknown operation outcome.
 func (s *Store) UpdateOperationStatus(ctx context.Context, id string, status OperationStatus) error {
 	switch status {

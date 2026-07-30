@@ -19,6 +19,7 @@ var ErrClosed = errors.New("run tool proxy is closed")
 type Method struct {
 	Name    string
 	Scope   string
+	Allowed func() bool
 	Targets func(json.RawMessage) ([]string, error)
 	Handle  func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error)
 }
@@ -73,6 +74,9 @@ func (p *Proxy) Call(ctx context.Context, request contracts.Request) (contracts.
 	if !exists {
 		return failed(request.RequestID, contracts.CodePolicyDenied, "method is not an exposed typed tool"), nil
 	}
+	if method.Allowed != nil && !method.Allowed() {
+		return failed(request.RequestID, contracts.CodePolicyDenied, "capability is not available"), nil
+	}
 	targets := []string(nil)
 	if method.Targets != nil {
 		var err error
@@ -92,6 +96,10 @@ func (p *Proxy) Call(ctx context.Context, request contracts.Request) (contracts.
 	}
 	payload, err := method.Handle(ctx, request, access)
 	if err != nil {
+		var typed *Error
+		if errors.As(err, &typed) {
+			return failed(request.RequestID, typed.Code, typed.Message), nil
+		}
 		return failed(request.RequestID, contracts.CodeInternal, "typed tool failed"), nil
 	}
 	if !json.Valid(payload) {
@@ -104,6 +112,17 @@ func (p *Proxy) Call(ctx context.Context, request contracts.Request) (contracts.
 		Data:       payload,
 		Meta:       &contracts.Meta{ProfileID: p.profileID},
 	}, nil
+}
+
+// Error lets a typed capability return a stable public failure code.
+type Error struct {
+	Code    contracts.ErrorCode
+	Message string
+}
+
+func (e *Error) Error() string { return e.Message }
+func Failure(code contracts.ErrorCode, message string) error {
+	return &Error{Code: code, Message: message}
 }
 
 // Close invalidates every credential for this run before the provider can make
