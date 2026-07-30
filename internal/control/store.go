@@ -185,6 +185,54 @@ func (s *Store) EventByDedupKey(ctx context.Context, profileID, dedupKey string)
 	return event, nil
 }
 
+// NextEventSequence returns the next profile-local event sequence. Profile
+// locking serializes writers, while the unique profile/sequence index remains
+// a final durability guard.
+func (s *Store) NextEventSequence(ctx context.Context, profileID string) (uint64, error) {
+	if strings.TrimSpace(profileID) == "" {
+		return 0, errors.New("profile ID is required")
+	}
+	var sequence uint64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE profile_id = ?`, profileID).Scan(&sequence); err != nil {
+		return 0, fmt.Errorf("next event sequence: %w", err)
+	}
+	return sequence, nil
+}
+
+// ListEvents returns persisted event references after a profile-local cursor.
+// It intentionally has no message-body columns or joins into the SDK store.
+func (s *Store) ListEvents(ctx context.Context, profileID string, after uint64, limit int) ([]Event, error) {
+	if strings.TrimSpace(profileID) == "" {
+		return nil, errors.New("profile ID is required")
+	}
+	if limit <= 0 || limit > 100 {
+		return nil, errors.New("event limit must be between 1 and 100")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, profile_id, sequence, sdk_dedup_key, type,
+			conversation_id, message_id, occurred_at, recorded_at
+		FROM events WHERE profile_id = ? AND sequence > ?
+		ORDER BY sequence ASC LIMIT ?`, profileID, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		event, err := scanEvent(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan event: %w", err)
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate events: %w", err)
+	}
+	return events, nil
+}
+
 // PutOperation records a remote side effect's idempotency identity and outcome.
 func (s *Store) PutOperation(ctx context.Context, operation Operation) error {
 	if err := operation.validate(); err != nil {
