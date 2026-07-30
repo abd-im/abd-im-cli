@@ -275,6 +275,68 @@ func (s *Store) OperationByIdempotencyKey(ctx context.Context, profileID, scope,
 	return operation, nil
 }
 
+// UpdateOperationStatus records a terminal or unknown operation outcome.
+func (s *Store) UpdateOperationStatus(ctx context.Context, id string, status OperationStatus) error {
+	switch status {
+	case OperationConfirmed, OperationFailed, OperationUnknown:
+	default:
+		return errors.New("operation status must be confirmed, failed, or unknown")
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE operations SET status = ?, updated_at = ? WHERE id = ?`, status, encodeTime(time.Now()), id)
+	if err != nil {
+		return fmt.Errorf("update operation status: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check operation update: %w", err)
+	}
+	if changed == 0 {
+		return fmt.Errorf("%w: operation %q", ErrNotFound, id)
+	}
+	return nil
+}
+
+// PutReplySlot creates the immutable reply target for one inbound event.
+func (s *Store) PutReplySlot(ctx context.Context, slot ReplySlot) error {
+	if err := slot.validate(); err != nil {
+		return err
+	}
+	if slot.CreatedAt.IsZero() {
+		slot.CreatedAt = time.Now()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO reply_slots (
+			id, profile_id, event_id, conversation_id, trigger_message_id,
+			run_id, operation_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		slot.ID, slot.ProfileID, slot.EventID, slot.ConversationID, slot.TriggerMessageID,
+		slot.RunID, slot.OperationID, encodeTime(slot.CreatedAt))
+	if isUniqueViolation(err) {
+		return fmt.Errorf("%w: reply slot %q", ErrConflict, slot.ID)
+	}
+	if err != nil {
+		return fmt.Errorf("put reply slot: %w", err)
+	}
+	return nil
+}
+
+// ReplySlotByEvent returns the sole reply target for an event.
+func (s *Store) ReplySlotByEvent(ctx context.Context, profileID, eventID string) (ReplySlot, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, profile_id, event_id, conversation_id, trigger_message_id,
+			run_id, operation_id, created_at
+		FROM reply_slots WHERE profile_id = ? AND event_id = ?`, profileID, eventID)
+	slot, err := scanReplySlot(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ReplySlot{}, fmt.Errorf("%w: reply slot for event %q", ErrNotFound, eventID)
+	}
+	if err != nil {
+		return ReplySlot{}, fmt.Errorf("get reply slot: %w", err)
+	}
+	return slot, nil
+}
+
 // PutGrant records the constraints issued to one provider run.
 func (s *Store) PutGrant(ctx context.Context, grant Grant) error {
 	if err := grant.validate(); err != nil {
@@ -399,6 +461,22 @@ func scanOperation(row scanner) (Operation, error) {
 		return Operation{}, err
 	}
 	return operation, nil
+}
+
+func scanReplySlot(row scanner) (ReplySlot, error) {
+	var slot ReplySlot
+	var createdAt string
+	if err := row.Scan(
+		&slot.ID, &slot.ProfileID, &slot.EventID, &slot.ConversationID, &slot.TriggerMessageID,
+		&slot.RunID, &slot.OperationID, &createdAt,
+	); err != nil {
+		return ReplySlot{}, err
+	}
+	var err error
+	if slot.CreatedAt, err = decodeTime(createdAt); err != nil {
+		return ReplySlot{}, err
+	}
+	return slot, nil
 }
 
 func scanGrant(row scanner) (Grant, error) {

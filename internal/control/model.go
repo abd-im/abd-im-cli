@@ -58,6 +58,29 @@ type Operation struct {
 	UpdatedAt      time.Time
 }
 
+// ReplySlot binds a provider result to the original event and conversation.
+// It contains only identifiers, never reply text or message content.
+type ReplySlot struct {
+	ID               string
+	ProfileID        string
+	EventID          string
+	ConversationID   string
+	TriggerMessageID string
+	RunID            string
+	OperationID      string
+	CreatedAt        time.Time
+}
+
+func (slot ReplySlot) validate() error {
+	if strings.TrimSpace(slot.ID) == "" || strings.TrimSpace(slot.ProfileID) == "" || strings.TrimSpace(slot.EventID) == "" {
+		return errors.New("reply slot ID, profile ID, and event ID are required")
+	}
+	if strings.TrimSpace(slot.ConversationID) == "" || strings.TrimSpace(slot.TriggerMessageID) == "" || strings.TrimSpace(slot.RunID) == "" {
+		return errors.New("reply slot conversation, trigger message, and run ID are required")
+	}
+	return nil
+}
+
 func (operation Operation) validate() error {
 	if strings.TrimSpace(operation.ID) == "" || strings.TrimSpace(operation.ProfileID) == "" {
 		return errors.New("operation ID and profile ID are required")

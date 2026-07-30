@@ -57,4 +57,21 @@ var migrations = []migration{
 			`CREATE INDEX grants_run_id ON grants(run_id)`,
 		},
 	},
+	{
+		version: 2,
+		statements: []string{
+			`CREATE TABLE reply_slots (
+				id TEXT PRIMARY KEY,
+				profile_id TEXT NOT NULL,
+				event_id TEXT NOT NULL,
+				conversation_id TEXT NOT NULL,
+				trigger_message_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				operation_id TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				UNIQUE(profile_id, event_id)
+			)`,
+			`CREATE INDEX reply_slots_operation_id ON reply_slots(operation_id)`,
+		},
+	},
 }

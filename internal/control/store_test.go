@@ -42,8 +42,8 @@ func TestOpenMigratesIdempotently(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&migrations); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrations != 1 {
-		t.Fatalf("migration count = %d, want 1", migrations)
+	if migrations != 2 {
+		t.Fatalf("migration count = %d, want 2", migrations)
 	}
 }
 
@@ -137,6 +137,7 @@ func TestStorePersistsOnlyControlMetadata(t *testing.T) {
 		"events":            true,
 		"operations":        true,
 		"grants":            true,
+		"reply_slots":       true,
 	}
 	for rows.Next() {
 		var name, definition string

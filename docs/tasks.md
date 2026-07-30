@@ -25,7 +25,6 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与路径 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | ABD-011 | blocked | US-01 | 在 `internal/reply/` 实现 event-bound reply、reply slot 与消息 operation/idempotency。 | ABD-005, ABD-006, ABD-008, ABD-010 | 一 event 一 reply slot；崩溃后只得到 `confirmed`、`failed` 或 `unknown`，不自动补发。 |
 
 **Checkpoint**：US-01 可以独立演示，并满足 SC-002、SC-003、SC-006 和 SC-007。
 
