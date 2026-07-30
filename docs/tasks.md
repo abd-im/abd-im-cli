@@ -17,7 +17,6 @@
 | 完成 | ID | 状态 | 场景 | 任务与路径 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
 | [ ] | ABD-002 | blocked | 基础 | `[P]` 在 `internal/contracts/` 和 `internal/testkit/` 定义 v1 RPC/error/event contract 及 fake SDK/provider/proxy。 | ABD-001 | contract test 不访问真实 SDK、账号或 provider。 |
-| [ ] | ABD-003 | blocked | 基础 | `[P]` 在 `internal/logsafe/` 实现 SDK、HTTP/WebSocket、stderr 和审计日志的 token/request/URL 脱敏。 | ABD-001 | 注入 token marker 后，所有测试日志均不含 marker。 |
 | [ ] | ABD-004 | blocked | 基础 | 在 `internal/profile/` 实现 profile、credential reference、私有目录和 profile lock。 | ABD-001, ABD-003 | `auth import --token-stdin` 不经 argv 保存 token；第二个同 profile worker 被拒绝。 |
 | [ ] | ABD-005 | blocked | 基础 | `[P]` 在 `internal/control/` 实现 control store migration 和 profile/event/operation/grant 最小模型。 | ABD-001 | migration 可重复执行，且不保存完整正文或 SDK 数据表副本。 |
 | [ ] | ABD-006 | blocked | 基础 | 在 `internal/bridge/` 实现 `NewLoginMgr` bridge、listener 和生命周期状态。 | ABD-002, ABD-004 | 测试覆盖 `InitSDK -> InitResources -> listeners -> Login`、`ready/degraded/locked` 和 shutdown。 |
