@@ -10,7 +10,10 @@ import (
 	"strings"
 )
 
-var ErrPlaintextDisabled = errors.New("plaintext credential fallback is not enabled")
+var (
+	ErrPlaintextDisabled = errors.New("plaintext credential fallback is not enabled")
+	ErrInvalidToken      = errors.New("invalid token input")
+)
 
 // CredentialStore resolves an opaque credential reference. Implementations of
 // system keyrings and the explicit file fallback satisfy this boundary.
@@ -39,7 +42,7 @@ func (s *FileStore) Put(_ context.Context, profileName string, token []byte) (st
 		return "", err
 	}
 	if len(token) == 0 {
-		return "", errors.New("token is required")
+		return "", fmt.Errorf("%w: token is required", ErrInvalidToken)
 	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return "", fmt.Errorf("create credential directory: %w", err)
@@ -111,11 +114,11 @@ func ImportToken(ctx context.Context, input io.Reader, store CredentialStore, pr
 		return Profile{}, fmt.Errorf("read token input: %w", err)
 	}
 	if len(token) > maxTokenBytes {
-		return Profile{}, errors.New("token input is too large")
+		return Profile{}, fmt.Errorf("%w: token input is too large", ErrInvalidToken)
 	}
 	token = []byte(strings.TrimSpace(string(token)))
 	if len(token) == 0 {
-		return Profile{}, errors.New("token is required")
+		return Profile{}, fmt.Errorf("%w: token is required", ErrInvalidToken)
 	}
 	reference, err := store.Put(ctx, profile.Name, token)
 	if err != nil {

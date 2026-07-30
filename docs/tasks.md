@@ -16,7 +16,6 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与路径 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | ABD-007 | blocked | 基础 | 在 `internal/ipc/` 和 `internal/cli/` 实现 framed RPC、JSON 信封、CLI 输出和退出码。 | ABD-002, ABD-004, ABD-005 | Unix socket/named pipe 只允许本地访问；JSON/JSONL/error contract 有测试。 |
 
 **Checkpoint**：P0 foundation 可在无真实凭据的环境中验证 FR-001 至 FR-008。
 
