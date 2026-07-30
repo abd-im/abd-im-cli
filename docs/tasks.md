@@ -17,7 +17,6 @@
 | 完成 | ID | 状态 | 场景 | 任务与路径 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
 | [ ] | ABD-004 | blocked | 基础 | 在 `internal/profile/` 实现 profile、credential reference、私有目录和 profile lock。 | ABD-001, ABD-003 | `auth import --token-stdin` 不经 argv 保存 token；第二个同 profile worker 被拒绝。 |
-| [ ] | ABD-005 | blocked | 基础 | `[P]` 在 `internal/control/` 实现 control store migration 和 profile/event/operation/grant 最小模型。 | ABD-001 | migration 可重复执行，且不保存完整正文或 SDK 数据表副本。 |
 | [ ] | ABD-006 | blocked | 基础 | 在 `internal/bridge/` 实现 `NewLoginMgr` bridge、listener 和生命周期状态。 | ABD-002, ABD-004 | 测试覆盖 `InitSDK -> InitResources -> listeners -> Login`、`ready/degraded/locked` 和 shutdown。 |
 | [ ] | ABD-007 | blocked | 基础 | 在 `internal/ipc/` 和 `internal/cli/` 实现 framed RPC、JSON 信封、CLI 输出和退出码。 | ABD-002, ABD-004, ABD-005 | Unix socket/named pipe 只允许本地访问；JSON/JSONL/error contract 有测试。 |
 
