@@ -48,11 +48,13 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与路径 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | ABD-033 | ready | US-02 | 在 `tests/e2e/` 验证 grant-bound typed reads、`group.create` operation/idempotency 与崩溃未知结果。 | ABD-009 至 ABD-012, ABD-025, ABD-027 至 ABD-031 | SC-004 至 SC-005 可自动验证。 |
-| [ ] | ABD-034 | ready | US-01, US-02 | 在 `tests/e2e/` 验证 provider 隔离、撤销/权限变化/过期取消和 token/message privacy 回归。 | ABD-003, ABD-009 至 ABD-011, ABD-025 至 ABD-026, ABD-032, ABD-033 | SC-006 至 SC-008 可自动验证。 |
+| [ ] | ABD-035 | ready | US-02 | 在 `internal/capability/groupcreate/`、`internal/connector/` 和 `cmd/abdim/` 将 `group.create` 接至 daemon-owned、经认证的 server action source，并建立 integration gate。 | ABD-012, ABD-024 | SDK 本地同步 API 不可达；handler 仅由 manifest 与 grant 共同开放，server 请求只带 owner 和 allowlisted member IDs。 |
+| [ ] | ABD-036 | ready | US-02 | 在 `tests/e2e/` 验证 provider 的 grant-bound typed message reads、会话/目标限制与消息窗口。 | ABD-009, ABD-015, ABD-025, ABD-027 至 ABD-031 | SC-004 可自动验证。 |
+| [ ] | ABD-037 | ready | US-02 | 在 `tests/e2e/` 验证 `group.create` 的 allowlist、operation/idempotency 与未知结果恢复。 | ABD-035 | SC-005 可自动验证。 |
+| [ ] | ABD-034 | ready | US-01, US-02 | 在 `tests/e2e/` 验证 provider 隔离、撤销/权限变化/过期取消和 token/message privacy 回归。 | ABD-003, ABD-009 至 ABD-011, ABD-025 至 ABD-026, ABD-032, ABD-036, ABD-037 | SC-006 至 SC-008 可自动验证。 |
 
-**当前状态**：`ABD-024` 至 `ABD-032` 已完成 daemon、provider deployment boundary、全部 P1 typed server-read source 接线和 runtime/inbound e2e gate；每个可用 source 都有固定 SDK/server integration gate。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。`ABD-033` 与 `ABD-034` 是首个发布版本剩余的端到端门禁。
+**当前状态**：`ABD-024` 至 `ABD-032` 已完成 daemon、provider deployment boundary、全部 P1 typed server-read source 接线和 runtime/inbound e2e gate；每个可用 source 都有固定 SDK/server integration gate。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。发现 `group.create` 尚未接入 daemon-owned action source，故原 `ABD-033` 已拆为 `ABD-035` 至 `ABD-037`；它们与 `ABD-034` 是首个发布版本剩余的门禁。
 
 ## 执行顺序
 
-`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。US-02 先交付 capability 执行面和首个 action handler，再由共享 typed read service 同时补齐 US-02 与 US-03；`ABD-024` 至 `ABD-032` 已完成 daemon、provider MCP、部署边界、全部 P1 server-read source 及 lifecycle/inbound e2e。`ABD-033` 之后执行 `ABD-034` 组成发布门禁。
+`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。US-02 先交付 capability 执行面和首个 action handler，再由共享 typed read service 同时补齐 US-02 与 US-03；`ABD-024` 至 `ABD-032` 已完成 daemon、provider MCP、部署边界、全部 P1 server-read source 及 lifecycle/inbound e2e。`ABD-035` 完成后，`ABD-036` 与 `ABD-037` 可独立执行；`ABD-034` 在两者完成后组成发布门禁。
