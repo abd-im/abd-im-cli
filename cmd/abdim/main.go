@@ -28,6 +28,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/daemon"
 	"github.com/abd-im/abd-im-cli/internal/events"
 	"github.com/abd-im/abd-im-cli/internal/ipc"
+	"github.com/abd-im/abd-im-cli/internal/launcher"
 	mcpowner "github.com/abd-im/abd-im-cli/internal/mcp/owner"
 	"github.com/abd-im/abd-im-cli/internal/profile"
 	"github.com/abd-im/abd-im-cli/internal/reply"
@@ -290,10 +291,9 @@ func runDaemonVerify(ctx context.Context, args []string, output io.Writer, roots
 	return 0
 }
 
-// runDaemonServe composes the fixed daemon path for local Codex development.
-// A same-UID provider cannot enforce the product isolation boundary, so this
-// entrypoint requires an explicit acknowledgement until an isolated launcher
-// is available.
+// runDaemonServe composes the fixed daemon path with a separately identified
+// provider process. The launcher configuration is root-controlled so the
+// daemon cannot silently fall back to a same-UID provider.
 func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots commandRoots, profileName, requestID string, format cli.Output) int {
 	options, err := parseDaemonServeOptions(args)
 	if err != nil {
@@ -313,8 +313,16 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err := item.Deployment.Validate(); err != nil {
 		return writeInvalidArgument(output, requestID, "profile deployment is not configured")
 	}
-	if err := validateCodexHome(options.codexHome, paths); err != nil {
+	providerLauncher, err := launcher.Load(options.providerConfig)
+	if err != nil {
+		return writeInvalidArgument(output, requestID, "provider launcher configuration is invalid")
+	}
+	if err := validateProviderHome(providerLauncher.CodexHome(), paths); err != nil {
 		return writeInvalidArgument(output, requestID, err.Error())
+	}
+	providerWorkingDir, err := providerLauncher.WorkingDir(item.Name)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 
 	credentials, err := profile.NewFileStore(roots.dataDir, true)
@@ -361,9 +369,11 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	codex, err := codexprovider.New(codexprovider.Config{
-		WorkingDir:    paths.ProviderDir,
-		Environment:   codexEnvironment(options.codexHome),
+		Executable:    providerLauncher.CodexPath(),
+		WorkingDir:    providerWorkingDir,
+		Environment:   codexEnvironment(providerLauncher.CodexHome()),
 		BridgeCommand: executablePath(),
+		Launcher:      providerLauncher,
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -431,14 +441,13 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 }
 
 type daemonServeOptions struct {
-	codexHome string
+	providerConfig string
 }
 
 func parseDaemonServeOptions(args []string) (daemonServeOptions, error) {
 	var options daemonServeOptions
 	allowPlaintext := false
 	allowInbound := false
-	allowUnsafeProvider := false
 	for len(args) > 0 {
 		switch args[0] {
 		case "--allow-plaintext-credentials":
@@ -447,14 +456,11 @@ func parseDaemonServeOptions(args []string) (daemonServeOptions, error) {
 		case "--allow-all-inbound":
 			allowInbound = true
 			args = args[1:]
-		case "--allow-unsafe-same-user-provider":
-			allowUnsafeProvider = true
-			args = args[1:]
-		case "--codex-home":
+		case "--provider-config":
 			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
-				return daemonServeOptions{}, errors.New("--codex-home requires an absolute directory")
+				return daemonServeOptions{}, errors.New("--provider-config requires an absolute path")
 			}
-			options.codexHome = args[1]
+			options.providerConfig = args[1]
 			args = args[2:]
 		default:
 			return daemonServeOptions{}, errors.New("unsupported daemon serve flag")
@@ -466,26 +472,16 @@ func parseDaemonServeOptions(args []string) (daemonServeOptions, error) {
 	if !allowInbound {
 		return daemonServeOptions{}, errors.New("daemon serve requires --allow-all-inbound")
 	}
-	if !allowUnsafeProvider {
-		return daemonServeOptions{}, errors.New("daemon serve requires --allow-unsafe-same-user-provider until an isolated provider launcher is available")
-	}
-	if strings.TrimSpace(options.codexHome) == "" {
-		return daemonServeOptions{}, errors.New("daemon serve requires --codex-home")
+	if strings.TrimSpace(options.providerConfig) == "" {
+		return daemonServeOptions{}, errors.New("daemon serve requires --provider-config")
 	}
 	return options, nil
 }
 
-func validateCodexHome(home string, paths profile.Paths) error {
-	if !filepath.IsAbs(home) {
-		return errors.New("--codex-home requires an absolute directory")
-	}
-	info, err := os.Stat(home)
-	if err != nil || !info.IsDir() {
-		return errors.New("--codex-home must name an existing directory")
-	}
+func validateProviderHome(home string, paths profile.Paths) error {
 	for _, privatePath := range []string{paths.DataDir, filepath.Dir(paths.ConfigFile), paths.RuntimeDir} {
 		if pathContains(privatePath, home) || pathContains(home, privatePath) {
-			return errors.New("--codex-home must not overlap daemon-owned profile paths")
+			return errors.New("provider Codex home must not overlap daemon-owned profile paths")
 		}
 	}
 	return nil

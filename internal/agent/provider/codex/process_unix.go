@@ -8,7 +8,12 @@ import (
 )
 
 func configureProcessGroup(command *exec.Cmd) {
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	attributes := command.SysProcAttr
+	if attributes == nil {
+		attributes = &syscall.SysProcAttr{}
+	}
+	attributes.Setpgid = true
+	command.SysProcAttr = attributes
 }
 
 func terminateProcessGroup(command *exec.Cmd) {

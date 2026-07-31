@@ -49,23 +49,41 @@ go run ./cmd/abdim --profile work daemon verify --allow-plaintext-credentials
 The command starts the daemon-owned SDK lifecycle, logs in, logs out, and
 returns only whether the profile was verified.
 
-## Local Codex Daemon
+## Isolated Codex Daemon
 
-The only currently configured provider adapter is the local `codex` CLI in
-App Server stdio mode. It is not selected by an arbitrary command or endpoint.
-First verify that `codex app-server --listen stdio://` works with a separately
-managed Codex home directory. That directory contains provider credentials and
-must not be an abdim profile, SDK, runtime, or configuration directory.
+The only configured provider adapter is the local `codex` CLI in App Server
+stdio mode. It is not selected by an arbitrary command or endpoint. Release
+deployment runs the daemon as root and Codex as a separately provisioned,
+non-root OS UID/GID. The provider account owns its home and Codex home; the
+daemon owns the run root and its profile, SDK, credentials, and owner socket.
 
-For a local development trial, start the daemon with all three explicit
-acknowledgements:
+`daemon serve` requires an absolute `--provider-config` path to a root-owned,
+non-group/other-writable regular file beneath a root-owned traversable
+directory. Its exact fields are `uid`, `gid`,
+`home`, `codex_home`, `codex_path`, and `run_root`: the first two are positive,
+non-root numeric IDs; `home` must be directly under a root-owned traversable
+directory; `codex_home` must be inside `home`; `home` and `codex_home` must be
+owned by that UID/GID and not group/other writable;
+`codex_path` must be an absolute root-owned, provider-executable path beneath
+a root-owned traversable directory and name a
+non-group/other-writable regular file; `run_root` must be root-owned,
+non-writable by group/other, and permit provider traversal. The provider's
+`auth.json` must be a regular file owned by the configured UID/GID.
+
+Before starting the daemon, provision the provider user, create its owner-only
+home and Codex home, authenticate Codex as that user, create the root-owned
+run root with mode `0711`, and install the provider configuration under the
+deployment's root-controlled configuration directory. The run root must not
+be inside a provider-writable path.
+
+Start the isolated daemon with the credential and inbound-policy
+acknowledgements plus the controlled provider configuration:
 
 ```bash
-go run ./cmd/abdim --profile work daemon serve \
+sudo abdim --profile work daemon serve \
   --allow-plaintext-credentials \
   --allow-all-inbound \
-  --allow-unsafe-same-user-provider \
-  --codex-home "$CODEX_HOME"
+  --provider-config /etc/abdim/providers/work.toml
 ```
 
 `daemon serve` writes one JSON ready response, then remains in the foreground.
@@ -77,20 +95,19 @@ The reply service uses the callback-derived private recipient or group ID, so a
 provider prompt cannot choose another destination.
 
 `--allow-all-inbound` currently enables private and group messages from other
-users. It is deliberately not the default group policy. `--allow-unsafe-same-user-provider`
-is required because setting `HOME`, `CODEX_HOME`, and a private working
-directory does not isolate a process running under the daemon owner's OS UID.
-Do not use this mode for a release or untrusted inbound traffic. The release
-path still requires an independent user or container launcher that exposes only
-the run-private tool proxy and the provider's own home.
+users. It is deliberately not the default group policy and remains an explicit
+operator acknowledgement.
 
 Each Codex run now receives a fresh private `CODEX_HOME` containing only a
 fixed `abdim` stdio MCP server configuration. That server's subprocess only
 bridges to one run-private Unix socket; the daemon retains the grant and typed
 tool proxy. Its tool list is fixed before Codex starts to the policy, verified
 capability, and grant intersection. The adapter declines Codex command/file
-approvals. Unverified service sources remain `not_validated` and are absent
-from provider MCP discovery.
+approvals. The run's Codex home, working directory, and socket are assigned to
+the provider UID only after the daemon writes their fixed contents; the
+root-owned run parent prevents the provider from preparing paths for later
+runs. Unverified service sources remain `not_validated` and are absent from
+provider MCP discovery.
 
 The token must not be placed in argv, profile TOML, environment dumps, logs,
 MCP payloads, or RPC responses. `profile.toml` stores only its opaque

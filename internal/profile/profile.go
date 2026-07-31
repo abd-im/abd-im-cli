@@ -45,7 +45,6 @@ type Paths struct {
 	ControlDB      string
 	AttachmentsDir string
 	LogsDir        string
-	ProviderDir    string
 	RuntimeDir     string
 	Socket         string
 	Descriptor     string
@@ -70,7 +69,6 @@ func NewPaths(configDir, dataDir, runtimeDir, profileName string) (Paths, error)
 		ControlDB:      filepath.Join(profileDataDir, "control.db"),
 		AttachmentsDir: filepath.Join(profileDataDir, "attachments"),
 		LogsDir:        filepath.Join(profileDataDir, "logs"),
-		ProviderDir:    filepath.Join(runtimeDir, "abdim-provider", profileName),
 		RuntimeDir:     profileRuntimeDir,
 		Socket:         filepath.Join(profileRuntimeDir, "daemon.sock"),
 		Descriptor:     filepath.Join(profileRuntimeDir, "descriptor.json"),
@@ -83,7 +81,7 @@ func NewPaths(configDir, dataDir, runtimeDir, profileName string) (Paths, error)
 func (p Paths) EnsurePrivate() error {
 	for _, dir := range []string{
 		filepath.Dir(p.ConfigFile), p.DataDir, p.SDKDir, p.AttachmentsDir,
-		p.LogsDir, p.ProviderDir, p.RuntimeDir,
+		p.LogsDir, p.RuntimeDir,
 	} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("create private directory %q: %w", dir, err)

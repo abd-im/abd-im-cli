@@ -133,7 +133,7 @@ func TestDaemonVerifyRequiresConfiguredProfile(t *testing.T) {
 	}
 }
 
-func TestDaemonServeRequiresExplicitDevelopmentAcknowledgements(t *testing.T) {
+func TestDaemonServeRequiresExplicitDeploymentConfiguration(t *testing.T) {
 	roots := testRoots(t)
 	var output bytes.Buffer
 	if got := runWithIO([]string{"daemon", "serve"}, strings.NewReader(""), &output, roots); got != 2 {
@@ -144,16 +144,16 @@ func TestDaemonServeRequiresExplicitDevelopmentAcknowledgements(t *testing.T) {
 	}
 
 	output.Reset()
-	args := []string{"daemon", "serve", "--allow-plaintext-credentials", "--allow-all-inbound", "--codex-home", t.TempDir()}
+	args := []string{"daemon", "serve", "--allow-plaintext-credentials", "--allow-all-inbound"}
 	if got := runWithIO(args, strings.NewReader(""), &output, roots); got != 2 {
-		t.Fatalf("missing same-user acknowledgement exit = %d, want 2", got)
+		t.Fatalf("missing provider configuration exit = %d, want 2", got)
 	}
-	if !strings.Contains(output.String(), "--allow-unsafe-same-user-provider") {
-		t.Fatalf("missing provider acknowledgement response = %s", output.String())
+	if !strings.Contains(output.String(), "--provider-config") {
+		t.Fatalf("missing provider configuration response = %s", output.String())
 	}
 }
 
-func TestDaemonServeRejectsCodexHomeInsideProfilePaths(t *testing.T) {
+func TestDaemonServeRejectsProviderHomeInsideProfilePaths(t *testing.T) {
 	roots := testRoots(t)
 	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, "work")
 	if err != nil {
@@ -162,8 +162,8 @@ func TestDaemonServeRejectsCodexHomeInsideProfilePaths(t *testing.T) {
 	if err := os.MkdirAll(paths.DataDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateCodexHome(paths.DataDir, paths); err == nil || !strings.Contains(err.Error(), "must not overlap") {
-		t.Fatalf("validateCodexHome() error = %v", err)
+	if err := validateProviderHome(paths.DataDir, paths); err == nil || !strings.Contains(err.Error(), "must not overlap") {
+		t.Fatalf("validateProviderHome() error = %v", err)
 	}
 }
 

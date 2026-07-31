@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/launcher"
 	"github.com/abd-im/abd-im-cli/internal/testkit"
 )
 
@@ -99,6 +101,21 @@ func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
 	}
 }
 
+func TestAdapterDelegatesRestrictedRunAssetsToLauncher(t *testing.T) {
+	runner := &recordingRunner{}
+	adapter := newAdapterWithRunner(t, "", false, runner)
+	request := startRequest()
+	session, err := adapter.Start(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer session.Close(context.Background())
+	runRoot := filepath.Join(adapter.config.WorkingDir, request.RunID)
+	if runner.root != runRoot || runner.home != filepath.Join(runRoot, "codex") || runner.workDir != filepath.Join(runRoot, "work") || runner.socket != filepath.Join(runRoot, "mcp.sock") || runner.commandDir != runner.workDir {
+		t.Fatalf("launcher calls = %#v", runner)
+	}
+}
+
 func TestNewRequiresIsolatedCompositionInputs(t *testing.T) {
 	if _, err := New(Config{Environment: []string{"PATH=/bin"}, BridgeCommand: os.Args[0]}); err == nil {
 		t.Fatal("New() accepted an empty working directory")
@@ -106,9 +123,17 @@ func TestNewRequiresIsolatedCompositionInputs(t *testing.T) {
 	if _, err := New(Config{WorkingDir: t.TempDir(), BridgeCommand: os.Args[0]}); err == nil {
 		t.Fatal("New() accepted an inherited environment")
 	}
+	home := t.TempDir()
+	if _, err := New(Config{Executable: "/bin/true", WorkingDir: t.TempDir(), Environment: []string{"PATH=/bin", "CODEX_HOME=" + home}, BridgeCommand: os.Args[0]}); err == nil || !strings.Contains(err.Error(), "launcher") {
+		t.Fatalf("New() accepted no isolated launcher: %v", err)
+	}
 }
 
 func newAdapter(t *testing.T, capture string, block bool) *Adapter {
+	return newAdapterWithRunner(t, capture, block, testRunner{})
+}
+
+func newAdapterWithRunner(t *testing.T, capture string, block bool, runner launcher.Runner) *Adapter {
 	t.Helper()
 	root := t.TempDir()
 	home := t.TempDir()
@@ -130,11 +155,50 @@ func newAdapter(t *testing.T, capture string, block bool) *Adapter {
 	if block {
 		environment = append(environment, "FAKE_CODEX_BLOCK=1")
 	}
-	adapter, err := New(Config{Executable: script, WorkingDir: root, Environment: environment, BridgeCommand: os.Args[0], InitializeTimeout: time.Second})
+	adapter, err := New(Config{Executable: script, WorkingDir: root, Environment: environment, BridgeCommand: os.Args[0], Launcher: runner, InitializeTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	return adapter
+}
+
+type testRunner struct{}
+
+func (testRunner) CopyCodexAuth(destination string) error {
+	return os.WriteFile(destination, []byte(`{"tokens":{"access_token":"test"}}`), 0o600)
+}
+
+func (testRunner) PrepareRun(string, string, string) error { return nil }
+
+func (testRunner) PrepareSocket(string) error { return nil }
+
+func (testRunner) Configure(*exec.Cmd) error { return nil }
+
+type recordingRunner struct {
+	root       string
+	home       string
+	workDir    string
+	socket     string
+	commandDir string
+}
+
+func (r *recordingRunner) CopyCodexAuth(destination string) error {
+	return os.WriteFile(destination, []byte(`{"tokens":{"access_token":"test"}}`), 0o600)
+}
+
+func (r *recordingRunner) PrepareRun(root, home, workDir string) error {
+	r.root, r.home, r.workDir = root, home, workDir
+	return nil
+}
+
+func (r *recordingRunner) PrepareSocket(socket string) error {
+	r.socket = socket
+	return nil
+}
+
+func (r *recordingRunner) Configure(command *exec.Cmd) error {
+	r.commandDir = command.Dir
+	return nil
 }
 
 func startRequest() contracts.StartRequest {
