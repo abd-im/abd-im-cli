@@ -11,6 +11,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/bridge/abdim"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/profile"
+	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
 
@@ -68,6 +69,15 @@ func (p *Prepared) SDKFactory() bridge.SDKFactory {
 		return nil
 	}
 	return func() contracts.SDK { return p.Adapter }
+}
+
+// GroupSource exposes the verified server-read group facade using the
+// daemon-owned adapter context. It does not expose the SDK or its data store.
+func (p *Prepared) GroupSource() (*groupservice.SDKSource, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return groupservice.NewSDKSource(groupservice.OpenIMClient{Context: p.Adapter.Context})
 }
 
 func validateConfig(config Config) error {

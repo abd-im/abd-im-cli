@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/abd-im/abd-im-cli/internal/service"
 	conversationservice "github.com/abd-im/abd-im-cli/internal/service/conversation"
 	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
 	messageservice "github.com/abd-im/abd-im-cli/internal/service/message"
@@ -40,8 +41,31 @@ func NewUnverifiedOwnerServices(profileID string) (OwnerServices, error) {
 	return OwnerServices{Profile: profileReader, Conversation: conversationReader, Message: messageReader, Group: groupReader, Social: socialReader}, nil
 }
 
-func (unverifiedProfileSource) Profile(context.Context) (profileservice.Profile, error) { return profileservice.Profile{}, errUnverifiedSource }
-func (unverifiedProfileSource) Self(context.Context) (profileservice.User, error)       { return profileservice.User{}, errUnverifiedSource }
+// NewOwnerServicesWithVerifiedGroup keeps all unvalidated sources closed while
+// replacing group reads with the fixed server-read source covered by the
+// controlled integration gate.
+func NewOwnerServicesWithVerifiedGroup(profileID string, source groupservice.Source, capabilities map[string]service.Capability) (OwnerServices, error) {
+	if source == nil {
+		return OwnerServices{}, errors.New("verified group source is required")
+	}
+	services, err := NewUnverifiedOwnerServices(profileID)
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	groupReader, err := groupservice.New(source, groupservice.Options{ProfileID: profileID, Capabilities: capabilities})
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	services.Group = groupReader
+	return services, nil
+}
+
+func (unverifiedProfileSource) Profile(context.Context) (profileservice.Profile, error) {
+	return profileservice.Profile{}, errUnverifiedSource
+}
+func (unverifiedProfileSource) Self(context.Context) (profileservice.User, error) {
+	return profileservice.User{}, errUnverifiedSource
+}
 func (unverifiedProfileSource) Users(context.Context, []string) ([]profileservice.User, error) {
 	return nil, errUnverifiedSource
 }
@@ -65,7 +89,9 @@ func (unverifiedConversationSource) Get(context.Context, string) (conversationse
 func (unverifiedConversationSource) Search(context.Context, string) ([]conversationservice.Conversation, error) {
 	return nil, errUnverifiedSource
 }
-func (unverifiedConversationSource) Unread(context.Context) (int, error) { return 0, errUnverifiedSource }
+func (unverifiedConversationSource) Unread(context.Context) (int, error) {
+	return 0, errUnverifiedSource
+}
 
 type unverifiedMessageSource struct{}
 
@@ -81,7 +107,9 @@ func (unverifiedMessageSource) Get(context.Context, string, string) (messageserv
 
 type unverifiedGroupSource struct{}
 
-func (unverifiedGroupSource) List(context.Context) ([]groupservice.Group, error) { return nil, errUnverifiedSource }
+func (unverifiedGroupSource) List(context.Context) ([]groupservice.Group, error) {
+	return nil, errUnverifiedSource
+}
 func (unverifiedGroupSource) Get(context.Context, string) (groupservice.Group, error) {
 	return groupservice.Group{}, errUnverifiedSource
 }

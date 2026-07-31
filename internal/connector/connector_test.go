@@ -47,6 +47,9 @@ func TestPrepareResolvesCredentialWithoutStartingSDK(t *testing.T) {
 	if prepared == nil || prepared.Adapter == nil || prepared.SDKFactory() == nil {
 		t.Fatal("Prepare() returned incomplete daemon composition")
 	}
+	if source, err := prepared.GroupSource(); err != nil || source == nil {
+		t.Fatalf("GroupSource() = %v, %v", source, err)
+	}
 	if got := prepared.Adapter.Context(); got == nil {
 		t.Fatal("adapter context is nil")
 	}

@@ -84,6 +84,16 @@ type Service struct {
 	options Options
 }
 
+// VerifiedCapabilities returns the fixed group read surface covered by the
+// controlled SDK/server integration test.
+func VerifiedCapabilities(sdkVersion string) map[string]service.Capability {
+	capabilities := make(map[string]service.Capability, 5)
+	for _, method := range []string{ListMethod, GetMethod, SearchMethod, MembersListMethod, MembersSearchMethod} {
+		capabilities[method] = service.Capability{Method: method, Scope: ReadScope, Status: "available", SDKVersion: sdkVersion}
+	}
+	return capabilities
+}
+
 func New(source Source, options Options) (*Service, error) {
 	if source == nil {
 		return nil, errors.New("group source is required")

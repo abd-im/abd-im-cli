@@ -10,8 +10,8 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/service"
 )
 
-// This facade test is the SDK integration seam: a production source must use
-// the verified public SDK group APIs, while the service never reads SDK tables.
+// The service is exercised through its source boundary; OpenIM API mapping is
+// covered separately so this test needs no local SDK database.
 func TestGroupAndMemberReadsExposeCapabilityAndRespectScope(t *testing.T) {
 	reader, err := New(fakeSource{}, Options{ProfileID: "work", Stale: func() bool { return true }, Capabilities: available(MembersListMethod)})
 	if err != nil {

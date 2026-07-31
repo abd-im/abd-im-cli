@@ -30,6 +30,8 @@ import (
 	mcpowner "github.com/abd-im/abd-im-cli/internal/mcp/owner"
 	"github.com/abd-im/abd-im-cli/internal/profile"
 	"github.com/abd-im/abd-im-cli/internal/reply"
+	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
+	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
 
@@ -338,7 +340,11 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	services, err := daemon.NewUnverifiedOwnerServices(item.Name)
+	groupSource, err := prepared.GroupSource()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	services, err := daemon.NewOwnerServicesWithVerifiedGroup(item.Name, groupSource, groupservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()))
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
