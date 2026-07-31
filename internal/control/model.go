@@ -66,6 +66,8 @@ type ReplySlot struct {
 	EventID          string
 	ConversationID   string
 	TriggerMessageID string
+	RecipientID      string
+	GroupID          string
 	RunID            string
 	OperationID      string
 	CreatedAt        time.Time
@@ -77,6 +79,9 @@ func (slot ReplySlot) validate() error {
 	}
 	if strings.TrimSpace(slot.ConversationID) == "" || strings.TrimSpace(slot.TriggerMessageID) == "" || strings.TrimSpace(slot.RunID) == "" {
 		return errors.New("reply slot conversation, trigger message, and run ID are required")
+	}
+	if (strings.TrimSpace(slot.RecipientID) == "" && strings.TrimSpace(slot.GroupID) == "") || (strings.TrimSpace(slot.RecipientID) != "" && strings.TrimSpace(slot.GroupID) != "") {
+		return errors.New("reply slot requires exactly one private or group target")
 	}
 	return nil
 }

@@ -74,4 +74,11 @@ var migrations = []migration{
 			`CREATE INDEX reply_slots_operation_id ON reply_slots(operation_id)`,
 		},
 	},
+	{
+		version: 3,
+		statements: []string{
+			`ALTER TABLE reply_slots ADD COLUMN recipient_id TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE reply_slots ADD COLUMN group_id TEXT NOT NULL DEFAULT ''`,
+		},
+	},
 }

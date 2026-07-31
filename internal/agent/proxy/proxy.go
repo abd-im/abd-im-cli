@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/abd-im-cli/abdim-cli/internal/agent/grant"
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/agent/grant"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
 var ErrClosed = errors.New("run tool proxy is closed")

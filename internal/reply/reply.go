@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/abd-im-cli/abdim-cli/internal/control"
+	"github.com/abd-im/abd-im-cli/internal/control"
 )
 
 var (
@@ -28,6 +28,8 @@ type Binding struct {
 	EventID          string
 	ConversationID   string
 	TriggerMessageID string
+	RecipientID      string
+	GroupID          string
 	RunID            string
 }
 
@@ -37,6 +39,8 @@ type Delivery struct {
 	EventID          string
 	ConversationID   string
 	TriggerMessageID string
+	RecipientID      string
+	GroupID          string
 	OperationID      string
 	Text             string
 }
@@ -82,6 +86,8 @@ func (s *Service) Reserve(ctx context.Context, binding Binding) (control.ReplySl
 		EventID:          binding.EventID,
 		ConversationID:   binding.ConversationID,
 		TriggerMessageID: binding.TriggerMessageID,
+		RecipientID:      binding.RecipientID,
+		GroupID:          binding.GroupID,
 		RunID:            binding.RunID,
 		OperationID:      newID(),
 	}
@@ -143,6 +149,8 @@ func (s *Service) Deliver(ctx context.Context, profileID, eventID, finalText str
 		EventID:          slot.EventID,
 		ConversationID:   slot.ConversationID,
 		TriggerMessageID: slot.TriggerMessageID,
+		RecipientID:      slot.RecipientID,
+		GroupID:          slot.GroupID,
 		OperationID:      slot.OperationID,
 		Text:             finalText,
 	}
@@ -167,6 +175,9 @@ func (s *Service) Deliver(ctx context.Context, profileID, eventID, finalText str
 func validateBinding(binding Binding) error {
 	if strings.TrimSpace(binding.ProfileID) == "" || strings.TrimSpace(binding.EventID) == "" || strings.TrimSpace(binding.ConversationID) == "" || strings.TrimSpace(binding.TriggerMessageID) == "" || strings.TrimSpace(binding.RunID) == "" {
 		return errors.New("reply binding profile, event, conversation, trigger message, and run IDs are required")
+	}
+	if (strings.TrimSpace(binding.RecipientID) == "" && strings.TrimSpace(binding.GroupID) == "") || (strings.TrimSpace(binding.RecipientID) != "" && strings.TrimSpace(binding.GroupID) != "") {
+		return errors.New("reply binding requires exactly one private or group target")
 	}
 	return nil
 }

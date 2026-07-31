@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abd-im-cli/abdim-cli/internal/agent/grant"
-	"github.com/abd-im-cli/abdim-cli/internal/service"
+	"github.com/abd-im/abd-im-cli/internal/agent/grant"
+	"github.com/abd-im/abd-im-cli/internal/service"
 )
 
 // This facade test is the SDK integration seam: a production source must use

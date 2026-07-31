@@ -97,6 +97,63 @@ func TestImportTokenReadsOnlyInputAndStoresOpaqueReference(t *testing.T) {
 	}
 }
 
+func TestImportTokenReadsOneLine(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileStore(filepath.Join(root, "data"), true)
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+	item, err := ImportToken(context.Background(), strings.NewReader("first-token\nignored-input"), store, Profile{Name: "work"})
+	if err != nil {
+		t.Fatalf("ImportToken() error = %v", err)
+	}
+	token, err := store.Get(context.Background(), item.CredentialRef)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if string(token) != "first-token" {
+		t.Fatalf("stored token = %q, want first line", token)
+	}
+}
+
+func TestConfigurePersistsNonSecretDeployment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "work.toml")
+	if err := Save(path, Profile{Name: "work", CredentialRef: "file:work"}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	deployment := Deployment{
+		UserID:     "user-1",
+		APIAddr:    "https://2.example.test/api",
+		WSAddr:     "wss://2.example.test/msg_gateway",
+		PlatformID: 7,
+	}
+	configured, err := Configure(path, deployment)
+	if err != nil {
+		t.Fatalf("Configure() error = %v", err)
+	}
+	if configured.Deployment != deployment || configured.CredentialRef != "file:work" {
+		t.Fatalf("Configure() = %#v", configured)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded != configured {
+		t.Fatalf("Load() = %#v, want %#v", loaded, configured)
+	}
+}
+
+func TestSaveRejectsPartialOrInvalidDeployment(t *testing.T) {
+	for _, deployment := range []Deployment{
+		{UserID: "user-1"},
+		{UserID: "user-1", APIAddr: "wss://2.example.test/api", WSAddr: "wss://2.example.test/ws", PlatformID: 7},
+	} {
+		if err := Save(filepath.Join(t.TempDir(), "work.toml"), Profile{Name: "work", CredentialRef: "file:work", Deployment: deployment}); !errors.Is(err, ErrInvalidDeployment) {
+			t.Errorf("Save(%#v) error = %v, want ErrInvalidDeployment", deployment, err)
+		}
+	}
+}
+
 func TestLockRejectsSecondWorkerForSameProfile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runtime", "abdim", "work", "daemon.lock")
 	first, err := AcquireLock(path)

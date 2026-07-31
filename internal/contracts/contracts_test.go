@@ -107,3 +107,19 @@ func TestV1EventJSONContract(t *testing.T) {
 		t.Fatalf("Marshal() = %s, want %s", got, want)
 	}
 }
+
+func TestSDKEventValidation(t *testing.T) {
+	event := SDKEvent{
+		ProfileID: "work",
+		Type:      string(EventMessageReceived),
+		DedupKey:  "sdk-message-1",
+		Data:      json.RawMessage(`{"conversation_id":"conversation-1"}`),
+	}
+	if err := event.Validate(); err != nil {
+		t.Fatalf("SDKEvent.Validate() error = %v", err)
+	}
+	event.DedupKey = ""
+	if err := event.Validate(); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("SDKEvent.Validate() error = %v, want ErrInvalidContract", err)
+	}
+}

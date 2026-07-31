@@ -5,6 +5,7 @@ package profile
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,13 +15,26 @@ import (
 
 var profileNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
-var ErrInvalidName = errors.New("invalid profile name")
+var (
+	ErrInvalidName       = errors.New("invalid profile name")
+	ErrInvalidDeployment = errors.New("invalid deployment configuration")
+)
 
 // Profile contains public profile metadata. CredentialRef is opaque and never
 // contains a token or an absolute local path.
 type Profile struct {
 	Name          string
 	CredentialRef string
+	Deployment    Deployment
+}
+
+// Deployment is the non-secret server configuration required to start one
+// daemon profile. The IM token remains behind Profile.CredentialRef.
+type Deployment struct {
+	UserID     string
+	APIAddr    string
+	WSAddr     string
+	PlatformID int32
 }
 
 // Paths describes the exclusive on-disk resources of one profile.
@@ -31,6 +45,7 @@ type Paths struct {
 	ControlDB      string
 	AttachmentsDir string
 	LogsDir        string
+	ProviderDir    string
 	RuntimeDir     string
 	Socket         string
 	Descriptor     string
@@ -55,6 +70,7 @@ func NewPaths(configDir, dataDir, runtimeDir, profileName string) (Paths, error)
 		ControlDB:      filepath.Join(profileDataDir, "control.db"),
 		AttachmentsDir: filepath.Join(profileDataDir, "attachments"),
 		LogsDir:        filepath.Join(profileDataDir, "logs"),
+		ProviderDir:    filepath.Join(runtimeDir, "abdim-provider", profileName),
 		RuntimeDir:     profileRuntimeDir,
 		Socket:         filepath.Join(profileRuntimeDir, "daemon.sock"),
 		Descriptor:     filepath.Join(profileRuntimeDir, "descriptor.json"),
@@ -67,7 +83,7 @@ func NewPaths(configDir, dataDir, runtimeDir, profileName string) (Paths, error)
 func (p Paths) EnsurePrivate() error {
 	for _, dir := range []string{
 		filepath.Dir(p.ConfigFile), p.DataDir, p.SDKDir, p.AttachmentsDir,
-		p.LogsDir, p.RuntimeDir,
+		p.LogsDir, p.ProviderDir, p.RuntimeDir,
 	} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("create private directory %q: %w", dir, err)
@@ -87,6 +103,35 @@ func ValidateName(name string) error {
 	return nil
 }
 
+// Configured reports whether all deployment inputs have been supplied.
+func (d Deployment) Configured() bool {
+	return strings.TrimSpace(d.UserID) != "" || strings.TrimSpace(d.APIAddr) != "" || strings.TrimSpace(d.WSAddr) != "" || d.PlatformID != 0
+}
+
+// Validate verifies complete, non-secret SDK deployment inputs.
+func (d Deployment) Validate() error {
+	if strings.TrimSpace(d.UserID) == "" || d.PlatformID <= 0 {
+		return fmt.Errorf("%w: user ID and positive platform ID are required", ErrInvalidDeployment)
+	}
+	if err := validateEndpoint(d.APIAddr, "http", "https"); err != nil {
+		return err
+	}
+	return validateEndpoint(d.WSAddr, "ws", "wss")
+}
+
+func validateEndpoint(raw string, schemes ...string) error {
+	endpoint, err := url.ParseRequestURI(strings.TrimSpace(raw))
+	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+		return fmt.Errorf("%w: invalid server endpoint", ErrInvalidDeployment)
+	}
+	for _, scheme := range schemes {
+		if endpoint.Scheme == scheme {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: invalid server endpoint scheme", ErrInvalidDeployment)
+}
+
 // Save writes a profile reference file without ever accepting credential data.
 func Save(path string, profile Profile) error {
 	if err := ValidateName(profile.Name); err != nil {
@@ -97,6 +142,11 @@ func Save(path string, profile Profile) error {
 	}
 	if filepath.IsAbs(profile.CredentialRef) {
 		return errors.New("credential reference must not be an absolute path")
+	}
+	if profile.Deployment.Configured() {
+		if err := profile.Deployment.Validate(); err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create profile directory: %w", err)
@@ -116,6 +166,12 @@ func Save(path string, profile Profile) error {
 		return fmt.Errorf("secure profile file: %w", err)
 	}
 	contents := "name = " + strconv.Quote(profile.Name) + "\ncredential_ref = " + strconv.Quote(profile.CredentialRef) + "\n"
+	if profile.Deployment.Configured() {
+		contents += "user_id = " + strconv.Quote(profile.Deployment.UserID) + "\n"
+		contents += "api_addr = " + strconv.Quote(profile.Deployment.APIAddr) + "\n"
+		contents += "ws_addr = " + strconv.Quote(profile.Deployment.WSAddr) + "\n"
+		contents += "platform_id = " + strconv.FormatInt(int64(profile.Deployment.PlatformID), 10) + "\n"
+	}
 	if _, err := file.WriteString(contents); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("write profile file: %w", err)
@@ -136,7 +192,8 @@ func Load(path string) (Profile, error) {
 		return Profile{}, fmt.Errorf("read profile file: %w", err)
 	}
 
-	values := make(map[string]string, 2)
+	values := make(map[string]string, 6)
+	var platformID int32
 	for _, line := range strings.Split(string(contents), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -147,25 +204,56 @@ func Load(path string) (Profile, error) {
 			return Profile{}, errors.New("invalid profile TOML")
 		}
 		key = strings.TrimSpace(key)
-		if key != "name" && key != "credential_ref" {
+		if key != "name" && key != "credential_ref" && key != "user_id" && key != "api_addr" && key != "ws_addr" && key != "platform_id" {
 			return Profile{}, fmt.Errorf("unsupported profile field %q", key)
+		}
+		if _, exists := values[key]; exists {
+			return Profile{}, fmt.Errorf("duplicate profile field %q", key)
+		}
+		if key == "platform_id" {
+			value, err := strconv.ParseInt(strings.TrimSpace(rawValue), 10, 32)
+			if err != nil {
+				return Profile{}, fmt.Errorf("decode profile field %q: %w", key, err)
+			}
+			platformID = int32(value)
+			values[key] = "configured"
+			continue
 		}
 		value, err := strconv.Unquote(strings.TrimSpace(rawValue))
 		if err != nil {
 			return Profile{}, fmt.Errorf("decode profile field %q: %w", key, err)
 		}
-		if _, exists := values[key]; exists {
-			return Profile{}, fmt.Errorf("duplicate profile field %q", key)
-		}
 		values[key] = value
 	}
 
-	profile := Profile{Name: values["name"], CredentialRef: values["credential_ref"]}
+	profile := Profile{Name: values["name"], CredentialRef: values["credential_ref"], Deployment: Deployment{UserID: values["user_id"], APIAddr: values["api_addr"], WSAddr: values["ws_addr"], PlatformID: platformID}}
 	if err := ValidateName(profile.Name); err != nil {
 		return Profile{}, err
 	}
 	if strings.TrimSpace(profile.CredentialRef) == "" || filepath.IsAbs(profile.CredentialRef) {
 		return Profile{}, errors.New("invalid credential reference")
+	}
+	if profile.Deployment.Configured() {
+		if err := profile.Deployment.Validate(); err != nil {
+			return Profile{}, err
+		}
+	}
+	return profile, nil
+}
+
+// Configure loads an existing credential-bearing profile and atomically saves
+// the supplied non-secret daemon deployment configuration.
+func Configure(path string, deployment Deployment) (Profile, error) {
+	if err := deployment.Validate(); err != nil {
+		return Profile{}, err
+	}
+	profile, err := Load(path)
+	if err != nil {
+		return Profile{}, err
+	}
+	profile.Deployment = deployment
+	if err := Save(path, profile); err != nil {
+		return Profile{}, err
 	}
 	return profile, nil
 }

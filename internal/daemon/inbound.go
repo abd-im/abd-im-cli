@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/abd-im-cli/abdim-cli/internal/agent/grant"
-	"github.com/abd-im-cli/abdim-cli/internal/agent/proxy"
-	"github.com/abd-im-cli/abdim-cli/internal/agent/run"
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
-	"github.com/abd-im-cli/abdim-cli/internal/events"
-	"github.com/abd-im-cli/abdim-cli/internal/reply"
+	"github.com/abd-im/abd-im-cli/internal/agent/grant"
+	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
+	"github.com/abd-im/abd-im-cli/internal/agent/run"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/events"
+	"github.com/abd-im/abd-im-cli/internal/reply"
 )
 
 var ErrStopped = errors.New("daemon inbound path is stopped")
@@ -53,6 +53,7 @@ type Config struct {
 
 	GrantTTL time.Duration
 	OnError  func(error)
+	Accept   func(contracts.SDKEvent) bool
 }
 
 // Inbound accepts normalized SDK events and owns their progression from the
@@ -67,6 +68,7 @@ type Inbound struct {
 	policy    Policy
 	grantTTL  time.Duration
 	onError   func(error)
+	accept    func(contracts.SDKEvent) bool
 
 	mu          sync.Mutex
 	stopped     bool
@@ -109,13 +111,14 @@ func New(config Config) (*Inbound, error) {
 		policy:      config.Policy,
 		grantTTL:    config.GrantTTL,
 		onError:     config.OnError,
+		accept:      config.Accept,
 		runsByEvent: make(map[string]string),
 	}, nil
 }
 
 // Listener is suitable for bridge.NewLoginMgr. It only copies and schedules
 // callback work; failures are reported through the configured error sink.
-func (d *Inbound) Listener(ctx context.Context, event contracts.Event) {
+func (d *Inbound) Listener(ctx context.Context, event contracts.SDKEvent) {
 	event.Data = append(json.RawMessage(nil), event.Data...)
 	if ctx == nil {
 		ctx = context.Background()
@@ -131,7 +134,7 @@ func (d *Inbound) Listener(ctx context.Context, event contracts.Event) {
 
 // Process handles one normalized event synchronously. It is exported for
 // deterministic daemon tests; production SDK callbacks use Listener.
-func (d *Inbound) Process(ctx context.Context, event contracts.Event) (Outcome, error) {
+func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcome, error) {
 	if err := event.Validate(); err != nil {
 		return Outcome{}, err
 	}
@@ -142,12 +145,13 @@ func (d *Inbound) Process(ctx context.Context, event contracts.Event) (Outcome, 
 		return Outcome{}, ErrStopped
 	}
 
+	reference := eventReference(event.Data)
 	recorded, err := d.ledger.RecordCallback(ctx, events.Callback{
 		ProfileID:      event.ProfileID,
 		DedupKey:       event.DedupKey,
 		Type:           event.Type,
-		ConversationID: eventReference(event.Data).ConversationID,
-		MessageID:      eventReference(event.Data).MessageID,
+		ConversationID: reference.ConversationID,
+		MessageID:      reference.MessageID,
 		OccurredAt:     event.OccurredAt,
 	})
 	if err != nil {
@@ -158,8 +162,12 @@ func (d *Inbound) Process(ctx context.Context, event contracts.Event) (Outcome, 
 		outcome.Ignored = true
 		return outcome, nil
 	}
+	if d.accept != nil && !d.accept(event) {
+		outcome.Ignored = true
+		return outcome, nil
+	}
 
-	decision, allowed, err := d.policy.Decide(ctx, event)
+	decision, allowed, err := d.policy.Decide(ctx, recorded.Event)
 	if err != nil {
 		return outcome, err
 	}
@@ -167,7 +175,11 @@ func (d *Inbound) Process(ctx context.Context, event contracts.Event) (Outcome, 
 		outcome.Ignored = true
 		return outcome, nil
 	}
-	conversation, err := referenceFromEvent(recorded.Event)
+	if err := reference.validate(); err != nil {
+		return outcome, err
+	}
+	conversation := reference
+	target, err := conversation.replyTarget()
 	if err != nil {
 		return outcome, err
 	}
@@ -185,6 +197,8 @@ func (d *Inbound) Process(ctx context.Context, event contracts.Event) (Outcome, 
 		EventID:          recorded.Event.EventID,
 		ConversationID:   conversation.ConversationID,
 		TriggerMessageID: conversation.MessageID,
+		RecipientID:      target.recipientID,
+		GroupID:          target.groupID,
 		RunID:            runID,
 	}); err != nil {
 		return outcome, err
@@ -219,6 +233,7 @@ func (d *Inbound) Process(ctx context.Context, event contracts.Event) (Outcome, 
 		GrantCredential: credential,
 		GrantExpiresAt:  issued.ExpiresAt,
 		Proxy:           toolProxy,
+		Prompt:          inboundPrompt(event.MessageText),
 	})
 	if err != nil {
 		return outcome, err
@@ -295,6 +310,9 @@ func (d *Inbound) selectMethods(names []string) ([]proxy.Method, []string, error
 type eventRef struct {
 	ConversationID string `json:"conversation_id"`
 	MessageID      string `json:"message_id"`
+	SenderID       string `json:"sender_id,omitempty"`
+	GroupID        string `json:"group_id,omitempty"`
+	SessionType    int32  `json:"session_type,omitempty"`
 }
 
 func eventReference(raw json.RawMessage) eventRef {
@@ -303,12 +321,38 @@ func eventReference(raw json.RawMessage) eventRef {
 	return reference
 }
 
-func referenceFromEvent(event contracts.Event) (eventRef, error) {
-	reference := eventReference(event.Data)
+func (reference eventRef) validate() error {
 	if strings.TrimSpace(reference.ConversationID) == "" || strings.TrimSpace(reference.MessageID) == "" {
-		return eventRef{}, errors.New("message event requires conversation and message references")
+		return errors.New("message event requires conversation and message references")
 	}
-	return reference, nil
+	return nil
+}
+
+type replyTarget struct {
+	recipientID string
+	groupID     string
+}
+
+func (reference eventRef) replyTarget() (replyTarget, error) {
+	switch reference.SessionType {
+	case 1:
+		if strings.TrimSpace(reference.SenderID) != "" {
+			return replyTarget{recipientID: reference.SenderID}, nil
+		}
+	case 2, 3:
+		if strings.TrimSpace(reference.GroupID) != "" {
+			return replyTarget{groupID: reference.GroupID}, nil
+		}
+	}
+	return replyTarget{}, errors.New("message event has no safe reply target")
+}
+
+func inboundPrompt(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "An inbound non-text message was received. Reply briefly that only text messages are supported."
+	}
+	return "Reply concisely and helpfully to this inbound message. Do not claim to have performed actions you did not perform.\n\nInbound message:\n" + text
 }
 
 func methodNames(methods []proxy.Method) []string {

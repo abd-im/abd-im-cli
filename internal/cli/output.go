@@ -8,9 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
-	"github.com/abd-im-cli/abdim-cli/internal/profile"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/profile"
 )
 
 // Output selects a structured CLI rendering format.
@@ -83,7 +84,13 @@ func ImportToken(ctx context.Context, input io.Reader, options AuthImportOptions
 	if err != nil {
 		return contracts.Response{}, err
 	}
-	item, err := profile.ImportToken(ctx, input, store, profile.Profile{Name: options.ProfileName})
+	item := profile.Profile{Name: options.ProfileName}
+	if existing, err := profile.Load(paths.ConfigFile); err == nil {
+		item = existing
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return contracts.Response{}, err
+	}
+	item, err = profile.ImportToken(ctx, input, store, item)
 	if err != nil {
 		return contracts.Response{}, err
 	}
@@ -117,5 +124,5 @@ func ErrorResponse(requestID string, code contracts.ErrorCode, err error) contra
 
 // IsInvalidArgument identifies local argument and input failures.
 func IsInvalidArgument(err error) bool {
-	return errors.Is(err, profile.ErrInvalidName) || errors.Is(err, profile.ErrPlaintextDisabled) || errors.Is(err, profile.ErrInvalidToken)
+	return errors.Is(err, profile.ErrInvalidName) || errors.Is(err, profile.ErrInvalidDeployment) || errors.Is(err, profile.ErrPlaintextDisabled) || errors.Is(err, profile.ErrInvalidToken)
 }

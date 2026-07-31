@@ -204,6 +204,35 @@ func contractError(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalidContract, fmt.Sprintf(format, args...))
 }
 
+// SDKEvent is a normalized SDK callback before the daemon persists it. The
+// ledger, not the SDK adapter, assigns the public event ID and sequence.
+type SDKEvent struct {
+	ProfileID  string
+	Type       string
+	OccurredAt time.Time
+	DedupKey   string
+	Data       json.RawMessage
+	// MessageText is transient provider input. It is excluded from ledger,
+	// IPC, MCP, and JSON serialization.
+	MessageText string `json:"-"`
+}
+
+func (e SDKEvent) Validate() error {
+	if strings.TrimSpace(e.ProfileID) == "" {
+		return contractError("SDK event profile_id is required")
+	}
+	if strings.TrimSpace(e.Type) == "" {
+		return contractError("SDK event type is required")
+	}
+	if strings.TrimSpace(e.DedupKey) == "" {
+		return contractError("SDK event dedup_key is required")
+	}
+	if !json.Valid(e.Data) {
+		return contractError("SDK event data must be valid JSON")
+	}
+	return nil
+}
+
 // SDK is the small lifecycle boundary used by the daemon bridge.
 type SDK interface {
 	InitSDK(context.Context) error
@@ -213,7 +242,7 @@ type SDK interface {
 	Shutdown(context.Context) error
 }
 
-type EventListener func(context.Context, Event)
+type EventListener func(context.Context, SDKEvent)
 
 // Provider and Session are the configured provider adapter boundary.
 type Provider interface {
@@ -237,6 +266,8 @@ type TurnRequest struct {
 	RunID           string
 	EventID         string
 	GrantCredential string
+	// Prompt is transient provider input derived from the SDK callback.
+	Prompt string
 }
 
 type TurnResult struct {

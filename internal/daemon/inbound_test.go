@@ -5,19 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/abd-im-cli/abdim-cli/internal/agent/grant"
-	"github.com/abd-im-cli/abdim-cli/internal/agent/proxy"
-	"github.com/abd-im-cli/abdim-cli/internal/agent/run"
-	"github.com/abd-im-cli/abdim-cli/internal/bridge"
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
-	"github.com/abd-im-cli/abdim-cli/internal/control"
-	"github.com/abd-im-cli/abdim-cli/internal/events"
-	"github.com/abd-im-cli/abdim-cli/internal/reply"
-	"github.com/abd-im-cli/abdim-cli/internal/testkit"
+	"github.com/abd-im/abd-im-cli/internal/agent/grant"
+	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
+	"github.com/abd-im/abd-im-cli/internal/agent/run"
+	"github.com/abd-im/abd-im-cli/internal/bridge"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/control"
+	"github.com/abd-im/abd-im-cli/internal/events"
+	"github.com/abd-im/abd-im-cli/internal/reply"
+	"github.com/abd-im/abd-im-cli/internal/testkit"
 )
 
 func TestInboundCreatesOneRunAndOnlyRepliesToTriggerConversation(t *testing.T) {
@@ -31,7 +32,7 @@ func TestInboundCreatesOneRunAndOnlyRepliesToTriggerConversation(t *testing.T) {
 	}
 	select {
 	case delivery := <-harness.sender.deliveries:
-		if delivery.ConversationID != "conversation-original" || delivery.TriggerMessageID != "message-trigger" || delivery.Text != "final response" {
+		if delivery.ConversationID != "conversation-original" || delivery.TriggerMessageID != "message-trigger" || delivery.RecipientID != "user-2" || delivery.Text != "final response" {
 			t.Fatalf("reply delivery = %#v", delivery)
 		}
 	case <-time.After(time.Second):
@@ -45,6 +46,9 @@ func TestInboundCreatesOneRunAndOnlyRepliesToTriggerConversation(t *testing.T) {
 	if harness.policyCalls() != 1 || harness.provider.startCount() != 1 || harness.session.turnCount() != 1 || harness.sender.calls() != 1 {
 		t.Fatalf("calls policy=%d provider=%d turns=%d replies=%d", harness.policyCalls(), harness.provider.startCount(), harness.session.turnCount(), harness.sender.calls())
 	}
+	if event := harness.decidedEvent(); event.EventID != first.EventID || event.Sequence == 0 {
+		t.Fatalf("policy event = %#v, want persisted event %q", event, first.EventID)
+	}
 	if !harness.session.deniedThirdParty() {
 		t.Fatal("provider was allowed to read a third-party conversation")
 	}
@@ -54,6 +58,17 @@ func TestInboundCreatesOneRunAndOnlyRepliesToTriggerConversation(t *testing.T) {
 	}
 	if _, err := harness.store.ReplySlotByEvent(context.Background(), "work", first.EventID); err != nil {
 		t.Fatalf("reply slot was not persisted before provider execution: %v", err)
+	}
+	if !strings.Contains(harness.session.prompt(), "message body marker") {
+		t.Fatalf("provider prompt = %q, want inbound message text", harness.session.prompt())
+	}
+	page, err := harness.ledger.List(context.Background(), "work", "", 10)
+	if err != nil || len(page.Events) != 1 {
+		t.Fatalf("ledger.List() = %#v, %v", page, err)
+	}
+	payload, _ := json.Marshal(page.Events)
+	if strings.Contains(string(payload), "message body marker") {
+		t.Fatalf("ledger persisted inbound message text: %s", payload)
 	}
 }
 
@@ -119,6 +134,7 @@ func TestInboundRejectsPolicyMethodsOutsideStaticRegistry(t *testing.T) {
 
 type harness struct {
 	store    *control.Store
+	ledger   *events.Ledger
 	inbound  *Inbound
 	sender   *recordingSender
 	provider *recordingProvider
@@ -128,6 +144,7 @@ type harness struct {
 	decision Decision
 	allowed  bool
 	policies int
+	decided  contracts.Event
 	windowed grant.MessageWindow
 }
 
@@ -157,6 +174,7 @@ func newHarness(t *testing.T, blockTurn bool) *harness {
 	}
 	h := &harness{
 		store:    store,
+		ledger:   ledger,
 		sender:   sender,
 		provider: provider,
 		session:  session,
@@ -189,10 +207,11 @@ func newHarness(t *testing.T, blockTurn bool) *harness {
 		Runs:      runs,
 		Grants:    grant.NewStore(),
 		Methods:   []proxy.Method{reader},
-		Policy: PolicyFunc(func(context.Context, contracts.Event) (Decision, bool, error) {
+		Policy: PolicyFunc(func(_ context.Context, event contracts.Event) (Decision, bool, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			h.policies++
+			h.decided = event
 			return h.decision, h.allowed, nil
 		}),
 		GrantTTL: time.Minute,
@@ -222,6 +241,12 @@ func (h *harness) policyCalls() int {
 	return h.policies
 }
 
+func (h *harness) decidedEvent() contracts.Event {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.decided
+}
+
 func (h *harness) window() grant.MessageWindow {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -235,17 +260,15 @@ func (h *harness) setPolicy(decision Decision, allowed bool) {
 	h.mu.Unlock()
 }
 
-func inboundEvent(dedup, conversationID, messageID string) contracts.Event {
-	data, _ := json.Marshal(map[string]string{"conversation_id": conversationID, "message_id": messageID})
-	return contracts.Event{
-		APIVersion: contracts.APIVersionV1,
-		EventID:    "sdk-event-" + dedup,
-		ProfileID:  "work",
-		Sequence:   1,
-		Type:       string(contracts.EventMessageReceived),
-		OccurredAt: time.Now().UTC(),
-		DedupKey:   dedup,
-		Data:       data,
+func inboundEvent(dedup, conversationID, messageID string) contracts.SDKEvent {
+	data, _ := json.Marshal(map[string]any{"conversation_id": conversationID, "message_id": messageID, "sender_id": "user-2", "session_type": 1})
+	return contracts.SDKEvent{
+		ProfileID:   "work",
+		Type:        string(contracts.EventMessageReceived),
+		OccurredAt:  time.Now().UTC(),
+		DedupKey:    dedup,
+		Data:        data,
+		MessageText: "message body marker",
 	}
 }
 
@@ -290,12 +313,13 @@ func (p *recordingProvider) startCount() int {
 }
 
 type recordingSession struct {
-	mu      sync.Mutex
-	proxy   contracts.ToolProxy
-	turns   int
-	denied  bool
-	block   bool
-	started chan struct{}
+	mu         sync.Mutex
+	proxy      contracts.ToolProxy
+	turns      int
+	lastPrompt string
+	denied     bool
+	block      bool
+	started    chan struct{}
 }
 
 func (s *recordingSession) setProxy(value contracts.ToolProxy) {
@@ -307,6 +331,7 @@ func (s *recordingSession) setProxy(value contracts.ToolProxy) {
 func (s *recordingSession) Turn(ctx context.Context, turn contracts.TurnRequest) (contracts.TurnResult, error) {
 	s.mu.Lock()
 	s.turns++
+	s.lastPrompt = turn.Prompt
 	proxyValue := s.proxy
 	if s.started == nil {
 		s.started = make(chan struct{})
@@ -334,6 +359,12 @@ func (s *recordingSession) Turn(ctx context.Context, turn contracts.TurnRequest)
 		return contracts.TurnResult{}, errors.New("trigger conversation was not readable")
 	}
 	return contracts.TurnResult{FinalText: "final response"}, nil
+}
+
+func (s *recordingSession) prompt() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastPrompt
 }
 
 func (s *recordingSession) call(ctx context.Context, value contracts.ToolProxy, turn contracts.TurnRequest, conversationID string) (contracts.Response, error) {

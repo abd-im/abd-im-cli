@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
-	"github.com/abd-im-cli/abdim-cli/internal/control"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/control"
 )
 
 func TestLedgerDeduplicatesCallbackAndKeepsOnlyReferences(t *testing.T) {

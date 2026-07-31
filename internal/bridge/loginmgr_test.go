@@ -9,19 +9,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
-	"github.com/abd-im-cli/abdim-cli/internal/profile"
-	"github.com/abd-im-cli/abdim-cli/internal/testkit"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/profile"
+	"github.com/abd-im/abd-im-cli/internal/testkit"
 )
 
 func TestLoginMgrInitializesNewSDKInRequiredOrder(t *testing.T) {
 	sdk := &testkit.FakeSDK{}
 	var factoryCalls int
-	events := make(chan contracts.Event, 1)
+	events := make(chan contracts.SDKEvent, 1)
 	manager, err := NewLoginMgr(func() contracts.SDK {
 		factoryCalls++
 		return sdk
-	}, filepath.Join(t.TempDir(), "work.lock"), func(_ context.Context, event contracts.Event) {
+	}, filepath.Join(t.TempDir(), "work.lock"), func(_ context.Context, event contracts.SDKEvent) {
 		events <- event
 	})
 	if err != nil {
@@ -40,20 +40,20 @@ func TestLoginMgrInitializesNewSDKInRequiredOrder(t *testing.T) {
 		t.Fatalf("State() = %q, want ready", manager.State())
 	}
 
-	event := contracts.Event{
-		APIVersion: contracts.APIVersionV1,
-		EventID:    "evt-1",
+	event := contracts.SDKEvent{
 		ProfileID:  "work",
-		Sequence:   1,
 		Type:       string(contracts.EventMessageReceived),
 		OccurredAt: time.Now(),
+		DedupKey:   "sdk-message-1",
 		Data:       json.RawMessage(`{}`),
 	}
 	if err := sdk.Emit(context.Background(), event); err != nil {
 		t.Fatalf("Emit() error = %v", err)
 	}
-	if got := <-events; got.EventID != event.EventID {
-		t.Fatalf("event ID = %q, want %q", got.EventID, event.EventID)
+	if got := <-events; got.DedupKey != event.DedupKey {
+		t.Fatalf("event dedup key = %q, want %q", got.DedupKey, event.DedupKey)
+	} else if err := got.Validate(); err != nil {
+		t.Fatalf("SDK event validation error = %v", err)
 	}
 	if err := manager.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)

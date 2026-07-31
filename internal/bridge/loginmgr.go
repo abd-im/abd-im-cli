@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
-	"github.com/abd-im-cli/abdim-cli/internal/profile"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/profile"
 )
 
 // State describes the daemon's SDK lifecycle state.
@@ -153,7 +153,7 @@ func (m *LoginMgr) Shutdown(ctx context.Context) error {
 	return result
 }
 
-func (m *LoginMgr) handleEvent(ctx context.Context, event contracts.Event) {
+func (m *LoginMgr) handleEvent(ctx context.Context, event contracts.SDKEvent) {
 	m.mu.RLock()
 	ready := m.state == StateReady
 	handler := m.eventHandler

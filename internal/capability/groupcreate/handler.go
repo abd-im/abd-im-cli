@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/abd-im-cli/abdim-cli/internal/agent/grant"
-	"github.com/abd-im-cli/abdim-cli/internal/agent/proxy"
-	"github.com/abd-im-cli/abdim-cli/internal/capability"
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
-	"github.com/abd-im-cli/abdim-cli/internal/operation"
+	"github.com/abd-im/abd-im-cli/internal/agent/grant"
+	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
+	"github.com/abd-im/abd-im-cli/internal/capability"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/operation"
 )
 
 const Method = "group.create"

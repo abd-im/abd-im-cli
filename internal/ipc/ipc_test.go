@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
 func TestFramesRoundTripAndRejectInvalidLengths(t *testing.T) {

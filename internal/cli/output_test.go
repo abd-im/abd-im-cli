@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/profile"
 )
 
 func TestJSONAndJSONLOutputUseSharedEnvelope(t *testing.T) {
@@ -44,5 +46,33 @@ func TestAuthImportPersistsReferenceButNeverToken(t *testing.T) {
 	}
 	if _, err := ImportToken(context.Background(), strings.NewReader(token), AuthImportOptions{ProfileName: "work", ConfigDir: root, DataDir: root, RuntimeDir: root, RequestID: "req-2"}); err == nil {
 		t.Fatal("ImportToken() without plaintext opt-in error = nil")
+	}
+}
+
+func TestAuthImportPreservesExistingDeployment(t *testing.T) {
+	root := t.TempDir()
+	options := AuthImportOptions{
+		ProfileName: "work", ConfigDir: filepath.Join(root, "config"), DataDir: filepath.Join(root, "data"), RuntimeDir: filepath.Join(root, "runtime"), AllowPlaintext: true, RequestID: "req-1",
+	}
+	if _, err := ImportToken(context.Background(), strings.NewReader("first-token"), options); err != nil {
+		t.Fatalf("first ImportToken() error = %v", err)
+	}
+	paths, err := profile.NewPaths(options.ConfigDir, options.DataDir, options.RuntimeDir, options.ProfileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := profile.Deployment{UserID: "user-1", APIAddr: "https://2.example.test/api", WSAddr: "wss://2.example.test/msg_gateway", PlatformID: 7}
+	if _, err := profile.Configure(paths.ConfigFile, want); err != nil {
+		t.Fatalf("Configure() error = %v", err)
+	}
+	if _, err := ImportToken(context.Background(), strings.NewReader("replacement-token"), options); err != nil {
+		t.Fatalf("replacement ImportToken() error = %v", err)
+	}
+	got, err := profile.Load(paths.ConfigFile)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.Deployment != want {
+		t.Fatalf("deployment after import = %#v, want %#v", got.Deployment, want)
 	}
 }

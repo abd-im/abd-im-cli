@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
-	"github.com/abd-im-cli/abdim-cli/internal/mcp/stdio"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/mcp/stdio"
 )
 
 // Tool binds one provider-visible MCP name to a typed run-proxy method.

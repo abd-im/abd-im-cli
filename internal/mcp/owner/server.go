@@ -12,9 +12,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
-	"github.com/abd-im-cli/abdim-cli/internal/ipc"
-	"github.com/abd-im-cli/abdim-cli/internal/mcp/stdio"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/ipc"
+	"github.com/abd-im/abd-im-cli/internal/mcp/stdio"
 )
 
 const ProtocolVersion = stdio.ProtocolVersion

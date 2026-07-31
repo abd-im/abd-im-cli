@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
 // Adapter wraps exactly one configured provider implementation. The daemon

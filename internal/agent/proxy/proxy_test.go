@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abd-im-cli/abdim-cli/internal/agent/grant"
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/agent/grant"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
 func TestProxyOnlyInvokesAllowedTypedMethodsAndTargets(t *testing.T) {

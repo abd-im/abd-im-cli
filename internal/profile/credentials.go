@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -109,14 +110,18 @@ func ImportToken(ctx context.Context, input io.Reader, store CredentialStore, pr
 		return Profile{}, err
 	}
 	const maxTokenBytes = 64 * 1024
-	token, err := io.ReadAll(io.LimitReader(input, maxTokenBytes+1))
-	if err != nil {
-		return Profile{}, fmt.Errorf("read token input: %w", err)
+	scanner := bufio.NewScanner(io.LimitReader(input, maxTokenBytes+1))
+	scanner.Buffer(make([]byte, 1024), maxTokenBytes+1)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return Profile{}, fmt.Errorf("read token input: %w", err)
+		}
+		return Profile{}, fmt.Errorf("%w: token is required", ErrInvalidToken)
 	}
-	if len(token) > maxTokenBytes {
+	if len(scanner.Bytes()) > maxTokenBytes {
 		return Profile{}, fmt.Errorf("%w: token input is too large", ErrInvalidToken)
 	}
-	token = []byte(strings.TrimSpace(string(token)))
+	token := []byte(strings.TrimSpace(scanner.Text()))
 	if len(token) == 0 {
 		return Profile{}, fmt.Errorf("%w: token is required", ErrInvalidToken)
 	}

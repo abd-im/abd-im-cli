@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
 func TestServerListsOnlyVisibleToolsAndInjectsGrant(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
 func TestFakeSDKRecordsLifecycleAndEmitsEvent(t *testing.T) {
@@ -21,8 +21,8 @@ func TestFakeSDKRecordsLifecycleAndEmitsEvent(t *testing.T) {
 		t.Fatalf("InitResources() error = %v", err)
 	}
 
-	gotEvents := make(chan contracts.Event, 1)
-	if err := sdk.SetEventListener(func(_ context.Context, event contracts.Event) {
+	gotEvents := make(chan contracts.SDKEvent, 1)
+	if err := sdk.SetEventListener(func(_ context.Context, event contracts.SDKEvent) {
 		gotEvents <- event
 	}); err != nil {
 		t.Fatalf("SetEventListener() error = %v", err)
@@ -30,20 +30,20 @@ func TestFakeSDKRecordsLifecycleAndEmitsEvent(t *testing.T) {
 	if err := sdk.Login(ctx); err != nil {
 		t.Fatalf("Login() error = %v", err)
 	}
-	event := contracts.Event{
-		APIVersion: contracts.APIVersionV1,
-		EventID:    "evt-1",
+	event := contracts.SDKEvent{
 		ProfileID:  "work",
-		Sequence:   1,
 		Type:       string(contracts.EventMessageReceived),
 		OccurredAt: time.Now().UTC(),
+		DedupKey:   "sdk-message-1",
 		Data:       json.RawMessage(`{}`),
 	}
 	if err := sdk.Emit(ctx, event); err != nil {
 		t.Fatalf("Emit() error = %v", err)
 	}
-	if got := <-gotEvents; got.EventID != event.EventID {
-		t.Fatalf("emitted event ID = %q, want %q", got.EventID, event.EventID)
+	if got := <-gotEvents; got.DedupKey != event.DedupKey {
+		t.Fatalf("emitted event dedup key = %q, want %q", got.DedupKey, event.DedupKey)
+	} else if err := got.Validate(); err != nil {
+		t.Fatalf("SDK event validation error = %v", err)
 	}
 	if err := sdk.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)

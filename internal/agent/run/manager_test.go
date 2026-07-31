@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
-	"github.com/abd-im-cli/abdim-cli/internal/testkit"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/testkit"
 )
 
 func TestManagerSerializesConversationAndReusesSingleSession(t *testing.T) {
@@ -110,6 +110,15 @@ func TestManagerCancelAndShutdownTerminateRuns(t *testing.T) {
 	}
 	if result := <-handle.Done; result.Status != StatusCanceled {
 		t.Fatalf("canceled result = %#v", result)
+	}
+	close(canceledSession.block)
+	if next, err := manager.Submit(testRequest("run-after-cancel", "conversation-1", time.Now().Add(time.Hour))); err != nil {
+		t.Fatalf("Submit(after cancel) error = %v", err)
+	} else if result := <-next.Done; result.Status != StatusCompleted {
+		t.Fatalf("result after canceled session = %#v", result)
+	}
+	if manager.provider.(*recordingProvider).starts != 2 {
+		t.Fatalf("provider starts after canceled session = %d, want 2", manager.provider.(*recordingProvider).starts)
 	}
 	if err := manager.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)

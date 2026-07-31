@@ -6,7 +6,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
 var (
@@ -60,7 +60,7 @@ func (f *FakeSDK) Shutdown(context.Context) error {
 	return f.ShutdownErr
 }
 
-func (f *FakeSDK) Emit(ctx context.Context, event contracts.Event) error {
+func (f *FakeSDK) Emit(ctx context.Context, event contracts.SDKEvent) error {
 	f.mu.Lock()
 	listener := f.listener
 	f.mu.Unlock()

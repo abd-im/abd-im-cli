@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/abd-im-cli/abdim-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
 var (
@@ -37,6 +37,7 @@ type Request struct {
 	GrantCredential string
 	GrantExpiresAt  time.Time
 	Proxy           contracts.ToolProxy
+	Prompt          string
 }
 
 // Result is delivered exactly once for every accepted or rejected run.
@@ -247,18 +248,31 @@ func (m *Manager) execute(item *job) {
 		case <-finished:
 		}
 	}()
-	result, err := session.Turn(turnContext, contracts.TurnRequest{RunID: item.request.ID, EventID: item.request.EventID, GrantCredential: item.request.GrantCredential})
+	result, err := session.Turn(turnContext, contracts.TurnRequest{RunID: item.request.ID, EventID: item.request.EventID, GrantCredential: item.request.GrantCredential, Prompt: item.request.Prompt})
 	close(finished)
 	if status, canceled := item.cancellation(); canceled {
+		m.discardSession(session)
 		item.finish(Result{RunID: item.request.ID, Status: status, Err: turnContext.Err()})
 	} else if turnContext.Err() != nil {
+		m.discardSession(session)
 		item.finish(Result{RunID: item.request.ID, Status: deadlineStatus(item.request.GrantExpiresAt), Err: turnContext.Err()})
 	} else if err != nil {
+		m.discardSession(session)
 		item.finish(Result{RunID: item.request.ID, Status: StatusFailed, Err: err})
 	} else {
 		item.finish(Result{RunID: item.request.ID, Status: StatusCompleted, Turn: result})
 	}
 	m.remove(item.request.ID)
+}
+
+// discardSession removes a process-backed provider session after an
+// interruption or failure. turnMu serializes this with ensureSession.
+func (m *Manager) discardSession(session contracts.Session) {
+	if m.session != session {
+		return
+	}
+	m.session = nil
+	_ = session.Close(context.Background())
 }
 
 func (m *Manager) ensureSession(ctx context.Context, item *job) (contracts.Session, error) {

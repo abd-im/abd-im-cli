@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/abd-im-cli/abdim-cli/internal/control"
+	"github.com/abd-im/abd-im-cli/internal/control"
 )
 
 var (
