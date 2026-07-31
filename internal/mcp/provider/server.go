@@ -1,5 +1,5 @@
-// Package owner exposes a fixed owner-only MCP tool registry over stdio.
-package owner
+// Package provider exposes a run-private MCP tool registry over stdio.
+package provider
 
 import (
 	"context"
@@ -13,73 +13,83 @@ import (
 	"strings"
 
 	"github.com/abd-im-cli/abdim-cli/internal/contracts"
-	"github.com/abd-im-cli/abdim-cli/internal/ipc"
 	"github.com/abd-im-cli/abdim-cli/internal/mcp/stdio"
 )
 
-const ProtocolVersion = stdio.ProtocolVersion
-
-// Tool binds one MCP-visible name to one daemon-owned typed method. A caller
-// can only select from this registry; it cannot supply a method or endpoint.
+// Tool binds one provider-visible MCP name to a typed run-proxy method.
+// Visible is evaluated when a run adapter is constructed from its manifest and
+// grant snapshot; the run proxy enforces subsequent revocation and expiry.
 type Tool struct {
+	Name        string
+	Description string
+	Method      string
+	InputSchema json.RawMessage
+	Visible     func() bool
+}
+
+type registeredTool struct {
 	Name        string
 	Description string
 	Method      string
 	InputSchema json.RawMessage
 }
 
-type registeredTool struct {
-	Tool
-}
-
-// Server translates owner MCP requests into the daemon's local contract.
+// Server translates provider MCP requests into one run-private ToolProxy.
 type Server struct {
 	profileID string
-	handler   ipc.Handler
+	grant     string
+	proxy     contracts.ToolProxy
 	tools     map[string]registeredTool
 	list      []registeredTool
 }
 
-// New creates a modern MCP server. Tools must be registered by the local
-// composition root before the stdio process accepts any client input.
-func New(profileID string, handler ipc.Handler, tools []Tool) (*Server, error) {
+// New creates a provider adapter. The opaque grant stays in this process and
+// is never exposed through MCP arguments or responses.
+func New(profileID, credential string, proxy contracts.ToolProxy, tools []Tool) (*Server, error) {
 	if strings.TrimSpace(profileID) == "" {
 		return nil, errors.New("profile ID is required")
 	}
-	if handler == nil {
-		return nil, errors.New("daemon handler is required")
+	if strings.TrimSpace(credential) == "" {
+		return nil, errors.New("run grant credential is required")
+	}
+	if proxy == nil {
+		return nil, errors.New("run tool proxy is required")
 	}
 
 	registered := make(map[string]registeredTool, len(tools))
 	list := make([]registeredTool, 0, len(tools))
+	seen := make(map[string]struct{}, len(tools))
 	for _, tool := range tools {
 		if !validToolName(tool.Name) {
 			return nil, fmt.Errorf("invalid MCP tool name %q", tool.Name)
 		}
-		if strings.TrimSpace(tool.Description) == "" || strings.TrimSpace(tool.Method) == "" {
-			return nil, errors.New("MCP tool description and daemon method are required")
+		if strings.TrimSpace(tool.Description) == "" || strings.TrimSpace(tool.Method) == "" || tool.Visible == nil {
+			return nil, errors.New("MCP tool description, daemon method, and visibility are required")
 		}
 		if !stdio.IsJSONObject(tool.InputSchema) {
 			return nil, fmt.Errorf("MCP tool %q input schema must be a JSON object", tool.Name)
 		}
-		if _, exists := registered[tool.Name]; exists {
+		if _, exists := seen[tool.Name]; exists {
 			return nil, fmt.Errorf("duplicate MCP tool %q", tool.Name)
 		}
-		copy := registeredTool{Tool: Tool{
+		seen[tool.Name] = struct{}{}
+		if !tool.Visible() {
+			continue
+		}
+		copy := registeredTool{
 			Name:        tool.Name,
 			Description: tool.Description,
 			Method:      tool.Method,
 			InputSchema: append(json.RawMessage(nil), tool.InputSchema...),
-		}}
+		}
 		registered[copy.Name] = copy
 		list = append(list, copy)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
-	return &Server{profileID: profileID, handler: handler, tools: registered, list: list}, nil
+	return &Server{profileID: profileID, grant: credential, proxy: proxy, tools: registered, list: list}, nil
 }
 
-// Serve reads newline-delimited MCP JSON-RPC messages and writes only JSON-RPC
-// responses. It returns when input closes, context is cancelled, or I/O fails.
+// Serve reads provider MCP stdio messages and writes only MCP JSON-RPC.
 func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) error {
 	return stdio.Serve(ctx, input, output, s.handle)
 }
@@ -105,14 +115,6 @@ func (s *Server) handle(ctx context.Context, request stdio.Request) (any, bool) 
 	default:
 		return stdio.Error(request.ID, stdio.RPCError{Code: -32601, Message: "method not found"}), true
 	}
-}
-
-func asRPCError(err error) stdio.RPCError {
-	var rpc stdio.RPCError
-	if !errors.As(err, &rpc) {
-		return stdio.RPCError{Code: -32603, Message: "internal error"}
-	}
-	return rpc
 }
 
 func (s *Server) discovery() any {
@@ -169,15 +171,16 @@ func (s *Server) call(ctx context.Context, raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, stdio.RPCError{Code: -32603, Message: "internal error"}
 	}
-	response, err := s.handler(ctx, contracts.Request{
+	response, err := s.proxy.Call(ctx, contracts.Request{
 		APIVersion: contracts.APIVersionV1,
 		RequestID:  requestID,
 		ProfileID:  s.profileID,
 		Method:     tool.Method,
 		Params:     arguments,
+		Grant:      s.grant,
 	})
 	if err != nil {
-		response = failedResponse(requestID, contracts.CodeDaemonUnavailable, "daemon request failed", true)
+		response = failedResponse(requestID, contracts.CodeInternal, "run tool proxy failed", false)
 	}
 	if err := response.Validate(); err != nil || response.RequestID != requestID || (response.OK && response.Meta.ProfileID != s.profileID) {
 		return nil, stdio.RPCError{Code: -32603, Message: "internal error"}
@@ -208,8 +211,16 @@ type textContent struct {
 
 func (s *Server) resultMeta() map[string]any {
 	return map[string]any{
-		"io.modelcontextprotocol/serverInfo": map[string]string{"name": "abdim", "version": contracts.APIVersionV1},
+		"io.modelcontextprotocol/serverInfo": map[string]string{"name": "abdim-provider", "version": contracts.APIVersionV1},
 	}
+}
+
+func asRPCError(err error) stdio.RPCError {
+	var rpc stdio.RPCError
+	if !errors.As(err, &rpc) {
+		return stdio.RPCError{Code: -32603, Message: "internal error"}
+	}
+	return rpc
 }
 
 func validateListParams(raw json.RawMessage) error {
