@@ -21,7 +21,7 @@ func TestAuthorizeRequiresRunMethodScopeTargetAndBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
-	if access.RemainingBudget != 0 || !access.AllowsTarget("conversation-1") {
+	if access.RemainingBudget != 0 || !access.AllowsMethod("message.history") || !access.AllowsTarget("conversation-1") {
 		t.Fatalf("access = %#v", access)
 	}
 	if _, err := store.Authorize(credential, "run-1", "work", "message.history", "message.read", []string{"conversation-1"}); !errors.Is(err, ErrRateLimited) {

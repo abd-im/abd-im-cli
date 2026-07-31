@@ -63,6 +63,14 @@ func (g Grant) AllowsScope(scope string) bool {
 	return allowed
 }
 
+// AllowsMethod reports whether the grant explicitly exposes a typed method.
+// It is kept separate from scope checks because two methods may share a
+// scope while still having different target and parameter contracts.
+func (g Grant) AllowsMethod(method string) bool {
+	_, allowed := g.methods[method]
+	return allowed
+}
+
 // AllowsTarget reports whether a typed target belongs to this run's allowlist.
 // An empty target is always safe for target-free typed methods.
 func (g Grant) AllowsTarget(target string) bool {

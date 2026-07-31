@@ -20,6 +20,7 @@ type Method struct {
 	Name    string
 	Scope   string
 	Allowed func() bool
+	Meta    func() contracts.Meta
 	Targets func(json.RawMessage) ([]string, error)
 	Handle  func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error)
 }
@@ -105,12 +106,22 @@ func (p *Proxy) Call(ctx context.Context, request contracts.Request) (contracts.
 	if !json.Valid(payload) {
 		return failed(request.RequestID, contracts.CodeInternal, "typed tool returned invalid JSON"), nil
 	}
+	meta := contracts.Meta{ProfileID: p.profileID}
+	if method.Meta != nil {
+		meta = method.Meta()
+		if meta.ProfileID == "" {
+			meta.ProfileID = p.profileID
+		}
+		if meta.ProfileID != p.profileID {
+			return failed(request.RequestID, contracts.CodeInternal, "typed tool returned a mismatched profile"), nil
+		}
+	}
 	return contracts.Response{
 		APIVersion: contracts.APIVersionV1,
 		RequestID:  request.RequestID,
 		OK:         true,
 		Data:       payload,
-		Meta:       &contracts.Meta{ProfileID: p.profileID},
+		Meta:       &meta,
 	}, nil
 }
 

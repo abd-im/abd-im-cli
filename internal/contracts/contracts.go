@@ -46,8 +46,22 @@ func (r Request) Validate() error {
 
 // Meta accompanies successful responses.
 type Meta struct {
-	ProfileID string `json:"profile_id"`
-	Stale     bool   `json:"stale"`
+	ProfileID  string      `json:"profile_id"`
+	Stale      bool        `json:"stale"`
+	Schema     string      `json:"schema,omitempty"`
+	Capability *Capability `json:"capability,omitempty"`
+}
+
+// Capability describes why a typed method is or is not exposed. It is
+// optional in the shared envelope so existing lifecycle responses remain
+// byte-for-byte compatible while typed reads can surface verification state.
+type Capability struct {
+	Method        string `json:"method"`
+	Scope         string `json:"scope"`
+	Status        string `json:"status"`
+	Reason        string `json:"reason,omitempty"`
+	SDKVersion    string `json:"sdk_version,omitempty"`
+	ServerVersion string `json:"server_version,omitempty"`
 }
 
 // Response is the JSON envelope returned by local RPC and tool proxies.
