@@ -8,6 +8,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/service"
 	conversationservice "github.com/abd-im/abd-im-cli/internal/service/conversation"
 	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
+	messageservice "github.com/abd-im/abd-im-cli/internal/service/message"
 	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
 )
 
@@ -39,6 +40,28 @@ func TestNewOwnerServicesWithVerifiedProfileAndGroupLeavesFutureSourcesClosed(t 
 	}
 }
 
+func TestNewOwnerServicesWithVerifiedProfileConversationAndGroupLeavesFutureSourcesClosed(t *testing.T) {
+	services, err := NewOwnerServicesWithVerifiedProfileConversationAndGroup(
+		"work",
+		verifiedProfileSource{}, profileservice.VerifiedCapabilities("sdk-test"),
+		verifiedConversationSource{}, conversationservice.VerifiedCapabilities("sdk-test"),
+		verifiedGroupSource{}, groupservice.VerifiedCapabilities("sdk-test"),
+	)
+	if err != nil {
+		t.Fatalf("NewOwnerServicesWithVerifiedProfileConversationAndGroup() error = %v", err)
+	}
+	conversation, err := services.Conversation.List(context.Background(), service.OwnerAccess(service.Capability{}), conversationservice.ListInput{Limit: 1})
+	if err != nil || len(conversation.Data.Items) != 1 || conversation.Meta.Capability.Status != "available" {
+		t.Fatalf("verified conversation = %+v, %v", conversation, err)
+	}
+	if _, err := services.Conversation.Unread(context.Background(), service.OwnerAccess(service.Capability{})); !errors.Is(err, service.ErrCapabilityUnavailable) {
+		t.Fatalf("unverified conversation unread error = %v", err)
+	}
+	if _, err := services.Message.History(context.Background(), service.OwnerAccess(service.Capability{}), messageservice.HistoryInput{ConversationID: "conversation-1", Limit: 1}); !errors.Is(err, service.ErrCapabilityUnavailable) {
+		t.Fatalf("unverified message source error = %v", err)
+	}
+}
+
 func TestNewOwnerServicesWithVerifiedGroupRequiresSource(t *testing.T) {
 	if _, err := NewOwnerServicesWithVerifiedGroup("work", nil, nil); err == nil {
 		t.Fatal("NewOwnerServicesWithVerifiedGroup() accepted nil source")
@@ -48,6 +71,8 @@ func TestNewOwnerServicesWithVerifiedGroupRequiresSource(t *testing.T) {
 type verifiedGroupSource struct{}
 
 type verifiedProfileSource struct{}
+
+type verifiedConversationSource struct{}
 
 func (verifiedProfileSource) Profile(context.Context) (profileservice.Profile, error) {
 	return profileservice.Profile{ID: "work"}, nil
@@ -64,6 +89,20 @@ func (verifiedProfileSource) Daemon(context.Context) (profileservice.DaemonStatu
 func (verifiedProfileSource) Doctor(context.Context) (profileservice.DoctorReport, error) {
 	return profileservice.DoctorReport{OK: true}, nil
 }
+
+func (verifiedConversationSource) List(context.Context) ([]conversationservice.Conversation, error) {
+	return []conversationservice.Conversation{{ID: "conversation-1"}}, nil
+}
+
+func (verifiedConversationSource) Get(context.Context, string) (conversationservice.Conversation, error) {
+	return conversationservice.Conversation{}, nil
+}
+
+func (verifiedConversationSource) Search(context.Context, string) ([]conversationservice.Conversation, error) {
+	return nil, nil
+}
+
+func (verifiedConversationSource) Unread(context.Context) (int, error) { return 0, nil }
 
 func (verifiedGroupSource) List(context.Context) ([]groupservice.Group, error) {
 	return []groupservice.Group{{ID: "group-1"}}, nil

@@ -51,6 +51,9 @@ func TestPrepareResolvesCredentialWithoutStartingSDK(t *testing.T) {
 	if source, err := prepared.GroupSource(); err != nil || source == nil {
 		t.Fatalf("GroupSource() = %v, %v", source, err)
 	}
+	if source, err := prepared.ConversationSource(); err != nil || source == nil {
+		t.Fatalf("ConversationSource() = %v, %v", source, err)
+	}
 	if source, err := prepared.ProfileSource(func() profileservice.DaemonStatus { return profileservice.DaemonStatus{State: "ready"} }); err != nil || source == nil {
 		t.Fatalf("ProfileSource() = %v, %v", source, err)
 	}

@@ -52,3 +52,21 @@ Run the gate with:
 ```bash
 go test -tags=integration ./internal/service/profile -run TestOpenIMProfileReadsIntegration
 ```
+
+## OpenIM Conversation Integration
+
+`internal/service/conversation` uses the same controlled deployment and three
+shared secrets. The pre-provisioned test user must own at least one server
+conversation. The gate verifies the fixed `/conversation/get_all_conversations`
+and `/conversation/get_conversations` mappings through typed list/get/search,
+including cursor handling when the account has multiple conversations.
+
+Run the gate with:
+
+```bash
+go test -tags=integration ./internal/service/conversation -run TestOpenIMConversationReadsIntegration
+```
+
+OpenIM stores unread counts in the SDK's local database rather than exposing
+them through these server endpoints. `conversation.unread` therefore remains
+`not_validated` and must fail closed.

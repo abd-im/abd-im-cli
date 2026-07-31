@@ -23,6 +23,17 @@ const (
 	ReadScope    = "conversation.read"
 )
 
+// VerifiedCapabilities returns the server-backed conversation reads covered
+// by the controlled SDK/server integration gate. Unread counts are local SDK
+// state and remain unavailable until a server-backed mapping exists.
+func VerifiedCapabilities(sdkVersion string) map[string]service.Capability {
+	capabilities := make(map[string]service.Capability, 3)
+	for _, method := range []string{ListMethod, GetMethod, SearchMethod} {
+		capabilities[method] = service.Capability{Method: method, Scope: ReadScope, Status: "available", SDKVersion: sdkVersion}
+	}
+	return capabilities
+}
+
 type Conversation struct {
 	ID            string    `json:"id"`
 	Type          string    `json:"type,omitempty"`

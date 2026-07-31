@@ -11,6 +11,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/bridge/abdim"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/profile"
+	conversationservice "github.com/abd-im/abd-im-cli/internal/service/conversation"
 	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
 	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
@@ -83,6 +84,15 @@ func (p *Prepared) GroupSource() (*groupservice.SDKSource, error) {
 		return nil, errors.New("prepared daemon adapter is required")
 	}
 	return groupservice.NewSDKSource(groupservice.OpenIMClient{Context: p.Adapter.Context})
+}
+
+// ConversationSource exposes the verified server-read conversation facade
+// using the daemon-owned adapter context. It does not expose SDK local data.
+func (p *Prepared) ConversationSource() (*conversationservice.SDKSource, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return conversationservice.NewSDKSource(conversationservice.OpenIMClient{Context: p.Adapter.Context})
 }
 
 // ProfileSource exposes fixed local profile/runtime facts and the verified

@@ -83,6 +83,42 @@ func NewOwnerServicesWithVerifiedProfileAndGroup(profileID string, profileSource
 	return services, nil
 }
 
+// NewOwnerServicesWithVerifiedProfileConversationAndGroup replaces the
+// verified source families while keeping message and social reads fail-closed.
+func NewOwnerServicesWithVerifiedProfileConversationAndGroup(
+	profileID string,
+	profileSource profileservice.Source,
+	profileCapabilities map[string]service.Capability,
+	conversationSource conversationservice.Source,
+	conversationCapabilities map[string]service.Capability,
+	groupSource groupservice.Source,
+	groupCapabilities map[string]service.Capability,
+) (OwnerServices, error) {
+	if profileSource == nil || conversationSource == nil || groupSource == nil {
+		return OwnerServices{}, errors.New("verified profile, conversation, and group sources are required")
+	}
+	services, err := NewUnverifiedOwnerServices(profileID)
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	profileReader, err := profileservice.New(profileSource, profileservice.Options{ProfileID: profileID, Capabilities: profileCapabilities})
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	conversationReader, err := conversationservice.New(conversationSource, conversationservice.Options{ProfileID: profileID, Capabilities: conversationCapabilities})
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	groupReader, err := groupservice.New(groupSource, groupservice.Options{ProfileID: profileID, Capabilities: groupCapabilities})
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	services.Profile = profileReader
+	services.Conversation = conversationReader
+	services.Group = groupReader
+	return services, nil
+}
+
 func (unverifiedProfileSource) Profile(context.Context) (profileservice.Profile, error) {
 	return profileservice.Profile{}, errUnverifiedSource
 }

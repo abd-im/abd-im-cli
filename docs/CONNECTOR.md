@@ -146,6 +146,10 @@ server check in `doctor.get` use that endpoint; `profile.get` and
 gate uses `ABDIM_OPENIM_API_ADDR`, `ABDIM_OPENIM_USER_ID`, and
 `ABDIM_OPENIM_TOKEN`.
 
-The group HTTP source currently uses the daemon-private SDK context only for
-authenticated server requests. Its controlled integration test requires
-`ABDIM_OPENIM_API_ADDR`, `ABDIM_OPENIM_USER_ID`, and `ABDIM_OPENIM_TOKEN`.
+The group and conversation HTTP sources use the daemon-private SDK context
+only for authenticated server requests. Their controlled integration tests
+require `ABDIM_OPENIM_API_ADDR`, `ABDIM_OPENIM_USER_ID`, and
+`ABDIM_OPENIM_TOKEN`. The conversation source verifies
+`/conversation/get_all_conversations` and `/conversation/get_conversations`
+for `list`, `get`, and `search`; OpenIM unread counts remain local SDK state,
+so `conversation.unread` stays `not_validated`.
