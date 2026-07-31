@@ -161,3 +161,10 @@ text-query field and is not a suitable user-scoped message read. The typed
 message service reads at most the latest 100 server messages, filters text
 search locally within that bounded result, and applies its cursor and grant
 message window before returning data.
+
+The social source uses `/friend/get_friend_list`,
+`/friend/get_designated_friends`, `/friend/get_black_list`, and
+`/friend/get_specified_blacks`. Each endpoint verifies the token user against
+the requested `userID` or `ownerUserID`; lists are read page by page from the
+server and `friend.search` filters only that authenticated friend result.
+Neither friend nor blacklist reads call SDK local-table APIs.

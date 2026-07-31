@@ -69,6 +69,16 @@ type Service struct {
 	options Options
 }
 
+// VerifiedCapabilities returns the fixed social reads covered by the
+// controlled SDK/server integration test.
+func VerifiedCapabilities(sdkVersion string) map[string]service.Capability {
+	capabilities := make(map[string]service.Capability, 5)
+	for _, method := range []string{FriendListMethod, FriendGetMethod, FriendSearchMethod, BlackListMethod, BlackGetMethod} {
+		capabilities[method] = service.Capability{Method: method, Scope: scope(method), Status: "available", SDKVersion: sdkVersion}
+	}
+	return capabilities
+}
+
 func New(source Source, options Options) (*Service, error) {
 	if source == nil {
 		return nil, errors.New("social source is required")

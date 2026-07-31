@@ -162,6 +162,42 @@ func NewOwnerServicesWithVerifiedProfileConversationMessageAndGroup(
 	return services, nil
 }
 
+// NewOwnerServicesWithVerifiedProfileConversationMessageGroupAndSocial
+// replaces every currently verified source family.
+func NewOwnerServicesWithVerifiedProfileConversationMessageGroupAndSocial(
+	profileID string,
+	profileSource profileservice.Source,
+	profileCapabilities map[string]service.Capability,
+	conversationSource conversationservice.Source,
+	conversationCapabilities map[string]service.Capability,
+	messageSource messageservice.Source,
+	messageCapabilities map[string]service.Capability,
+	groupSource groupservice.Source,
+	groupCapabilities map[string]service.Capability,
+	socialSource socialservice.Source,
+	socialCapabilities map[string]service.Capability,
+) (OwnerServices, error) {
+	if socialSource == nil {
+		return OwnerServices{}, errors.New("verified social source is required")
+	}
+	services, err := NewOwnerServicesWithVerifiedProfileConversationMessageAndGroup(
+		profileID,
+		profileSource, profileCapabilities,
+		conversationSource, conversationCapabilities,
+		messageSource, messageCapabilities,
+		groupSource, groupCapabilities,
+	)
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	socialReader, err := socialservice.New(socialSource, socialservice.Options{ProfileID: profileID, Capabilities: socialCapabilities})
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	services.Social = socialReader
+	return services, nil
+}
+
 func (unverifiedProfileSource) Profile(context.Context) (profileservice.Profile, error) {
 	return profileservice.Profile{}, errUnverifiedSource
 }

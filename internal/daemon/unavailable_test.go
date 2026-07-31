@@ -83,6 +83,24 @@ func TestNewOwnerServicesWithVerifiedProfileConversationMessageAndGroupLeavesSoc
 	}
 }
 
+func TestNewOwnerServicesWithVerifiedProfileConversationMessageGroupAndSocial(t *testing.T) {
+	services, err := NewOwnerServicesWithVerifiedProfileConversationMessageGroupAndSocial(
+		"work",
+		verifiedProfileSource{}, profileservice.VerifiedCapabilities("sdk-test"),
+		verifiedConversationSource{}, conversationservice.VerifiedCapabilities("sdk-test"),
+		verifiedMessageSource{}, messageservice.VerifiedCapabilities("sdk-test"),
+		verifiedGroupSource{}, groupservice.VerifiedCapabilities("sdk-test"),
+		verifiedSocialSource{}, socialservice.VerifiedCapabilities("sdk-test"),
+	)
+	if err != nil {
+		t.Fatalf("NewOwnerServicesWithVerifiedProfileConversationMessageGroupAndSocial() error = %v", err)
+	}
+	friends, err := services.Social.Friends(context.Background(), service.OwnerAccess(service.Capability{}), socialservice.ListInput{Limit: 1})
+	if err != nil || len(friends.Data.Items) != 1 || friends.Meta.Capability.Status != "available" || friends.Meta.Capability.SDKVersion != "sdk-test" {
+		t.Fatalf("verified friends = %+v, %v", friends, err)
+	}
+}
+
 func TestNewOwnerServicesWithVerifiedGroupRequiresSource(t *testing.T) {
 	if _, err := NewOwnerServicesWithVerifiedGroup("work", nil, nil); err == nil {
 		t.Fatal("NewOwnerServicesWithVerifiedGroup() accepted nil source")
@@ -96,6 +114,8 @@ type verifiedProfileSource struct{}
 type verifiedConversationSource struct{}
 
 type verifiedMessageSource struct{}
+
+type verifiedSocialSource struct{}
 
 func (verifiedProfileSource) Profile(context.Context) (profileservice.Profile, error) {
 	return profileservice.Profile{ID: "work"}, nil
@@ -137,6 +157,22 @@ func (verifiedMessageSource) Search(context.Context, messageservice.HistoryQuery
 
 func (verifiedMessageSource) Get(context.Context, string, string) (messageservice.Message, error) {
 	return messageservice.Message{}, nil
+}
+
+func (verifiedSocialSource) Friends(context.Context) ([]socialservice.Friend, error) {
+	return []socialservice.Friend{{UserID: "user-1"}}, nil
+}
+func (verifiedSocialSource) Friend(context.Context, string) (socialservice.Friend, error) {
+	return socialservice.Friend{}, nil
+}
+func (verifiedSocialSource) SearchFriends(context.Context, string) ([]socialservice.Friend, error) {
+	return nil, nil
+}
+func (verifiedSocialSource) Blacklist(context.Context) ([]socialservice.BlacklistEntry, error) {
+	return nil, nil
+}
+func (verifiedSocialSource) Black(context.Context, string) (socialservice.BlacklistEntry, error) {
+	return socialservice.BlacklistEntry{}, nil
 }
 
 func (verifiedGroupSource) List(context.Context) ([]groupservice.Group, error) {

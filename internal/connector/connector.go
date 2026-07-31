@@ -15,6 +15,7 @@ import (
 	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
 	messageservice "github.com/abd-im/abd-im-cli/internal/service/message"
 	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
+	socialservice "github.com/abd-im/abd-im-cli/internal/service/social"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
@@ -103,6 +104,15 @@ func (p *Prepared) MessageSource() (*messageservice.SDKSource, error) {
 		return nil, errors.New("prepared daemon adapter is required")
 	}
 	return messageservice.NewSDKSource(messageservice.OpenIMClient{Context: p.Adapter.Context})
+}
+
+// SocialSource exposes the verified server-read friend and blacklist facade
+// using the daemon-owned adapter context. It does not expose SDK local data.
+func (p *Prepared) SocialSource() (*socialservice.SDKSource, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return socialservice.NewSDKSource(socialservice.OpenIMClient{Context: p.Adapter.Context})
 }
 
 // ProfileSource exposes fixed local profile/runtime facts and the verified

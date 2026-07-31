@@ -97,3 +97,27 @@ The test verifies history, local text search over the server-read window,
 message lookup, cursor behavior, capability metadata, and grant-window
 filtering. The server endpoint caps each read to the latest 100 messages, the
 same bounded source window used by the typed service.
+
+## OpenIM Social Integration
+
+`internal/service/social` uses four authenticated server endpoints and never
+reads the SDK friend or blacklist tables. Configure a controlled account with
+the named friend and blacklist entries; `ABDIM_OPENIM_FRIEND_QUERY` must match
+the named friend ID, nickname, or remark.
+
+- `ABDIM_OPENIM_API_ADDR`
+- `ABDIM_OPENIM_USER_ID`
+- `ABDIM_OPENIM_TOKEN`
+- `ABDIM_OPENIM_FRIEND_USER_ID`
+- `ABDIM_OPENIM_FRIEND_QUERY`
+- `ABDIM_OPENIM_BLACKLIST_USER_ID`
+
+Run the gate with:
+
+```bash
+go test -tags=integration ./internal/service/social -run TestOpenIMSocialReadsIntegration
+```
+
+The test verifies friend list/get/search and blacklist list/get through the
+typed service, including their scope-specific `available` capability metadata.
+It does not create or modify data.

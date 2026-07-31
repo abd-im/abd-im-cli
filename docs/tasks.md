@@ -6,7 +6,7 @@
 
 **输入**：[`spec.md`](spec.md) 的 US、FR 和 SC。
 
-**测试**：每个实现 task 的完成条件都必须有自动化验证；P1 发布门禁由 `ABD-020` 统一执行。
+**测试**：每个实现 task 的完成条件都必须有自动化验证；P1 发布门禁由 `ABD-032` 至 `ABD-034` 共同执行。
 
 **格式**：`[P]` 表示在其依赖完成后可与其他 `[P]` task 并行，`US-*` 追溯到用户场景。路径是该 task 的预期代码所有权，变更路径时必须保留同等隔离和验收条件。
 
@@ -48,11 +48,12 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与路径 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | ABD-031 | ready | US-02, US-03 | 在 `internal/service/social/` 和 `internal/connector/` 映射好友和黑名单 server-read source 并建立 integration gate。 | ABD-024 | 公开查询有固定 server integration；scope 与 capability 状态可验证。 |
-| [ ] | ABD-020 | blocked | 全部 | 在 `tests/e2e/` 编写 P1 端到端、崩溃恢复、权限和隐私回归。 | ABD-008 至 ABD-021, ABD-025 至 ABD-031 | SC-001 至 SC-008 均可自动验证。 |
+| [ ] | ABD-032 | ready | US-01 | 在 `tests/e2e/` 验证 profile lifecycle/lock、入站去重/reconciliation 和 event-bound reply。 | ABD-006 至 ABD-011, ABD-021, ABD-024 至 ABD-026 | SC-001 至 SC-003 可自动验证。 |
+| [ ] | ABD-033 | ready | US-02 | 在 `tests/e2e/` 验证 grant-bound typed reads、`group.create` operation/idempotency 与崩溃未知结果。 | ABD-009 至 ABD-012, ABD-025, ABD-027 至 ABD-031 | SC-004 至 SC-005 可自动验证。 |
+| [ ] | ABD-034 | ready | US-01, US-02 | 在 `tests/e2e/` 验证 provider 隔离、撤销/权限变化/过期取消和 token/message privacy 回归。 | ABD-003, ABD-009 至 ABD-011, ABD-025 至 ABD-026, ABD-032, ABD-033 | SC-006 至 SC-008 可自动验证。 |
 
-**当前状态**：`ABD-024` 已完成 daemon-owned SDK、owner socket、owner MCP 和 typed dispatcher 组装；`ABD-025` 已将每个 Codex run 接至独立 stdio provider MCP/tool proxy；`ABD-026` 已以 root-controlled 部署配置和独立 OS UID/GID 启动 provider；`ABD-027` 已将 group server-read source 作为 owner 可用 capability 接入真实 daemon；`ABD-028` 已将 profile/self/user/daemon/doctor 接至 daemon-owned profile/runtime facts 和固定 user server-read source；`ABD-029` 已将 conversation `list/get/search` 接至固定 server-read source；`ABD-030` 已将 message `history/search/get` 接至经认证的 sequence server-read source。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`；social 由 ABD-031 映射，且不得读取 SDK 数据库。`ABD-020` 只在前述 P1 路径完成后解除阻塞。
+**当前状态**：`ABD-024` 至 `ABD-031` 已完成 daemon、provider deployment boundary 及全部 P1 typed server-read source 接线；每个可用 source 都有固定 SDK/server integration gate。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。原 `ABD-020` 已按可独立验收的交付结果拆分为 `ABD-032` 至 `ABD-034`；它们是首个发布版本剩余的端到端门禁。
 
 ## 执行顺序
 
-`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。US-02 先交付 capability 执行面和首个 action handler，再由共享 typed read service 同时补齐 US-02 与 US-03；`ABD-024` 至 `ABD-030` 已完成 daemon、provider MCP、部署边界及 profile/group/conversation/message 接线，ABD-031 可在 ABD-024 后独立推进，`ABD-020` 是 P1 发布门禁。
+`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。US-02 先交付 capability 执行面和首个 action handler，再由共享 typed read service 同时补齐 US-02 与 US-03；`ABD-024` 至 `ABD-031` 已完成 daemon、provider MCP、部署边界和全部 P1 server-read source。`ABD-032` 与 `ABD-033` 可独立执行，`ABD-034` 在两者完成后执行并组成发布门禁。
