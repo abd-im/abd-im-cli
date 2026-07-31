@@ -36,8 +36,14 @@ func TestManagerSerializesConversationAndReusesSingleSession(t *testing.T) {
 	if provider.starts != 1 {
 		t.Fatalf("provider starts = %d, want 1", provider.starts)
 	}
+	if len(provider.requests) != 1 || provider.requests[0].GrantCredential != "grant-run-1" {
+		t.Fatalf("provider start credentials = %+v", provider.requests)
+	}
 	if got, want := session.runIDs(), []string{"run-1", "run-2"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("turn order = %v, want %v", got, want)
+	}
+	if got, want := session.grantCredentials(), []string{"grant-run-1", "grant-run-2"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("turn credentials = %v, want %v", got, want)
 	}
 }
 
@@ -135,25 +141,27 @@ func TestManagerCancelAndShutdownTerminateRuns(t *testing.T) {
 }
 
 func testRequest(id, conversation string, expiry time.Time) Request {
-	return Request{ID: id, ProfileID: "work", ConversationID: conversation, EventID: "event-" + id, GrantExpiresAt: expiry, Proxy: &testkit.FakeProxy{Response: &contracts.Response{APIVersion: contracts.APIVersionV1, RequestID: "proxy", OK: true, Data: json.RawMessage(`{}`), Meta: &contracts.Meta{ProfileID: "work"}}}}
+	return Request{ID: id, ProfileID: "work", ConversationID: conversation, EventID: "event-" + id, GrantCredential: "grant-" + id, GrantExpiresAt: expiry, Proxy: &testkit.FakeProxy{Response: &contracts.Response{APIVersion: contracts.APIVersionV1, RequestID: "proxy", OK: true, Data: json.RawMessage(`{}`), Meta: &contracts.Meta{ProfileID: "work"}}}}
 }
 
 type recordingProvider struct {
-	mu      sync.Mutex
-	starts  int
-	session *recordingSession
+	mu       sync.Mutex
+	starts   int
+	requests []contracts.StartRequest
+	session  *recordingSession
 }
 
-func (p *recordingProvider) Start(context.Context, contracts.StartRequest) (contracts.Session, error) {
+func (p *recordingProvider) Start(_ context.Context, request contracts.StartRequest) (contracts.Session, error) {
 	p.mu.Lock()
 	p.starts++
+	p.requests = append(p.requests, request)
 	p.mu.Unlock()
 	return p.session, nil
 }
 
 type recordingSession struct {
 	mu      sync.Mutex
-	turns   []string
+	turns   []contracts.TurnRequest
 	block   chan struct{}
 	started chan struct{}
 	closes  int
@@ -161,7 +169,7 @@ type recordingSession struct {
 
 func (s *recordingSession) Turn(ctx context.Context, request contracts.TurnRequest) (contracts.TurnResult, error) {
 	s.mu.Lock()
-	s.turns = append(s.turns, request.RunID)
+	s.turns = append(s.turns, request)
 	if s.started == nil {
 		s.started = make(chan struct{})
 	}
@@ -193,7 +201,21 @@ func (s *recordingSession) Close(context.Context) error {
 func (s *recordingSession) runIDs() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]string(nil), s.turns...)
+	runIDs := make([]string, 0, len(s.turns))
+	for _, turn := range s.turns {
+		runIDs = append(runIDs, turn.RunID)
+	}
+	return runIDs
+}
+
+func (s *recordingSession) grantCredentials() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	credentials := make([]string, 0, len(s.turns))
+	for _, turn := range s.turns {
+		credentials = append(credentials, turn.GrantCredential)
+	}
+	return credentials
 }
 
 func (s *recordingSession) waitForTurn(timeout time.Duration) bool {

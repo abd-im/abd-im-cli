@@ -30,12 +30,13 @@ const (
 
 // Request binds one provider turn to its triggering event and private proxy.
 type Request struct {
-	ID             string
-	ProfileID      string
-	ConversationID string
-	EventID        string
-	GrantExpiresAt time.Time
-	Proxy          contracts.ToolProxy
+	ID              string
+	ProfileID       string
+	ConversationID  string
+	EventID         string
+	GrantCredential string
+	GrantExpiresAt  time.Time
+	Proxy           contracts.ToolProxy
 }
 
 // Result is delivered exactly once for every accepted or rejected run.
@@ -246,7 +247,7 @@ func (m *Manager) execute(item *job) {
 		case <-finished:
 		}
 	}()
-	result, err := session.Turn(turnContext, contracts.TurnRequest{RunID: item.request.ID, EventID: item.request.EventID})
+	result, err := session.Turn(turnContext, contracts.TurnRequest{RunID: item.request.ID, EventID: item.request.EventID, GrantCredential: item.request.GrantCredential})
 	close(finished)
 	if status, canceled := item.cancellation(); canceled {
 		item.finish(Result{RunID: item.request.ID, Status: status, Err: turnContext.Err()})
@@ -264,7 +265,7 @@ func (m *Manager) ensureSession(ctx context.Context, item *job) (contracts.Sessi
 	if m.session != nil {
 		return m.session, nil
 	}
-	session, err := m.provider.Start(ctx, contracts.StartRequest{ProfileID: item.request.ProfileID, RunID: item.request.ID, Proxy: m.switcher})
+	session, err := m.provider.Start(ctx, contracts.StartRequest{ProfileID: item.request.ProfileID, RunID: item.request.ID, GrantCredential: item.request.GrantCredential, Proxy: m.switcher})
 	if err != nil {
 		return nil, err
 	}
@@ -310,8 +311,8 @@ func (item *job) finish(result Result) {
 }
 
 func validateRequest(request Request) error {
-	if request.ID == "" || request.ProfileID == "" || request.ConversationID == "" || request.EventID == "" || request.Proxy == nil {
-		return errors.New("run ID, profile ID, conversation ID, event ID, and proxy are required")
+	if request.ID == "" || request.ProfileID == "" || request.ConversationID == "" || request.EventID == "" || request.GrantCredential == "" || request.Proxy == nil {
+		return errors.New("run ID, profile ID, conversation ID, event ID, grant credential, and proxy are required")
 	}
 	if request.GrantExpiresAt.IsZero() {
 		return errors.New("run grant expiry is required")

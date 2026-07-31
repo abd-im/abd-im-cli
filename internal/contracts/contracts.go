@@ -221,9 +221,10 @@ type Provider interface {
 }
 
 type StartRequest struct {
-	ProfileID string
-	RunID     string
-	Proxy     ToolProxy
+	ProfileID       string
+	RunID           string
+	GrantCredential string
+	Proxy           ToolProxy
 }
 
 type Session interface {
@@ -233,8 +234,9 @@ type Session interface {
 }
 
 type TurnRequest struct {
-	RunID   string
-	EventID string
+	RunID           string
+	EventID         string
+	GrantCredential string
 }
 
 type TurnResult struct {
