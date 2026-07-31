@@ -4,7 +4,7 @@
 > 原文件最后修改：2026-07-30  
 > 原路径：`multica/doc/blog/openim-cli-agent-design.md`  
 > 状态：已废弃，仅保留历史记录，不得作为实现依据。  
-> 当前唯一规范：[`../spec.md`](../spec.md)
+> 当前唯一规范：[`../../spec.md`](../../spec.md)
 
 > 原始状态：Draft  
 > 目标仓库：`openim-sdk-core`  

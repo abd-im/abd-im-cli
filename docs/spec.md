@@ -9,7 +9,7 @@
 | 代码仓库 | `abd-im-cli` |
 | 产品与本地协议 | `abdim-cli` |
 | 二进制、daemon 子命令与 MCP 前缀 | `abdim` |
-| SDK | 固定版本的 `github.com/openimsdk/openim-sdk-core/v3` |
+| SDK | `go.mod` 固定的 `github.com/abd-im/abd-im-sdk-core/v3` fork 修复版本 |
 
 ## 1. 用户场景与测试
 
