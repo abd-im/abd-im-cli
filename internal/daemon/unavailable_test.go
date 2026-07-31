@@ -10,6 +10,7 @@ import (
 	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
 	messageservice "github.com/abd-im/abd-im-cli/internal/service/message"
 	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
+	socialservice "github.com/abd-im/abd-im-cli/internal/service/social"
 )
 
 func TestNewOwnerServicesWithVerifiedGroupLeavesOtherSourcesClosed(t *testing.T) {
@@ -62,6 +63,26 @@ func TestNewOwnerServicesWithVerifiedProfileConversationAndGroupLeavesFutureSour
 	}
 }
 
+func TestNewOwnerServicesWithVerifiedProfileConversationMessageAndGroupLeavesSocialClosed(t *testing.T) {
+	services, err := NewOwnerServicesWithVerifiedProfileConversationMessageAndGroup(
+		"work",
+		verifiedProfileSource{}, profileservice.VerifiedCapabilities("sdk-test"),
+		verifiedConversationSource{}, conversationservice.VerifiedCapabilities("sdk-test"),
+		verifiedMessageSource{}, messageservice.VerifiedCapabilities("sdk-test"),
+		verifiedGroupSource{}, groupservice.VerifiedCapabilities("sdk-test"),
+	)
+	if err != nil {
+		t.Fatalf("NewOwnerServicesWithVerifiedProfileConversationMessageAndGroup() error = %v", err)
+	}
+	messages, err := services.Message.History(context.Background(), service.OwnerAccess(service.Capability{}), messageservice.HistoryInput{ConversationID: "conversation-1", Limit: 1})
+	if err != nil || len(messages.Data.Items) != 1 || messages.Meta.Capability.Status != "available" {
+		t.Fatalf("verified messages = %+v, %v", messages, err)
+	}
+	if _, err := services.Social.Friends(context.Background(), service.OwnerAccess(service.Capability{}), socialservice.ListInput{Limit: 1}); !errors.Is(err, service.ErrCapabilityUnavailable) {
+		t.Fatalf("unverified social source error = %v", err)
+	}
+}
+
 func TestNewOwnerServicesWithVerifiedGroupRequiresSource(t *testing.T) {
 	if _, err := NewOwnerServicesWithVerifiedGroup("work", nil, nil); err == nil {
 		t.Fatal("NewOwnerServicesWithVerifiedGroup() accepted nil source")
@@ -73,6 +94,8 @@ type verifiedGroupSource struct{}
 type verifiedProfileSource struct{}
 
 type verifiedConversationSource struct{}
+
+type verifiedMessageSource struct{}
 
 func (verifiedProfileSource) Profile(context.Context) (profileservice.Profile, error) {
 	return profileservice.Profile{ID: "work"}, nil
@@ -103,6 +126,18 @@ func (verifiedConversationSource) Search(context.Context, string) ([]conversatio
 }
 
 func (verifiedConversationSource) Unread(context.Context) (int, error) { return 0, nil }
+
+func (verifiedMessageSource) History(context.Context, messageservice.HistoryQuery) ([]messageservice.Message, error) {
+	return []messageservice.Message{{ID: "message-1", ConversationID: "conversation-1"}}, nil
+}
+
+func (verifiedMessageSource) Search(context.Context, messageservice.HistoryQuery, string) ([]messageservice.Message, error) {
+	return nil, nil
+}
+
+func (verifiedMessageSource) Get(context.Context, string, string) (messageservice.Message, error) {
+	return messageservice.Message{}, nil
+}
 
 func (verifiedGroupSource) List(context.Context) ([]groupservice.Group, error) {
 	return []groupservice.Group{{ID: "group-1"}}, nil

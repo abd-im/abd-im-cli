@@ -70,3 +70,30 @@ go test -tags=integration ./internal/service/conversation -run TestOpenIMConvers
 OpenIM stores unread counts in the SDK's local database rather than exposing
 them through these server endpoints. `conversation.unread` therefore remains
 `not_validated` and must fail closed.
+
+## OpenIM Message Integration
+
+`internal/service/message` uses the authenticated `/msg/pull_msg_by_seq`
+endpoint and never reads the SDK message database. Configure a controlled
+conversation whose latest 100 server messages include the named message, a
+text query match, and the message-window boundary. All IDs use the server
+message ID, which is the ID emitted by the inbound bridge when available.
+
+- `ABDIM_OPENIM_API_ADDR`
+- `ABDIM_OPENIM_USER_ID`
+- `ABDIM_OPENIM_TOKEN`
+- `ABDIM_OPENIM_CONVERSATION_ID`
+- `ABDIM_OPENIM_MESSAGE_ID`
+- `ABDIM_OPENIM_MESSAGE_QUERY`
+- `ABDIM_OPENIM_AFTER_MESSAGE_ID`
+
+Run the gate with:
+
+```bash
+go test -tags=integration ./internal/service/message -run TestOpenIMMessageReadsIntegration
+```
+
+The test verifies history, local text search over the server-read window,
+message lookup, cursor behavior, capability metadata, and grant-window
+filtering. The server endpoint caps each read to the latest 100 messages, the
+same bounded source window used by the typed service.

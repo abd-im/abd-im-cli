@@ -119,6 +119,49 @@ func NewOwnerServicesWithVerifiedProfileConversationAndGroup(
 	return services, nil
 }
 
+// NewOwnerServicesWithVerifiedProfileConversationMessageAndGroup replaces the
+// verified source families while keeping social reads fail-closed.
+func NewOwnerServicesWithVerifiedProfileConversationMessageAndGroup(
+	profileID string,
+	profileSource profileservice.Source,
+	profileCapabilities map[string]service.Capability,
+	conversationSource conversationservice.Source,
+	conversationCapabilities map[string]service.Capability,
+	messageSource messageservice.Source,
+	messageCapabilities map[string]service.Capability,
+	groupSource groupservice.Source,
+	groupCapabilities map[string]service.Capability,
+) (OwnerServices, error) {
+	if profileSource == nil || conversationSource == nil || messageSource == nil || groupSource == nil {
+		return OwnerServices{}, errors.New("verified profile, conversation, message, and group sources are required")
+	}
+	services, err := NewUnverifiedOwnerServices(profileID)
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	profileReader, err := profileservice.New(profileSource, profileservice.Options{ProfileID: profileID, Capabilities: profileCapabilities})
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	conversationReader, err := conversationservice.New(conversationSource, conversationservice.Options{ProfileID: profileID, Capabilities: conversationCapabilities})
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	messageReader, err := messageservice.New(messageSource, messageservice.Options{ProfileID: profileID, Capabilities: messageCapabilities})
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	groupReader, err := groupservice.New(groupSource, groupservice.Options{ProfileID: profileID, Capabilities: groupCapabilities})
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	services.Profile = profileReader
+	services.Conversation = conversationReader
+	services.Message = messageReader
+	services.Group = groupReader
+	return services, nil
+}
+
 func (unverifiedProfileSource) Profile(context.Context) (profileservice.Profile, error) {
 	return profileservice.Profile{}, errUnverifiedSource
 }

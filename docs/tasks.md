@@ -48,12 +48,11 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与路径 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | ABD-030 | ready | US-02, US-03 | 在 `internal/service/message/` 和 `internal/connector/` 映射消息 history/search/get server-read source 并建立 integration gate。 | ABD-024 | 不读取 SDK 数据库；limit、cursor 和 grant 消息窗口在真实 source 下仍生效。 |
 | [ ] | ABD-031 | ready | US-02, US-03 | 在 `internal/service/social/` 和 `internal/connector/` 映射好友和黑名单 server-read source 并建立 integration gate。 | ABD-024 | 公开查询有固定 server integration；scope 与 capability 状态可验证。 |
 | [ ] | ABD-020 | blocked | 全部 | 在 `tests/e2e/` 编写 P1 端到端、崩溃恢复、权限和隐私回归。 | ABD-008 至 ABD-021, ABD-025 至 ABD-031 | SC-001 至 SC-008 均可自动验证。 |
 
-**当前状态**：`ABD-024` 已完成 daemon-owned SDK、owner socket、owner MCP 和 typed dispatcher 组装；`ABD-025` 已将每个 Codex run 接至独立 stdio provider MCP/tool proxy；`ABD-026` 已以 root-controlled 部署配置和独立 OS UID/GID 启动 provider；`ABD-027` 已将 group server-read source 作为 owner 可用 capability 接入真实 daemon；`ABD-028` 已将 profile/self/user/daemon/doctor 接至 daemon-owned profile/runtime facts 和固定 user server-read source；`ABD-029` 已将 conversation `list/get/search` 接至固定 server-read source。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`；message、social 分别由 ABD-030、ABD-031 映射，且不得读取 SDK 数据库。`ABD-020` 只在前述 P1 路径完成后解除阻塞。
+**当前状态**：`ABD-024` 已完成 daemon-owned SDK、owner socket、owner MCP 和 typed dispatcher 组装；`ABD-025` 已将每个 Codex run 接至独立 stdio provider MCP/tool proxy；`ABD-026` 已以 root-controlled 部署配置和独立 OS UID/GID 启动 provider；`ABD-027` 已将 group server-read source 作为 owner 可用 capability 接入真实 daemon；`ABD-028` 已将 profile/self/user/daemon/doctor 接至 daemon-owned profile/runtime facts 和固定 user server-read source；`ABD-029` 已将 conversation `list/get/search` 接至固定 server-read source；`ABD-030` 已将 message `history/search/get` 接至经认证的 sequence server-read source。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`；social 由 ABD-031 映射，且不得读取 SDK 数据库。`ABD-020` 只在前述 P1 路径完成后解除阻塞。
 
 ## 执行顺序
 
-`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。US-02 先交付 capability 执行面和首个 action handler，再由共享 typed read service 同时补齐 US-02 与 US-03；`ABD-024` 至 `ABD-029` 已完成 daemon、provider MCP、部署边界及 profile/group/conversation 接线，ABD-030、ABD-031 可在 ABD-024 后独立推进，`ABD-020` 是 P1 发布门禁。
+`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。US-02 先交付 capability 执行面和首个 action handler，再由共享 typed read service 同时补齐 US-02 与 US-03；`ABD-024` 至 `ABD-030` 已完成 daemon、provider MCP、部署边界及 profile/group/conversation/message 接线，ABD-031 可在 ABD-024 后独立推进，`ABD-020` 是 P1 发布门禁。

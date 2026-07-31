@@ -153,3 +153,11 @@ require `ABDIM_OPENIM_API_ADDR`, `ABDIM_OPENIM_USER_ID`, and
 `/conversation/get_all_conversations` and `/conversation/get_conversations`
 for `list`, `get`, and `search`; OpenIM unread counts remain local SDK state,
 so `conversation.unread` stays `not_validated`.
+
+The message source uses the fixed authenticated `/msg/pull_msg_by_seq`
+endpoint, which verifies the token user and conversation membership before
+returning messages. It never uses `/msg/search_msg`: that endpoint lacks a
+text-query field and is not a suitable user-scoped message read. The typed
+message service reads at most the latest 100 server messages, filters text
+search locally within that bounded result, and applies its cursor and grant
+message window before returning data.

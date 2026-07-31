@@ -34,6 +34,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/reply"
 	conversationservice "github.com/abd-im/abd-im-cli/internal/service/conversation"
 	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
+	messageservice "github.com/abd-im/abd-im-cli/internal/service/message"
 	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
@@ -362,6 +363,10 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
+	messageSource, err := prepared.MessageSource()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
 	var runtime *daemon.Runtime
 	profileSource, err := prepared.ProfileSource(func() profileservice.DaemonStatus {
 		state := bridge.StateNew
@@ -379,10 +384,11 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	services, err := daemon.NewOwnerServicesWithVerifiedProfileConversationAndGroup(
+	services, err := daemon.NewOwnerServicesWithVerifiedProfileConversationMessageAndGroup(
 		item.Name,
 		profileSource, profileservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()),
 		conversationSource, conversationservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()),
+		messageSource, messageservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()),
 		groupSource, groupservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()),
 	)
 	if err != nil {

@@ -22,6 +22,16 @@ const (
 	ReadScope     = "message.read"
 )
 
+// VerifiedCapabilities returns the fixed message reads covered by the
+// controlled SDK/server integration gate.
+func VerifiedCapabilities(sdkVersion string) map[string]service.Capability {
+	capabilities := make(map[string]service.Capability, 3)
+	for _, method := range []string{HistoryMethod, SearchMethod, GetMethod} {
+		capabilities[method] = service.Capability{Method: method, Scope: ReadScope, Status: "available", SDKVersion: sdkVersion}
+	}
+	return capabilities
+}
+
 type Message struct {
 	ID             string    `json:"id"`
 	ConversationID string    `json:"conversation_id"`
