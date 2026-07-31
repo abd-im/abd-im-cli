@@ -7,6 +7,21 @@ go test ./...
 go vet ./...
 ```
 
+## P1 Runtime E2E
+
+`tests/e2e/runtime_inbound_reply_test.go` is a no-credential, in-process P1
+gate and is included in `go test ./...`. It composes the daemon runtime with
+the shared fake SDK/provider, verifies the profile lock before SDK allocation,
+then verifies the ready Unix socket, callback deduplication, one reply slot and
+event-bound reply. It reopens the control database and verifies restart work is
+recorded as `state.reconciled`, not as a fabricated inbound message.
+
+Run it directly with:
+
+```bash
+go test ./tests/e2e -run TestRuntimeInboundReplyE2E
+```
+
 ## OpenIM Group Integration
 
 `internal/service/group` contains an explicit integration gate for the pinned
