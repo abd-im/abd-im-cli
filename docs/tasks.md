@@ -48,7 +48,6 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与路径 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | ABD-025 | ready | US-02, US-03 | 在 `internal/agent/provider/codex/`、`internal/mcp/provider/` 和 `cmd/abdim/` 将每个 Codex run 绑定到它自己的 stdio provider MCP/tool proxy。 | ABD-019, ABD-024 | provider 只能看到 construction snapshot 中 manifest 与 grant 共同允许的 typed tools；不能调用 owner socket、任意 CLI 或 SDK。 |
 | [ ] | ABD-026 | ready | US-01, US-02 | 在 `internal/launcher/` 和受控部署配置中实现独立 provider process launcher。 | ABD-025 | release launcher 以独立 OS user 或容器运行 provider，只传入 run-private proxy；`daemon serve` 不再需要同 UID 开发确认。 |
 | [ ] | ABD-028 | ready | US-02, US-03 | 在 `internal/service/profile/` 和 `internal/connector/` 映射 profile、自身、用户、daemon、doctor 的真实 source 并建立 integration gate。 | ABD-024 | 已映射方法有固定 SDK/server integration；未映射方法保持 `not_validated`，不读取 SDK 数据库。 |
 | [ ] | ABD-029 | ready | US-02, US-03 | 在 `internal/service/conversation/` 和 `internal/connector/` 映射会话 server-read source 并建立 integration gate。 | ABD-024 | 会话读取只走 server source，支持 cursor；未验证时 fail closed。 |
@@ -56,8 +55,8 @@
 | [ ] | ABD-031 | ready | US-02, US-03 | 在 `internal/service/social/` 和 `internal/connector/` 映射好友和黑名单 server-read source 并建立 integration gate。 | ABD-024 | 公开查询有固定 server integration；scope 与 capability 状态可验证。 |
 | [ ] | ABD-020 | blocked | 全部 | 在 `tests/e2e/` 编写 P1 端到端、崩溃恢复、权限和隐私回归。 | ABD-008 至 ABD-021, ABD-025 至 ABD-031 | SC-001 至 SC-008 均可自动验证。 |
 
-**当前状态**：`ABD-024` 已完成 daemon-owned SDK、owner socket、owner MCP 和 typed dispatcher 组装；`ABD-027` 已将 group server-read source 作为 owner 可用 capability 接入真实 daemon。当前 provider 仍没有 MCP/tool loop，且仅能以同 UID 开发模式运行，因此下一交付是 `ABD-025` 的 run-private provider MCP 接线，随后完成 `ABD-026` 的隔离 launcher。profile、conversation、message、social 仍保持 `not_validated`，分别由 ABD-028 至 ABD-031 独立映射；这些服务不得读取 SDK 数据库。`ABD-020` 只在前述 P1 路径完成后解除阻塞。
+**当前状态**：`ABD-024` 已完成 daemon-owned SDK、owner socket、owner MCP 和 typed dispatcher 组装；`ABD-025` 已将每个 Codex run 接至独立 stdio provider MCP/tool proxy；`ABD-027` 已将 group server-read source 作为 owner 可用 capability 接入真实 daemon。当前 provider 仍只能以同 UID 开发模式运行，因此下一交付是 `ABD-026` 的隔离 launcher。profile、conversation、message、social 仍保持 `not_validated`，分别由 ABD-028 至 ABD-031 独立映射；这些服务不得读取 SDK 数据库。`ABD-020` 只在前述 P1 路径完成后解除阻塞。
 
 ## 执行顺序
 
-`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。US-02 先交付 capability 执行面和首个 action handler，再由共享 typed read service 同时补齐 US-02 与 US-03；`ABD-024` 与 `ABD-027` 已完成 daemon/owner 与 group 接线，接下来按 `ABD-025 -> ABD-026` 完成 provider 部署边界，ABD-028 至 ABD-031 可在 ABD-024 后独立推进，`ABD-020` 是 P1 发布门禁。
+`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。US-02 先交付 capability 执行面和首个 action handler，再由共享 typed read service 同时补齐 US-02 与 US-03；`ABD-024`、`ABD-025` 与 `ABD-027` 已完成 daemon、provider MCP 与 group 接线，接下来由 `ABD-026` 完成 provider 部署边界，ABD-028 至 ABD-031 可在 ABD-024 后独立推进，`ABD-020` 是 P1 发布门禁。

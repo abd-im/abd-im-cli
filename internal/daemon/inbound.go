@@ -232,6 +232,7 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		EventID:         recorded.Event.EventID,
 		GrantCredential: credential,
 		GrantExpiresAt:  issued.ExpiresAt,
+		AllowedMethods:  providerVisibleMethods(selected),
 		Proxy:           toolProxy,
 		Prompt:          inboundPrompt(event.MessageText),
 	})
@@ -361,6 +362,33 @@ func methodNames(methods []proxy.Method) []string {
 		names = append(names, method.Name)
 	}
 	return names
+}
+
+// providerVisibleMethods freezes the discovery surface before a provider is
+// started. The run proxy still enforces expiry, revocation, target scopes, and
+// rate limits for every call after this snapshot is made.
+func providerVisibleMethods(methods []proxy.Method) []string {
+	visible := make([]string, 0, len(methods))
+	for _, method := range methods {
+		verified := false
+		if method.Allowed != nil && !method.Allowed() {
+			continue
+		} else if method.Allowed != nil {
+			verified = true
+		}
+		if method.Meta != nil {
+			capability := method.Meta().Capability
+			if capability == nil || capability.Status != "available" {
+				continue
+			}
+			verified = true
+		}
+		if !verified {
+			continue
+		}
+		visible = append(visible, method.Name)
+	}
+	return visible
 }
 
 func (d *Inbound) isStopped() bool {

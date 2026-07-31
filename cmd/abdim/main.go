@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -116,6 +117,9 @@ func runWithIO(args []string, input io.Reader, output io.Writer, roots commandRo
 	}
 	if len(args) == 2 && args[0] == "mcp" && args[1] == "serve" {
 		return runOwnerMCP(ctx, input, output, roots, profileName, requestID)
+	}
+	if len(args) >= 3 && args[0] == "mcp" && args[1] == "provider" && args[2] == "bridge" {
+		return runProviderMCPBridge(args[3:], input, output)
 	}
 	method, consumed := ownerMethod(args)
 	if method == "" {
@@ -357,8 +361,9 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	codex, err := codexprovider.New(codexprovider.Config{
-		WorkingDir:  paths.ProviderDir,
-		Environment: codexEnvironment(options.codexHome),
+		WorkingDir:    paths.ProviderDir,
+		Environment:   codexEnvironment(options.codexHome),
+		BridgeCommand: executablePath(),
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -577,6 +582,40 @@ func runOwnerMCP(ctx context.Context, input io.Reader, output io.Writer, roots c
 		return 1
 	}
 	return 0
+}
+
+// runProviderMCPBridge is only launched from the run-private Codex config.
+// It transports raw MCP JSON-RPC and deliberately has no profile, owner RPC,
+// SDK, or arbitrary-command arguments.
+func runProviderMCPBridge(args []string, input io.Reader, output io.Writer) int {
+	if len(args) != 2 || args[0] != "--socket" || !filepath.IsAbs(args[1]) {
+		return 2
+	}
+	connection, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: args[1], Net: "unix"})
+	if err != nil {
+		return 1
+	}
+	defer connection.Close()
+	inputDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(connection, input)
+		_ = connection.CloseWrite()
+		close(inputDone)
+	}()
+	_, err = io.Copy(output, connection)
+	<-inputDone
+	if err != nil {
+		return 1
+	}
+	return 0
+}
+
+func executablePath() string {
+	path, err := os.Executable()
+	if err != nil || !filepath.IsAbs(path) {
+		return ""
+	}
+	return path
 }
 
 func ownerMethod(args []string) (string, int) {

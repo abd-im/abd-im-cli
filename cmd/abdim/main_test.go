@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,6 +175,45 @@ func TestDaemonSDKConfigUsesProfilePaths(t *testing.T) {
 	config := daemonSDKConfig(paths, profile.Deployment{UserID: "user-1", APIAddr: "https://2.example.test/api", WSAddr: "wss://2.example.test/msg_gateway", PlatformID: 7})
 	if config.PlatformID != 7 || config.ApiAddr != "https://2.example.test/api" || config.WsAddr != "wss://2.example.test/msg_gateway" || config.DataDir != paths.SDKDir || config.LogFilePath != filepath.Join(paths.LogsDir, "sdk.log") {
 		t.Fatalf("daemonSDKConfig() = %#v", config)
+	}
+}
+
+func TestProviderMCPBridgeRelaysOnlyConfiguredSocket(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "provider.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	serverDone := make(chan error, 1)
+	go func() {
+		connection, err := listener.AcceptUnix()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer connection.Close()
+		line, err := bufio.NewReader(connection).ReadString('\n')
+		if err == nil && line != `{"jsonrpc":"2.0","id":1}`+"\n" {
+			err = errors.New("unexpected provider MCP input")
+		}
+		if err == nil {
+			_, err = connection.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}` + "\n"))
+		}
+		serverDone <- err
+	}()
+	var output bytes.Buffer
+	if got := runWithIO([]string{"mcp", "provider", "bridge", "--socket", socket}, strings.NewReader(`{"jsonrpc":"2.0","id":1}`+"\n"), &output, testRoots(t)); got != 0 {
+		t.Fatalf("bridge exit code = %d", got)
+	}
+	if output.String() != `{"jsonrpc":"2.0","id":1,"result":{}}`+"\n" {
+		t.Fatalf("bridge output = %q", output.String())
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("bridge server error = %v", err)
+	}
+	if got := runWithIO([]string{"mcp", "provider", "bridge", "--socket", "relative.sock"}, strings.NewReader(""), &output, testRoots(t)); got != 2 {
+		t.Fatalf("relative socket bridge exit code = %d", got)
 	}
 }
 

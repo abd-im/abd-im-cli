@@ -36,6 +36,7 @@ type Request struct {
 	EventID         string
 	GrantCredential string
 	GrantExpiresAt  time.Time
+	AllowedMethods  []string
 	Proxy           contracts.ToolProxy
 	Prompt          string
 }
@@ -77,8 +78,8 @@ type conversation struct {
 	running bool
 }
 
-// Manager uses one provider session during one daemon lifetime. A stable proxy
-// facade is passed at Start and is rebound only while the current turn runs.
+// Manager creates one provider session per run. A session receives the run's
+// own proxy and cannot be rebound to a later grant.
 type Manager struct {
 	provider contracts.Provider
 	maxQueue int
@@ -90,9 +91,7 @@ type Manager struct {
 	stopped       bool
 	workers       sync.WaitGroup
 
-	turnMu   sync.Mutex
-	session  contracts.Session
-	switcher *switchingProxy
+	turnMu sync.Mutex
 }
 
 func NewManager(config Config) (*Manager, error) {
@@ -108,7 +107,6 @@ func NewManager(config Config) (*Manager, error) {
 		deadline:      config.Deadline,
 		conversations: make(map[string]*conversation),
 		jobs:          make(map[string]*job),
-		switcher:      &switchingProxy{},
 	}, nil
 }
 
@@ -169,7 +167,7 @@ func (m *Manager) Cancel(runID string) bool {
 	return true
 }
 
-// Shutdown interrupts all uncompleted runs and closes the reusable session.
+// Shutdown interrupts all uncompleted runs.
 func (m *Manager) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
 	if m.stopped {
@@ -188,13 +186,6 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	}
 	m.workers.Wait()
 
-	m.turnMu.Lock()
-	session := m.session
-	m.session = nil
-	m.turnMu.Unlock()
-	if session != nil {
-		return session.Close(ctx)
-	}
 	return nil
 }
 
@@ -229,16 +220,26 @@ func (m *Manager) execute(item *job) {
 		return
 	}
 
-	m.switcher.bind(item.request.Proxy)
-	defer m.switcher.clear()
 	turnContext, turnCancel := withTurnDeadline(item.context, m.deadline, item.request.GrantExpiresAt)
 	defer turnCancel()
-	session, err := m.ensureSession(turnContext, item)
+	session, err := m.provider.Start(turnContext, contracts.StartRequest{
+		ProfileID:       item.request.ProfileID,
+		RunID:           item.request.ID,
+		GrantCredential: item.request.GrantCredential,
+		AllowedMethods:  append([]string(nil), item.request.AllowedMethods...),
+		Proxy:           item.request.Proxy,
+	})
 	if err != nil {
 		item.finish(Result{RunID: item.request.ID, Status: StatusFailed, Err: err})
 		m.remove(item.request.ID)
 		return
 	}
+	if session == nil {
+		item.finish(Result{RunID: item.request.ID, Status: StatusFailed, Err: errors.New("provider returned nil session")})
+		m.remove(item.request.ID)
+		return
+	}
+	defer session.Close(context.Background())
 
 	finished := make(chan struct{})
 	go func() {
@@ -251,43 +252,15 @@ func (m *Manager) execute(item *job) {
 	result, err := session.Turn(turnContext, contracts.TurnRequest{RunID: item.request.ID, EventID: item.request.EventID, GrantCredential: item.request.GrantCredential, Prompt: item.request.Prompt})
 	close(finished)
 	if status, canceled := item.cancellation(); canceled {
-		m.discardSession(session)
 		item.finish(Result{RunID: item.request.ID, Status: status, Err: turnContext.Err()})
 	} else if turnContext.Err() != nil {
-		m.discardSession(session)
 		item.finish(Result{RunID: item.request.ID, Status: deadlineStatus(item.request.GrantExpiresAt), Err: turnContext.Err()})
 	} else if err != nil {
-		m.discardSession(session)
 		item.finish(Result{RunID: item.request.ID, Status: StatusFailed, Err: err})
 	} else {
 		item.finish(Result{RunID: item.request.ID, Status: StatusCompleted, Turn: result})
 	}
 	m.remove(item.request.ID)
-}
-
-// discardSession removes a process-backed provider session after an
-// interruption or failure. turnMu serializes this with ensureSession.
-func (m *Manager) discardSession(session contracts.Session) {
-	if m.session != session {
-		return
-	}
-	m.session = nil
-	_ = session.Close(context.Background())
-}
-
-func (m *Manager) ensureSession(ctx context.Context, item *job) (contracts.Session, error) {
-	if m.session != nil {
-		return m.session, nil
-	}
-	session, err := m.provider.Start(ctx, contracts.StartRequest{ProfileID: item.request.ProfileID, RunID: item.request.ID, GrantCredential: item.request.GrantCredential, Proxy: m.switcher})
-	if err != nil {
-		return nil, err
-	}
-	if session == nil {
-		return nil, errors.New("provider returned nil session")
-	}
-	m.session = session
-	return session, nil
 }
 
 func (m *Manager) remove(runID string) {
@@ -348,36 +321,3 @@ func deadlineStatus(grantExpiry time.Time) Status {
 	}
 	return StatusDeadline
 }
-
-type switchingProxy struct {
-	mu      sync.RWMutex
-	current contracts.ToolProxy
-}
-
-func (p *switchingProxy) bind(current contracts.ToolProxy) {
-	p.mu.Lock()
-	p.current = current
-	p.mu.Unlock()
-}
-
-func (p *switchingProxy) clear() {
-	p.mu.Lock()
-	p.current = nil
-	p.mu.Unlock()
-}
-
-func (p *switchingProxy) Call(ctx context.Context, request contracts.Request) (contracts.Response, error) {
-	p.mu.RLock()
-	current := p.current
-	p.mu.RUnlock()
-	if current == nil {
-		return contracts.Response{}, errors.New("no active run proxy")
-	}
-	return current.Call(ctx, request)
-}
-
-// Close is intentionally a no-op for the reusable provider session. The
-// manager alone closes each bound run proxy as that run completes.
-func (p *switchingProxy) Close(context.Context) error { return nil }
-
-var _ contracts.ToolProxy = (*switchingProxy)(nil)

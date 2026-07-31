@@ -63,6 +63,56 @@ func TestServerListsOnlyVisibleToolsAndInjectsGrant(t *testing.T) {
 	}
 }
 
+func TestServerSupportsCodexMCPHandshake(t *testing.T) {
+	proxy := &recordingProxy{}
+	server, err := New("work", "daemon-grant", proxy, DefaultTools([]string{"message.history"}))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	output, err := serve(server, strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"codex","version":"test"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
+	}, "\n"))
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	responses := decodeResponses(t, output)
+	if len(responses) != 2 || responses[0].Error != nil || responses[1].Error != nil {
+		t.Fatalf("handshake responses = %s", output)
+	}
+	var listed struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(responses[1].Result, &listed); err != nil || len(listed.Tools) != 1 || listed.Tools[0].Name != "abdim.message.history" {
+		t.Fatalf("tools/list = %s, %v", responses[1].Result, err)
+	}
+}
+
+func TestServerUsesIdempotencyKeyFromToolArguments(t *testing.T) {
+	proxy := &recordingProxy{}
+	server, err := New("work", "daemon-grant", proxy, DefaultTools([]string{"group.create"}))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, err = serve(server, encodeRequest("call", "tools/call", metaParams(`,"name":"abdim.group.create","arguments":{"name":"team","member_ids":["member-1"],"idempotency_key":"create-1"}`)))
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if len(proxy.calls) != 1 || proxy.calls[0].Method != "group.create" || proxy.calls[0].IdempotencyKey != "create-1" {
+		t.Fatalf("group.create request = %+v", proxy.calls)
+	}
+}
+
+func TestDefaultToolsIgnoreMethodsOutsideFixedRegistry(t *testing.T) {
+	tools := DefaultTools([]string{"message.history", "daemon.shutdown", "sdk.call"})
+	if len(tools) != 1 || tools[0].Name != "abdim.message.history" {
+		t.Fatalf("DefaultTools() = %+v", tools)
+	}
+}
+
 func TestServerRejectsToolsOutsideConstructionSnapshot(t *testing.T) {
 	proxy := &recordingProxy{}
 	visible := false

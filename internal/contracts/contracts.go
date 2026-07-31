@@ -253,7 +253,11 @@ type StartRequest struct {
 	ProfileID       string
 	RunID           string
 	GrantCredential string
-	Proxy           ToolProxy
+	// AllowedMethods is the construction-time intersection of the policy,
+	// verified capability manifest, and run grant. Provider adapters must not
+	// discover methods from another daemon surface.
+	AllowedMethods []string
+	Proxy          ToolProxy
 }
 
 type Session interface {

@@ -95,11 +95,17 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 }
 
 func (s *Server) handle(ctx context.Context, request stdio.Request) (any, bool) {
-	if err := stdio.ValidateMeta(request.Params); err != nil {
-		return stdio.Error(request.ID, asRPCError(err)), true
-	}
 	switch request.Method {
+	case "initialize":
+		result, err := s.initialize(request.Params)
+		if err != nil {
+			return stdio.Error(request.ID, asRPCError(err)), true
+		}
+		return stdio.Success(request.ID, result), true
 	case "server/discover":
+		if err := stdio.ValidateMeta(request.Params); err != nil {
+			return stdio.Error(request.ID, asRPCError(err)), true
+		}
 		return stdio.Success(request.ID, s.discovery()), true
 	case "tools/list":
 		if err := validateListParams(request.Params); err != nil {
@@ -115,6 +121,26 @@ func (s *Server) handle(ctx context.Context, request stdio.Request) (any, bool) 
 	default:
 		return stdio.Error(request.ID, stdio.RPCError{Code: -32601, Message: "method not found"}), true
 	}
+}
+
+// initialize supports the standard MCP handshake used by Codex-launched stdio
+// servers. server/discover remains available for the existing local adapter.
+func (s *Server) initialize(raw json.RawMessage) (any, error) {
+	var params struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if !stdio.IsJSONObject(raw) || json.Unmarshal(raw, &params) != nil || params.ProtocolVersion != stdio.ProtocolVersion {
+		return nil, stdio.RPCError{Code: -32602, Message: "unsupported protocol version"}
+	}
+	return struct {
+		ProtocolVersion string            `json:"protocolVersion"`
+		Capabilities    map[string]any    `json:"capabilities"`
+		ServerInfo      map[string]string `json:"serverInfo"`
+	}{
+		ProtocolVersion: stdio.ProtocolVersion,
+		Capabilities:    map[string]any{"tools": map[string]any{"listChanged": false}},
+		ServerInfo:      map[string]string{"name": "abdim-provider", "version": contracts.APIVersionV1},
+	}, nil
 }
 
 func (s *Server) discovery() any {
@@ -150,8 +176,9 @@ func (s *Server) toolList() any {
 
 func (s *Server) call(ctx context.Context, raw json.RawMessage) (any, error) {
 	var params struct {
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
+		Name           string          `json:"name"`
+		Arguments      json.RawMessage `json:"arguments"`
+		IdempotencyKey string          `json:"idempotency_key"`
 	}
 	if err := json.Unmarshal(raw, &params); err != nil || strings.TrimSpace(params.Name) == "" {
 		return nil, stdio.RPCError{Code: -32602, Message: "invalid tool parameters"}
@@ -167,17 +194,21 @@ func (s *Server) call(ctx context.Context, raw json.RawMessage) (any, error) {
 		}
 		arguments = append(json.RawMessage(nil), params.Arguments...)
 	}
+	if params.IdempotencyKey == "" {
+		params.IdempotencyKey = idempotencyKey(arguments)
+	}
 	requestID, err := localRequestID()
 	if err != nil {
 		return nil, stdio.RPCError{Code: -32603, Message: "internal error"}
 	}
 	response, err := s.proxy.Call(ctx, contracts.Request{
-		APIVersion: contracts.APIVersionV1,
-		RequestID:  requestID,
-		ProfileID:  s.profileID,
-		Method:     tool.Method,
-		Params:     arguments,
-		Grant:      s.grant,
+		APIVersion:     contracts.APIVersionV1,
+		RequestID:      requestID,
+		ProfileID:      s.profileID,
+		Method:         tool.Method,
+		Params:         arguments,
+		Grant:          s.grant,
+		IdempotencyKey: params.IdempotencyKey,
 	})
 	if err != nil {
 		response = failedResponse(requestID, contracts.CodeInternal, "run tool proxy failed", false)
@@ -204,6 +235,16 @@ func (s *Server) call(ctx context.Context, raw json.RawMessage) (any, error) {
 	}, nil
 }
 
+func idempotencyKey(arguments json.RawMessage) string {
+	var values map[string]json.RawMessage
+	if json.Unmarshal(arguments, &values) != nil {
+		return ""
+	}
+	var key string
+	_ = json.Unmarshal(values["idempotency_key"], &key)
+	return key
+}
+
 type textContent struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
@@ -226,6 +267,9 @@ func asRPCError(err error) stdio.RPCError {
 func validateListParams(raw json.RawMessage) error {
 	var params struct {
 		Cursor string `json:"cursor"`
+	}
+	if len(raw) == 0 {
+		return nil
 	}
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return stdio.RPCError{Code: -32602, Message: "invalid tool list parameters"}

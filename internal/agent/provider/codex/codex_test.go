@@ -64,11 +64,46 @@ func TestAdapterCancellationReapsBlockedServer(t *testing.T) {
 	}
 }
 
+func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
+	adapter := newAdapter(t, "", false)
+	if err := os.WriteFile(filepath.Join(adapter.codexHome, "config.toml"), []byte("[mcp_servers.owner]\ncommand = 'must-not-inherit'\n"), 0o600); err != nil {
+		t.Fatalf("write source Codex config: %v", err)
+	}
+	request := startRequest()
+	request.AllowedMethods = []string{"message.history", "daemon.shutdown"}
+	session, err := adapter.Start(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	runRoot := filepath.Join(adapter.config.WorkingDir, request.RunID)
+	configPath := filepath.Join(runRoot, "codex", "config.toml")
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read run config: %v", err)
+	}
+	if strings.Contains(string(config), "must-not-inherit") || !strings.Contains(string(config), "[mcp_servers.abdim]") || !strings.Contains(string(config), "enabled_tools = [\"abdim.message.history\"]") {
+		t.Fatalf("run MCP config = %s", config)
+	}
+	info, err := os.Stat(configPath)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("run config mode = %v, %v", info.Mode(), err)
+	}
+	if info, err := os.Stat(filepath.Join(runRoot, "mcp.sock")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("run MCP socket mode = %v, %v", info.Mode(), err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := os.Stat(runRoot); !os.IsNotExist(err) {
+		t.Fatalf("run directory still exists after close: %v", err)
+	}
+}
+
 func TestNewRequiresIsolatedCompositionInputs(t *testing.T) {
-	if _, err := New(Config{Environment: []string{"PATH=/bin"}}); err == nil {
+	if _, err := New(Config{Environment: []string{"PATH=/bin"}, BridgeCommand: os.Args[0]}); err == nil {
 		t.Fatal("New() accepted an empty working directory")
 	}
-	if _, err := New(Config{WorkingDir: t.TempDir()}); err == nil {
+	if _, err := New(Config{WorkingDir: t.TempDir(), BridgeCommand: os.Args[0]}); err == nil {
 		t.Fatal("New() accepted an inherited environment")
 	}
 }
@@ -76,6 +111,10 @@ func TestNewRequiresIsolatedCompositionInputs(t *testing.T) {
 func newAdapter(t *testing.T, capture string, block bool) *Adapter {
 	t.Helper()
 	root := t.TempDir()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"tokens":{"access_token":"test"}}`), 0o600); err != nil {
+		t.Fatalf("write Codex credentials: %v", err)
+	}
 	script := filepath.Join(root, "fake-codex")
 	contents := "#!/bin/sh\nexec " + shellQuote(os.Args[0]) + " -test.run '^TestCodexHelperProcess$' --\n"
 	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
@@ -84,12 +123,14 @@ func newAdapter(t *testing.T, capture string, block bool) *Adapter {
 	environment := []string{
 		"GO_WANT_FAKE_CODEX=1",
 		"PATH=/usr/bin:/bin",
+		"CODEX_HOME=" + home,
 		"FAKE_CODEX_CAPTURE=" + capture,
+		"FAKE_CODEX_STARTED=" + filepath.Join(root, "started"),
 	}
 	if block {
 		environment = append(environment, "FAKE_CODEX_BLOCK=1")
 	}
-	adapter, err := New(Config{Executable: script, WorkingDir: root, Environment: environment, InitializeTimeout: time.Second})
+	adapter, err := New(Config{Executable: script, WorkingDir: root, Environment: environment, BridgeCommand: os.Args[0], InitializeTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -144,7 +185,7 @@ func TestCodexHelperProcess(t *testing.T) {
 			}
 			writeHelperResponse(request.ID, map[string]any{})
 			if os.Getenv("FAKE_CODEX_BLOCK") == "1" {
-				_ = os.WriteFile(filepath.Join(mustGetwd(), "started"), []byte("1"), 0o600)
+				_ = os.WriteFile(os.Getenv("FAKE_CODEX_STARTED"), []byte("1"), 0o600)
 				continue
 			}
 			writeHelperNotification("item/completed", map[string]any{"threadId": "thread-1", "item": map[string]any{"type": "agentMessage", "text": "intermediate reply", "phase": "commentary"}})
@@ -165,12 +206,4 @@ func writeHelperResponse(id int, result any) {
 func writeHelperNotification(method string, params any) {
 	payload, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
 	_, _ = os.Stdout.Write(append(payload, '\n'))
-}
-
-func mustGetwd() string {
-	path, err := os.Getwd()
-	if err != nil {
-		os.Exit(2)
-	}
-	return path
 }

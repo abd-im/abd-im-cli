@@ -11,7 +11,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/testkit"
 )
 
-func TestManagerSerializesConversationAndReusesSingleSession(t *testing.T) {
+func TestManagerSerializesConversationAndCreatesRunPrivateSessions(t *testing.T) {
 	session := &recordingSession{}
 	provider := &recordingProvider{session: session}
 	manager, err := NewManager(Config{Provider: provider, MaxQueue: 2, Deadline: time.Second})
@@ -33,11 +33,14 @@ func TestManagerSerializesConversationAndReusesSingleSession(t *testing.T) {
 	if result := <-second.Done; result.Status != StatusCompleted {
 		t.Fatalf("second result = %#v", result)
 	}
-	if provider.starts != 1 {
-		t.Fatalf("provider starts = %d, want 1", provider.starts)
+	if provider.starts != 2 {
+		t.Fatalf("provider starts = %d, want 2", provider.starts)
 	}
-	if len(provider.requests) != 1 || provider.requests[0].GrantCredential != "grant-run-1" {
+	if len(provider.requests) != 2 || provider.requests[0].GrantCredential != "grant-run-1" || provider.requests[1].GrantCredential != "grant-run-2" {
 		t.Fatalf("provider start credentials = %+v", provider.requests)
+	}
+	if got := provider.requests[0].AllowedMethods; len(got) != 1 || got[0] != "message.history" {
+		t.Fatalf("provider allowed methods = %v", got)
 	}
 	if got, want := session.runIDs(), []string{"run-1", "run-2"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("turn order = %v, want %v", got, want)
@@ -150,7 +153,7 @@ func TestManagerCancelAndShutdownTerminateRuns(t *testing.T) {
 }
 
 func testRequest(id, conversation string, expiry time.Time) Request {
-	return Request{ID: id, ProfileID: "work", ConversationID: conversation, EventID: "event-" + id, GrantCredential: "grant-" + id, GrantExpiresAt: expiry, Proxy: &testkit.FakeProxy{Response: &contracts.Response{APIVersion: contracts.APIVersionV1, RequestID: "proxy", OK: true, Data: json.RawMessage(`{}`), Meta: &contracts.Meta{ProfileID: "work"}}}}
+	return Request{ID: id, ProfileID: "work", ConversationID: conversation, EventID: "event-" + id, GrantCredential: "grant-" + id, GrantExpiresAt: expiry, AllowedMethods: []string{"message.history"}, Proxy: &testkit.FakeProxy{Response: &contracts.Response{APIVersion: contracts.APIVersionV1, RequestID: "proxy", OK: true, Data: json.RawMessage(`{}`), Meta: &contracts.Meta{ProfileID: "work"}}}}
 }
 
 type recordingProvider struct {

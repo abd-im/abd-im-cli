@@ -84,10 +84,13 @@ Do not use this mode for a release or untrusted inbound traffic. The release
 path still requires an independent user or container launcher that exposes only
 the run-private tool proxy and the provider's own home.
 
-This first adapter provides text replies only. It declines Codex command/file
-approvals and does not yet attach the provider MCP/tool loop. The daemon still
-registers typed services for owner diagnostics, but unverified service sources
-remain `not_validated` and are unavailable to both owner and provider.
+Each Codex run now receives a fresh private `CODEX_HOME` containing only a
+fixed `abdim` stdio MCP server configuration. That server's subprocess only
+bridges to one run-private Unix socket; the daemon retains the grant and typed
+tool proxy. Its tool list is fixed before Codex starts to the policy, verified
+capability, and grant intersection. The adapter declines Codex command/file
+approvals. Unverified service sources remain `not_validated` and are absent
+from provider MCP discovery.
 
 The token must not be placed in argv, profile TOML, environment dumps, logs,
 MCP payloads, or RPC responses. `profile.toml` stores only its opaque

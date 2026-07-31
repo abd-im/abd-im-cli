@@ -132,6 +132,21 @@ func TestInboundRejectsPolicyMethodsOutsideStaticRegistry(t *testing.T) {
 	}
 }
 
+func TestProviderVisibleMethodsFreezeVerifiedCapabilities(t *testing.T) {
+	methods := []proxy.Method{
+		{Name: "group.get", Meta: func() contracts.Meta { return contracts.Meta{Capability: &contracts.Capability{Status: "available"}} }},
+		{Name: "message.history", Meta: func() contracts.Meta {
+			return contracts.Meta{Capability: &contracts.Capability{Status: "not_validated"}}
+		}},
+		{Name: "group.create", Allowed: func() bool { return true }},
+		{Name: "group.delete", Allowed: func() bool { return false }},
+	}
+	visible := providerVisibleMethods(methods)
+	if len(visible) != 2 || visible[0] != "group.get" || visible[1] != "group.create" {
+		t.Fatalf("providerVisibleMethods() = %v", visible)
+	}
+}
+
 type harness struct {
 	store    *control.Store
 	ledger   *events.Ledger
