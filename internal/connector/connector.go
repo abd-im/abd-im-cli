@@ -12,6 +12,8 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/profile"
 	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
+	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
+	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
 
@@ -28,7 +30,10 @@ type Config struct {
 // Prepared is the daemon-owned SDK composition. The adapter is created once
 // and returned as a factory so bridge.LoginMgr remains the lifecycle owner.
 type Prepared struct {
-	Adapter *abdim.Adapter
+	Adapter       *abdim.Adapter
+	profileID     string
+	userID        string
+	credentialRef string
 }
 
 // Prepare resolves the configured credential and constructs the SDK adapter.
@@ -60,7 +65,7 @@ func Prepare(ctx context.Context, config Config) (*Prepared, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Prepared{Adapter: adapter}, nil
+	return &Prepared{Adapter: adapter, profileID: config.ProfileID, userID: config.UserID, credentialRef: config.CredentialRef}, nil
 }
 
 // SDKFactory adapts the prepared daemon-owned adapter to bridge.LoginMgr.
@@ -78,6 +83,25 @@ func (p *Prepared) GroupSource() (*groupservice.SDKSource, error) {
 		return nil, errors.New("prepared daemon adapter is required")
 	}
 	return groupservice.NewSDKSource(groupservice.OpenIMClient{Context: p.Adapter.Context})
+}
+
+// ProfileSource exposes fixed local profile/runtime facts and the verified
+// OpenIM user server read. It never calls an SDK cache or database API.
+func (p *Prepared) ProfileSource(daemonStatus func() profileservice.DaemonStatus) (*profileservice.OpenIMSource, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return profileservice.NewOpenIMSource(profileservice.OpenIMSourceConfig{
+		Profile: profileservice.Profile{
+			ID:            p.profileID,
+			Name:          p.profileID,
+			CredentialRef: p.credentialRef,
+			SDKVersion:    open_im_sdk.GetSdkVersion(),
+		},
+		SelfID: p.userID,
+		Client: profileservice.OpenIMClient{Context: p.Adapter.Context},
+		Daemon: daemonStatus,
+	})
 }
 
 func validateConfig(config Config) error {

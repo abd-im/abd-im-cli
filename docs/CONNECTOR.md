@@ -139,6 +139,13 @@ semantics from the typed service remains `not_validated` until a dedicated
 mapping and privacy test exists. In particular, do not implement message
 history/search by calling SDK methods that read its local SQLite database.
 
+The profile source combines daemon-owned profile/runtime facts with the fixed
+authenticated `/user/get_users_info` endpoint. `user.me`, `user.get`, and the
+server check in `doctor.get` use that endpoint; `profile.get` and
+`daemon.status` do not access the SDK database. Its controlled integration
+gate uses `ABDIM_OPENIM_API_ADDR`, `ABDIM_OPENIM_USER_ID`, and
+`ABDIM_OPENIM_TOKEN`.
+
 The group HTTP source currently uses the daemon-private SDK context only for
 authenticated server requests. Its controlled integration test requires
 `ABDIM_OPENIM_API_ADDR`, `ABDIM_OPENIM_USER_ID`, and `ABDIM_OPENIM_TOKEN`.

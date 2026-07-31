@@ -33,6 +33,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/profile"
 	"github.com/abd-im/abd-im-cli/internal/reply"
 	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
+	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
@@ -356,7 +357,24 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	services, err := daemon.NewOwnerServicesWithVerifiedGroup(item.Name, groupSource, groupservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()))
+	var runtime *daemon.Runtime
+	profileSource, err := prepared.ProfileSource(func() profileservice.DaemonStatus {
+		state := bridge.StateNew
+		if runtime != nil {
+			state = runtime.State()
+		}
+		return profileservice.DaemonStatus{
+			ProfileID:        item.Name,
+			State:            string(state),
+			PID:              os.Getpid(),
+			SDKVersion:       open_im_sdk.GetSdkVersion(),
+			CredentialsValid: state == bridge.StateReady,
+		}
+	})
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	services, err := daemon.NewOwnerServicesWithVerifiedProfileAndGroup(item.Name, profileSource, profileservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()), groupSource, groupservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()))
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -406,7 +424,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	runtime, err := daemon.NewRuntime(daemon.RuntimeConfig{
+	runtime, err = daemon.NewRuntime(daemon.RuntimeConfig{
 		SDKFactory: prepared.SDKFactory(),
 		LockFile:   paths.LockFile,
 		SocketPath: paths.Socket,

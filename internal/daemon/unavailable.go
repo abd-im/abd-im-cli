@@ -60,6 +60,29 @@ func NewOwnerServicesWithVerifiedGroup(profileID string, source groupservice.Sou
 	return services, nil
 }
 
+// NewOwnerServicesWithVerifiedProfileAndGroup replaces the two verified
+// source families while keeping all future source families fail-closed.
+func NewOwnerServicesWithVerifiedProfileAndGroup(profileID string, profileSource profileservice.Source, profileCapabilities map[string]service.Capability, groupSource groupservice.Source, groupCapabilities map[string]service.Capability) (OwnerServices, error) {
+	if profileSource == nil || groupSource == nil {
+		return OwnerServices{}, errors.New("verified profile and group sources are required")
+	}
+	services, err := NewUnverifiedOwnerServices(profileID)
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	profileReader, err := profileservice.New(profileSource, profileservice.Options{ProfileID: profileID, Capabilities: profileCapabilities})
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	groupReader, err := groupservice.New(groupSource, groupservice.Options{ProfileID: profileID, Capabilities: groupCapabilities})
+	if err != nil {
+		return OwnerServices{}, err
+	}
+	services.Profile = profileReader
+	services.Group = groupReader
+	return services, nil
+}
+
 func (unverifiedProfileSource) Profile(context.Context) (profileservice.Profile, error) {
 	return profileservice.Profile{}, errUnverifiedSource
 }

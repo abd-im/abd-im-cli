@@ -7,6 +7,7 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/profile"
+	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
 
@@ -49,6 +50,9 @@ func TestPrepareResolvesCredentialWithoutStartingSDK(t *testing.T) {
 	}
 	if source, err := prepared.GroupSource(); err != nil || source == nil {
 		t.Fatalf("GroupSource() = %v, %v", source, err)
+	}
+	if source, err := prepared.ProfileSource(func() profileservice.DaemonStatus { return profileservice.DaemonStatus{State: "ready"} }); err != nil || source == nil {
+		t.Fatalf("ProfileSource() = %v, %v", source, err)
 	}
 	if got := prepared.Adapter.Context(); got == nil {
 		t.Fatal("adapter context is nil")

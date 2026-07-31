@@ -37,3 +37,18 @@ go test -tags=integration ./internal/service/group -run TestOpenIMGroupReadsInte
 The tagged test fails if any required variable is absent. It exercises group
 list/get/search and member list/search through the typed service and validates
 the response schema and capability metadata. It does not create or modify data.
+
+## OpenIM Profile Integration
+
+`internal/service/profile` uses the same controlled server deployment and
+three shared secrets: `ABDIM_OPENIM_API_ADDR`, `ABDIM_OPENIM_USER_ID`, and
+`ABDIM_OPENIM_TOKEN`. It verifies the fixed `/user/get_users_info` mapping for
+`user.me`, `user.get`, and the server check in `doctor.get`; `profile.get` and
+`daemon.status` are composed only from daemon-owned configuration and runtime
+state.
+
+Run the gate with:
+
+```bash
+go test -tags=integration ./internal/service/profile -run TestOpenIMProfileReadsIntegration
+```

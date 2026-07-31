@@ -23,6 +23,16 @@ const (
 	DoctorGet  = "doctor.get"
 )
 
+// VerifiedCapabilities returns the fixed profile read surface covered by the
+// controlled SDK/server integration gate.
+func VerifiedCapabilities(sdkVersion string) map[string]service.Capability {
+	capabilities := make(map[string]service.Capability, 5)
+	for _, method := range []string{ProfileGet, UserMe, UserGet, DaemonGet, DoctorGet} {
+		capabilities[method] = service.Capability{Method: method, Scope: method + ".read", Status: "available", SDKVersion: sdkVersion}
+	}
+	return capabilities
+}
+
 type Profile struct {
 	ID            string    `json:"id"`
 	Name          string    `json:"name"`
