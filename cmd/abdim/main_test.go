@@ -308,8 +308,18 @@ func TestMCPServeUsesDefaultOwnerToolRegistry(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
 		t.Fatalf("decode MCP response: %v", err)
 	}
-	if len(response.Result.Tools) != 22 || response.Result.Tools[0].Name == "abdim.daemon.shutdown" {
+	if len(response.Result.Tools) != 26 || response.Result.Tools[0].Name == "abdim.daemon.shutdown" {
 		t.Fatalf("MCP tools = %+v", response.Result.Tools)
+	}
+	foundRunCancel := false
+	for _, tool := range response.Result.Tools {
+		if tool.Name == "abdim.run.cancel" {
+			foundRunCancel = true
+			break
+		}
+	}
+	if !foundRunCancel {
+		t.Fatalf("MCP tools omit owner run.cancel: %+v", response.Result.Tools)
 	}
 }
 

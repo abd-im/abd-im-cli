@@ -4,6 +4,7 @@ package run
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -60,6 +61,17 @@ type Config struct {
 	Provider contracts.Provider
 	MaxQueue int
 	Deadline time.Duration
+	Observer Observer
+	OnError  func(error)
+}
+
+// Observer receives lifecycle facts after a run is accepted. Implementations
+// must retain only daemon-owned operational metadata and never prompts,
+// credentials, provider output, or proxy internals.
+type Observer interface {
+	Queued(Request) error
+	Started(runID string) error
+	Finished(Result) error
 }
 
 type job struct {
@@ -84,6 +96,8 @@ type Manager struct {
 	provider contracts.Provider
 	maxQueue int
 	deadline time.Duration
+	observer Observer
+	onError  func(error)
 
 	mu            sync.Mutex
 	conversations map[string]*conversation
@@ -105,6 +119,8 @@ func NewManager(config Config) (*Manager, error) {
 		provider:      config.Provider,
 		maxQueue:      config.MaxQueue,
 		deadline:      config.Deadline,
+		observer:      config.Observer,
+		onError:       config.OnError,
 		conversations: make(map[string]*conversation),
 		jobs:          make(map[string]*job),
 	}, nil
@@ -143,6 +159,19 @@ func (m *Manager) Submit(request Request) (*Handle, error) {
 	}
 	queue.pending = append(queue.pending, item)
 	m.jobs[request.ID] = item
+	if m.observer != nil {
+		if err := m.observer.Queued(request); err != nil {
+			queue.pending = queue.pending[:len(queue.pending)-1]
+			delete(m.jobs, request.ID)
+			if len(queue.pending) == 0 && !queue.running {
+				delete(m.conversations, request.ConversationID)
+			}
+			m.mu.Unlock()
+			cancel()
+			_ = request.Proxy.Close(context.Background())
+			return nil, fmt.Errorf("record accepted run: %w", err)
+		}
+	}
 	if !queue.running {
 		queue.running = true
 		m.workers.Add(1)
@@ -164,6 +193,7 @@ func (m *Manager) Cancel(runID string) bool {
 	item.markCanceled(StatusCanceled)
 	m.mu.Unlock()
 	item.cancel()
+	_ = item.request.Proxy.Close(context.Background())
 	return true
 }
 
@@ -183,6 +213,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	for _, item := range items {
 		item.markCanceled(StatusInterrupted)
 		item.cancel()
+		_ = item.request.Proxy.Close(context.Background())
 	}
 	m.workers.Wait()
 
@@ -207,7 +238,7 @@ func (m *Manager) runConversation(conversationID string, queue *conversation) {
 
 func (m *Manager) execute(item *job) {
 	if status, canceled := item.cancellation(); canceled {
-		item.finish(Result{RunID: item.request.ID, Status: status})
+		m.complete(item, Result{RunID: item.request.ID, Status: status})
 		m.remove(item.request.ID)
 		return
 	}
@@ -215,9 +246,16 @@ func (m *Manager) execute(item *job) {
 	m.turnMu.Lock()
 	defer m.turnMu.Unlock()
 	if status, canceled := item.cancellation(); canceled {
-		item.finish(Result{RunID: item.request.ID, Status: status})
+		m.complete(item, Result{RunID: item.request.ID, Status: status})
 		m.remove(item.request.ID)
 		return
+	}
+	if m.observer != nil {
+		if err := m.observer.Started(item.request.ID); err != nil {
+			m.complete(item, Result{RunID: item.request.ID, Status: StatusInterrupted, Err: fmt.Errorf("record run start: %w", err)})
+			m.remove(item.request.ID)
+			return
+		}
 	}
 
 	turnContext, turnCancel := withTurnDeadline(item.context, m.deadline, item.request.GrantExpiresAt)
@@ -230,12 +268,12 @@ func (m *Manager) execute(item *job) {
 		Proxy:           item.request.Proxy,
 	})
 	if err != nil {
-		item.finish(Result{RunID: item.request.ID, Status: StatusFailed, Err: err})
+		m.complete(item, Result{RunID: item.request.ID, Status: StatusFailed, Err: err})
 		m.remove(item.request.ID)
 		return
 	}
 	if session == nil {
-		item.finish(Result{RunID: item.request.ID, Status: StatusFailed, Err: errors.New("provider returned nil session")})
+		m.complete(item, Result{RunID: item.request.ID, Status: StatusFailed, Err: errors.New("provider returned nil session")})
 		m.remove(item.request.ID)
 		return
 	}
@@ -252,15 +290,26 @@ func (m *Manager) execute(item *job) {
 	result, err := session.Turn(turnContext, contracts.TurnRequest{RunID: item.request.ID, EventID: item.request.EventID, GrantCredential: item.request.GrantCredential, Prompt: item.request.Prompt})
 	close(finished)
 	if status, canceled := item.cancellation(); canceled {
-		item.finish(Result{RunID: item.request.ID, Status: status, Err: turnContext.Err()})
+		m.complete(item, Result{RunID: item.request.ID, Status: status, Err: turnContext.Err()})
 	} else if turnContext.Err() != nil {
-		item.finish(Result{RunID: item.request.ID, Status: deadlineStatus(item.request.GrantExpiresAt), Err: turnContext.Err()})
+		m.complete(item, Result{RunID: item.request.ID, Status: deadlineStatus(item.request.GrantExpiresAt), Err: turnContext.Err()})
 	} else if err != nil {
-		item.finish(Result{RunID: item.request.ID, Status: StatusFailed, Err: err})
+		m.complete(item, Result{RunID: item.request.ID, Status: StatusFailed, Err: err})
 	} else {
-		item.finish(Result{RunID: item.request.ID, Status: StatusCompleted, Turn: result})
+		m.complete(item, Result{RunID: item.request.ID, Status: StatusCompleted, Turn: result})
 	}
 	m.remove(item.request.ID)
+}
+
+func (m *Manager) complete(item *job, result Result) {
+	if !item.finish(result) {
+		return
+	}
+	if m.observer != nil {
+		if err := m.observer.Finished(result); err != nil {
+			m.report(fmt.Errorf("record run finish: %w", err))
+		}
+	}
 }
 
 func (m *Manager) remove(runID string) {
@@ -283,11 +332,11 @@ func (item *job) cancellation() (Status, bool) {
 	return item.canceled, item.canceled != ""
 }
 
-func (item *job) finish(result Result) {
+func (item *job) finish(result Result) bool {
 	item.mu.Lock()
 	if item.finished {
 		item.mu.Unlock()
-		return
+		return false
 	}
 	item.finished = true
 	item.mu.Unlock()
@@ -295,6 +344,13 @@ func (item *job) finish(result Result) {
 	_ = item.request.Proxy.Close(context.Background())
 	item.done <- result
 	close(item.done)
+	return true
+}
+
+func (m *Manager) report(err error) {
+	if err != nil && m.onError != nil {
+		m.onError(err)
+	}
 }
 
 func validateRequest(request Request) error {

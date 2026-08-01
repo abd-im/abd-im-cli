@@ -98,4 +98,22 @@ var migrations = []migration{
 			`CREATE INDEX attachments_profile_run ON attachments(profile_id, run_id, grant_id)`,
 		},
 	},
+	{
+		version: 5,
+		statements: []string{
+			`ALTER TABLE operations ADD COLUMN target_summary TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE operations ADD COLUMN error_summary TEXT NOT NULL DEFAULT ''`,
+			`CREATE TABLE runs (
+				id TEXT PRIMARY KEY,
+				profile_id TEXT NOT NULL,
+				conversation_id TEXT NOT NULL,
+				event_id TEXT NOT NULL,
+				status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'interrupted', 'cancelled')),
+				reason TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			)`,
+			`CREATE INDEX runs_profile_created_at ON runs(profile_id, created_at)`,
+		},
+	},
 }

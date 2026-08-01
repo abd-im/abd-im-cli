@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-func TestDefaultToolsExposeOnlyTheFixedP1OwnerReadRegistry(t *testing.T) {
+func TestDefaultToolsExposeOnlyTheFixedOwnerRegistry(t *testing.T) {
 	tools := DefaultTools()
-	if len(tools) != 22 {
-		t.Fatalf("DefaultTools() count = %d, want 22", len(tools))
+	if len(tools) != 26 {
+		t.Fatalf("DefaultTools() count = %d, want 26", len(tools))
 	}
 	names := make([]string, 0, len(tools))
 	for _, tool := range tools {
@@ -18,7 +18,7 @@ func TestDefaultToolsExposeOnlyTheFixedP1OwnerReadRegistry(t *testing.T) {
 		}
 		names = append(names, tool.Name)
 	}
-	for _, name := range []string{"abdim.conversation.list", "abdim.message.history", "abdim.group.members.list", "abdim.blacklist.list"} {
+	for _, name := range []string{"abdim.conversation.list", "abdim.message.history", "abdim.group.members.list", "abdim.blacklist.list", "abdim.run.list"} {
 		if !schemaRequires(t, tools, name, "limit") {
 			t.Fatalf("%s schema does not require limit", name)
 		}

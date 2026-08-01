@@ -129,6 +129,7 @@ func (s *Service) Deliver(ctx context.Context, profileID, eventID, finalText str
 		Scope:          replyScope,
 		IdempotencyKey: key,
 		InputDigest:    digest,
+		TargetSummary:  replyTargetSummary(slot),
 		Status:         control.OperationUnknown,
 	}
 	if err := s.store.PutOperation(ctx, operation); err != nil {
@@ -158,10 +159,11 @@ func (s *Service) Deliver(ctx context.Context, profileID, eventID, finalText str
 		if errors.Is(err, ErrOutcomeUnknown) {
 			return Outcome{Slot: slot, Operation: operation}, ErrOutcomeUnknown
 		}
-		if updateErr := s.store.UpdateOperationStatus(ctx, operation.ID, control.OperationFailed); updateErr != nil {
+		if updateErr := s.store.UpdateOperationFailure(ctx, operation.ID, "reply delivery failed"); updateErr != nil {
 			return Outcome{Slot: slot, Operation: operation}, fmt.Errorf("record reply failure: %w", updateErr)
 		}
 		operation.Status = control.OperationFailed
+		operation.ErrorSummary = "reply delivery failed"
 		return Outcome{Slot: slot, Operation: operation}, err
 	}
 	if err := s.store.UpdateOperationStatus(ctx, operation.ID, control.OperationConfirmed); err != nil {
@@ -170,6 +172,13 @@ func (s *Service) Deliver(ctx context.Context, profileID, eventID, finalText str
 	}
 	operation.Status = control.OperationConfirmed
 	return Outcome{Slot: slot, Operation: operation}, nil
+}
+
+func replyTargetSummary(slot control.ReplySlot) string {
+	if slot.RecipientID != "" {
+		return "recipient"
+	}
+	return "group"
 }
 
 func validateBinding(binding Binding) error {

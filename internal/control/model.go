@@ -53,9 +53,53 @@ type Operation struct {
 	Scope          string
 	IdempotencyKey string
 	InputDigest    string
+	TargetSummary  string
 	Status         OperationStatus
+	ErrorSummary   string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+// RunStatus describes the lifecycle of a provider turn. It deliberately
+// records identifiers and a bounded reason only, never prompts or output.
+type RunStatus string
+
+const (
+	RunQueued      RunStatus = "queued"
+	RunRunning     RunStatus = "running"
+	RunCompleted   RunStatus = "completed"
+	RunInterrupted RunStatus = "interrupted"
+	RunCancelled   RunStatus = "cancelled"
+)
+
+// Run is the durable operational record for one provider turn.
+type Run struct {
+	ID             string
+	ProfileID      string
+	ConversationID string
+	EventID        string
+	Status         RunStatus
+	Reason         string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+func (run Run) validate() error {
+	if strings.TrimSpace(run.ID) == "" || strings.TrimSpace(run.ProfileID) == "" {
+		return errors.New("run ID and profile ID are required")
+	}
+	if strings.TrimSpace(run.ConversationID) == "" || strings.TrimSpace(run.EventID) == "" {
+		return errors.New("run conversation and event IDs are required")
+	}
+	switch run.Status {
+	case RunQueued, RunRunning, RunCompleted, RunInterrupted, RunCancelled:
+	default:
+		return errors.New("run status must be queued, running, completed, interrupted, or cancelled")
+	}
+	if len(run.Reason) > 256 {
+		return errors.New("run reason must not exceed 256 bytes")
+	}
+	return nil
 }
 
 // ReplySlot binds a provider result to the original event and conversation.
@@ -95,6 +139,9 @@ func (operation Operation) validate() error {
 	}
 	if strings.TrimSpace(operation.InputDigest) == "" {
 		return errors.New("operation input digest is required")
+	}
+	if len(operation.TargetSummary) > 256 || len(operation.ErrorSummary) > 256 {
+		return errors.New("operation diagnostic summaries must not exceed 256 bytes")
 	}
 	switch operation.Status {
 	case OperationConfirmed, OperationFailed, OperationUnknown:

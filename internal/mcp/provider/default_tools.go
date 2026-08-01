@@ -21,7 +21,7 @@ func DefaultTools(methods []string) []Tool {
 	}
 	tools := make([]Tool, 0, len(allowed))
 	for _, tool := range owner.DefaultTools() {
-		if _, exists := allowed[tool.Method]; !exists {
+		if _, exists := allowed[tool.Method]; !exists || providerForbiddenOwnerMethod(tool.Method) {
 			continue
 		}
 		tools = append(tools, Tool{
@@ -142,6 +142,18 @@ func DefaultTools(methods []string) []Tool {
 		tools = append(tools, Tool{Name: "abdim." + method, Description: "Update one approved blacklist relationship.", Method: method, InputSchema: json.RawMessage(`{"type":"object","properties":{"user_id":{"type":"string","minLength":1,"maxLength":256},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["user_id","idempotency_key"]}`), Visible: func() bool { return true }})
 	}
 	return tools
+}
+
+// Provider MCP may reuse typed owner read schemas, but daemon controller and
+// diagnostics methods remain owner-only even if an invalid construction
+// snapshot names them.
+func providerForbiddenOwnerMethod(method string) bool {
+	switch method {
+	case "run.list", "run.cancel", "operation.get", "operation.mark_unknown":
+		return true
+	default:
+		return false
+	}
 }
 
 func friendTool(method string) (string, json.RawMessage) {

@@ -248,10 +248,10 @@ func (s *Store) PutOperation(ctx context.Context, operation Operation) error {
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO operations (
-			id, profile_id, scope, idempotency_key, input_digest, status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, profile_id, scope, idempotency_key, input_digest, target_summary, status, error_summary, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		operation.ID, operation.ProfileID, operation.Scope, operation.IdempotencyKey,
-		operation.InputDigest, operation.Status, encodeTime(operation.CreatedAt), encodeTime(operation.UpdatedAt))
+		operation.InputDigest, operation.TargetSummary, operation.Status, operation.ErrorSummary, encodeTime(operation.CreatedAt), encodeTime(operation.UpdatedAt))
 	if isUniqueViolation(err) {
 		return fmt.Errorf("%w: operation %q", ErrConflict, operation.ID)
 	}
@@ -264,7 +264,7 @@ func (s *Store) PutOperation(ctx context.Context, operation Operation) error {
 // OperationByIdempotencyKey returns the operation that owns a side-effect key.
 func (s *Store) OperationByIdempotencyKey(ctx context.Context, profileID, scope, key string) (Operation, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, profile_id, scope, idempotency_key, input_digest, status, created_at, updated_at
+		SELECT id, profile_id, scope, idempotency_key, input_digest, target_summary, status, error_summary, created_at, updated_at
 		FROM operations
 		WHERE profile_id = ? AND scope = ? AND idempotency_key = ?`, profileID, scope, key)
 	operation, err := scanOperation(row)
@@ -281,7 +281,7 @@ func (s *Store) OperationByIdempotencyKey(ctx context.Context, profileID, scope,
 // same canonical input. Callers must not retry it under a different key.
 func (s *Store) UnknownOperationByInputDigest(ctx context.Context, profileID, scope, digest string) (Operation, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, profile_id, scope, idempotency_key, input_digest, status, created_at, updated_at
+		SELECT id, profile_id, scope, idempotency_key, input_digest, target_summary, status, error_summary, created_at, updated_at
 		FROM operations WHERE profile_id = ? AND scope = ? AND input_digest = ? AND status = 'unknown'
 		ORDER BY created_at ASC LIMIT 1`, profileID, scope, digest)
 	operation, err := scanOperation(row)
@@ -294,6 +294,22 @@ func (s *Store) UnknownOperationByInputDigest(ctx context.Context, profileID, sc
 	return operation, nil
 }
 
+// OperationByID returns one operation without exposing its idempotency key or
+// input digest through higher-level owner diagnostics.
+func (s *Store) OperationByID(ctx context.Context, profileID, id string) (Operation, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, profile_id, scope, idempotency_key, input_digest, target_summary, status, error_summary, created_at, updated_at
+		FROM operations WHERE profile_id = ? AND id = ?`, profileID, id)
+	operation, err := scanOperation(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Operation{}, fmt.Errorf("%w: operation %q", ErrNotFound, id)
+	}
+	if err != nil {
+		return Operation{}, fmt.Errorf("get operation by ID: %w", err)
+	}
+	return operation, nil
+}
+
 // UpdateOperationStatus records a terminal or unknown operation outcome.
 func (s *Store) UpdateOperationStatus(ctx context.Context, id string, status OperationStatus) error {
 	switch status {
@@ -302,7 +318,9 @@ func (s *Store) UpdateOperationStatus(ctx context.Context, id string, status Ope
 		return errors.New("operation status must be confirmed, failed, or unknown")
 	}
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE operations SET status = ?, updated_at = ? WHERE id = ?`, status, encodeTime(time.Now()), id)
+		UPDATE operations
+		SET status = ?, error_summary = CASE WHEN ? = 'failed' THEN error_summary ELSE '' END, updated_at = ?
+		WHERE id = ?`, status, status, encodeTime(time.Now()), id)
 	if err != nil {
 		return fmt.Errorf("update operation status: %w", err)
 	}
@@ -312,6 +330,140 @@ func (s *Store) UpdateOperationStatus(ctx context.Context, id string, status Ope
 	}
 	if changed == 0 {
 		return fmt.Errorf("%w: operation %q", ErrNotFound, id)
+	}
+	return nil
+}
+
+// UpdateOperationFailure records the public category of a failed effect. The
+// caller must pass a pre-redacted bounded summary, never an SDK error.
+func (s *Store) UpdateOperationFailure(ctx context.Context, id, summary string) error {
+	if len(summary) > 256 {
+		return errors.New("operation error summary must not exceed 256 bytes")
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE operations SET status = ?, error_summary = ?, updated_at = ? WHERE id = ?`,
+		OperationFailed, summary, encodeTime(time.Now()), id)
+	if err != nil {
+		return fmt.Errorf("record operation failure: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check operation failure update: %w", err)
+	}
+	if changed == 0 {
+		return fmt.Errorf("%w: operation %q", ErrNotFound, id)
+	}
+	return nil
+}
+
+// PutRun records an accepted provider turn before it starts.
+func (s *Store) PutRun(ctx context.Context, run Run) error {
+	if err := run.validate(); err != nil {
+		return err
+	}
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = time.Now()
+	}
+	if run.UpdatedAt.IsZero() {
+		run.UpdatedAt = run.CreatedAt
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO runs (id, profile_id, conversation_id, event_id, status, reason, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.ProfileID, run.ConversationID, run.EventID, run.Status, run.Reason,
+		encodeTime(run.CreatedAt), encodeTime(run.UpdatedAt))
+	if isUniqueViolation(err) {
+		return fmt.Errorf("%w: run %q", ErrConflict, run.ID)
+	}
+	if err != nil {
+		return fmt.Errorf("put run: %w", err)
+	}
+	return nil
+}
+
+// RunByID returns one profile-scoped run record.
+func (s *Store) RunByID(ctx context.Context, profileID, id string) (Run, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, profile_id, conversation_id, event_id, status, reason, created_at, updated_at
+		FROM runs WHERE profile_id = ? AND id = ?`, profileID, id)
+	run, err := scanRun(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Run{}, fmt.Errorf("%w: run %q", ErrNotFound, id)
+	}
+	if err != nil {
+		return Run{}, fmt.Errorf("get run: %w", err)
+	}
+	return run, nil
+}
+
+// ListRuns returns a stable, bounded page sorted by creation time then ID.
+func (s *Store) ListRuns(ctx context.Context, profileID string, offset, limit int) ([]Run, error) {
+	if strings.TrimSpace(profileID) == "" {
+		return nil, errors.New("profile ID is required")
+	}
+	if offset < 0 || limit <= 0 || limit > 101 {
+		return nil, errors.New("run offset must be non-negative and limit must be between 1 and 101")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, profile_id, conversation_id, event_id, status, reason, created_at, updated_at
+		FROM runs WHERE profile_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, profileID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	defer rows.Close()
+	result := make([]Run, 0, limit)
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan run: %w", err)
+		}
+		result = append(result, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate runs: %w", err)
+	}
+	return result, nil
+}
+
+// UpdateRunStatus changes one known run's operational state. Reasons are
+// fixed public labels rather than provider or SDK error strings.
+func (s *Store) UpdateRunStatus(ctx context.Context, profileID, id string, status RunStatus, reason string) error {
+	if len(reason) > 256 {
+		return errors.New("run reason must not exceed 256 bytes")
+	}
+	switch status {
+	case RunQueued, RunRunning, RunCompleted, RunInterrupted, RunCancelled:
+	default:
+		return errors.New("invalid run status")
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE runs SET status = ?, reason = ?, updated_at = ? WHERE profile_id = ? AND id = ?`,
+		status, reason, encodeTime(time.Now()), profileID, id)
+	if err != nil {
+		return fmt.Errorf("update run status: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check run status update: %w", err)
+	}
+	if changed == 0 {
+		return fmt.Errorf("%w: run %q", ErrNotFound, id)
+	}
+	return nil
+}
+
+// InterruptActiveRuns marks work left active by an earlier daemon process as
+// interrupted. It never replays provider output or remote effects.
+func (s *Store) InterruptActiveRuns(ctx context.Context, profileID string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE runs SET status = ?, reason = ?, updated_at = ?
+		WHERE profile_id = ? AND status IN (?, ?)`,
+		RunInterrupted, "daemon restarted", encodeTime(time.Now()), profileID, RunQueued, RunRunning)
+	if err != nil {
+		return fmt.Errorf("interrupt active runs: %w", err)
+	}
+	if _, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("check interrupted runs: %w", err)
 	}
 	return nil
 }
@@ -557,7 +709,7 @@ func scanOperation(row scanner) (Operation, error) {
 	var createdAt, updatedAt string
 	if err := row.Scan(
 		&operation.ID, &operation.ProfileID, &operation.Scope, &operation.IdempotencyKey,
-		&operation.InputDigest, &operation.Status, &createdAt, &updatedAt,
+		&operation.InputDigest, &operation.TargetSummary, &operation.Status, &operation.ErrorSummary, &createdAt, &updatedAt,
 	); err != nil {
 		return Operation{}, err
 	}
@@ -569,6 +721,24 @@ func scanOperation(row scanner) (Operation, error) {
 		return Operation{}, err
 	}
 	return operation, nil
+}
+
+func scanRun(row scanner) (Run, error) {
+	var run Run
+	var createdAt, updatedAt string
+	if err := row.Scan(
+		&run.ID, &run.ProfileID, &run.ConversationID, &run.EventID, &run.Status, &run.Reason, &createdAt, &updatedAt,
+	); err != nil {
+		return Run{}, err
+	}
+	var err error
+	if run.CreatedAt, err = decodeTime(createdAt); err != nil {
+		return Run{}, err
+	}
+	if run.UpdatedAt, err = decodeTime(updatedAt); err != nil {
+		return Run{}, err
+	}
+	return run, nil
 }
 
 func scanReplySlot(row scanner) (ReplySlot, error) {

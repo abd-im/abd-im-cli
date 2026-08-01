@@ -36,12 +36,14 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/ipc"
 	"github.com/abd-im/abd-im-cli/internal/launcher"
 	mcpowner "github.com/abd-im/abd-im-cli/internal/mcp/owner"
+	mcpstdio "github.com/abd-im/abd-im-cli/internal/mcp/stdio"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 	"github.com/abd-im/abd-im-cli/internal/profile"
 	"github.com/abd-im/abd-im-cli/internal/reply"
 	conversationservice "github.com/abd-im/abd-im-cli/internal/service/conversation"
 	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
 	messageservice "github.com/abd-im/abd-im-cli/internal/service/message"
+	operationsservice "github.com/abd-im/abd-im-cli/internal/service/operations"
 	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
 	socialservice "github.com/abd-im/abd-im-cli/internal/service/social"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
@@ -443,7 +445,20 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	groupManifest, err := capability.New([]capability.Entry{
+	evidenceGate, err := capability.NewEvidenceGate([]capability.Compatibility{capability.SingleCodexOpenIMCompatibility})
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	runtimeCompatibility := capability.Compatibility{
+		Provider:    "codex",
+		MCPProtocol: mcpstdio.ProtocolVersion,
+		SDKVersion:  open_im_sdk.GetSdkVersion(),
+		ServerAPI:   capability.SingleCodexOpenIMCompatibility.ServerAPI,
+	}
+	newManifest := func(entries []capability.Entry) (*capability.Manifest, error) {
+		return evidenceGate.Manifest(runtimeCompatibility, entries)
+	}
+	groupManifest, err := newManifest([]capability.Entry{
 		{Method: groupcapability.Method, Scope: groupcapability.Scope, Status: capability.Available},
 		{Method: groupcapability.JoinMethod, Scope: groupcapability.JoinScope, Status: capability.Available},
 		{Method: groupcapability.LeaveMethod, Scope: groupcapability.LeaveScope, Status: capability.Available},
@@ -469,7 +484,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	messageManifest, err := capability.New([]capability.Entry{
+	messageManifest, err := newManifest([]capability.Entry{
 		{Method: messagecapability.Method, Scope: messagecapability.Scope, Status: capability.Available},
 		{Method: messagecapability.AtMethod, Scope: messagecapability.AtScope, Status: capability.Available},
 		{Method: messagecapability.QuoteMethod, Scope: messagecapability.QuoteScope, Status: capability.Available},
@@ -512,7 +527,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	conversationManifest, err := capability.New([]capability.Entry{
+	conversationManifest, err := newManifest([]capability.Entry{
 		{Method: conversationcapability.Method, Scope: conversationcapability.Scope, Status: capability.Available},
 		{Method: conversationcapability.SetPinnedMethod, Scope: conversationcapability.SetPinnedScope, Status: capability.Available},
 		{Method: conversationcapability.SetReceiveOptionMethod, Scope: conversationcapability.SetReceiveOptionScope, Status: capability.Available},
@@ -532,7 +547,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	friendManifest, err := capability.New([]capability.Entry{
+	friendManifest, err := newManifest([]capability.Entry{
 		{Method: friendcapability.RequestMethod, Scope: friendcapability.RequestScope, Status: capability.Available},
 		{Method: friendcapability.RespondMethod, Scope: friendcapability.RespondScope, Status: capability.Available},
 		{Method: friendcapability.DeleteMethod, Scope: friendcapability.DeleteScope, Status: capability.Available},
@@ -545,7 +560,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	blacklistManifest, err := capability.New([]capability.Entry{
+	blacklistManifest, err := newManifest([]capability.Entry{
 		{Method: blacklistcapability.AddMethod, Scope: blacklistcapability.AddScope, Status: capability.Available},
 		{Method: blacklistcapability.RemoveMethod, Scope: blacklistcapability.RemoveScope, Status: capability.Available},
 	})
@@ -584,14 +599,6 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	ownerMethods, err := daemon.OwnerMethods(services)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	dispatcher, err := daemon.NewDispatcher(item.Name, ownerMethods)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
 	codex, err := codexprovider.New(codexprovider.Config{
 		Executable:    providerLauncher.CodexPath(),
 		WorkingDir:    providerWorkingDir,
@@ -606,7 +613,30 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	runs, err := runmanager.NewManager(runmanager.Config{Provider: singleProvider, MaxQueue: 2, Deadline: 2 * time.Minute})
+	runTracker, err := operationsservice.NewTracker(store)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	if err := runTracker.Recover(ctx, item.Name); err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	runs, err := runmanager.NewManager(runmanager.Config{Provider: singleProvider, MaxQueue: 2, Deadline: 2 * time.Minute, Observer: runTracker})
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	runOperations, err := operationsservice.New(item.Name, store, runs)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	ownerMethods, err := daemon.OwnerMethods(services)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	runOwnerMethods, err := daemon.RunOperationOwnerMethods(runOperations)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	dispatcher, err := daemon.NewDispatcher(item.Name, append(ownerMethods, runOwnerMethods...))
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}

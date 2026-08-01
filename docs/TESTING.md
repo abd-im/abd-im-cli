@@ -68,6 +68,41 @@ proxy, and suppresses its reply. A companion run-manager case verifies the
 go test ./tests/e2e -run 'Test(PolicyChangeCancelsEventBoundRunAndRevokesProxyE2E|GrantExpiryCancelsRunAndClosesProxyE2E)'
 ```
 
+## Run Operations E2E
+
+`tests/e2e/run_operations_test.go` starts the event-bound inbound path with a
+durable run tracker and reaches the owner socket through local RPC. It verifies
+that owner cancellation closes the run-private proxy and provider session,
+suppresses the reply, and remains unavailable to provider tools. It also
+checks restart recovery marks only queued/running records `interrupted`, keeps
+`unknown` operations terminal, and excludes input/idempotency markers from
+owner operation diagnostics.
+
+```bash
+go test ./tests/e2e -run TestOwnerRunCancellationUsesLocalRPCAndClosesProviderBoundaryE2E
+```
+
+## Compatibility Evidence
+
+`tests/compatibility` records the fixed single-Codex provider, MCP protocol,
+SDK version, and OpenIM API contract. The daemon applies that evidence to
+action manifests at startup; a mismatched runtime combination downgrades every
+static `available` entry to `not_validated`.
+
+```bash
+go test ./tests/compatibility
+```
+
+The controlled server probe is read-only and requires a short-lived IM token:
+
+- `ABDIM_OPENIM_API_ADDR`
+- `ABDIM_OPENIM_USER_ID`
+- `ABDIM_OPENIM_TOKEN`
+
+```bash
+go test -tags=integration ./tests/compatibility -run TestOpenIMServerMatchesSingleCodexCompatibilityMatrix
+```
+
 ## Privacy Regression E2E
 
 `tests/e2e/privacy_regression_test.go` injects token and inbound-body markers

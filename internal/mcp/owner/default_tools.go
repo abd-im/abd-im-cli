@@ -2,9 +2,8 @@ package owner
 
 import "encoding/json"
 
-// DefaultTools is the current P1 typed-service owner read registry. It
-// intentionally has no catch-all tool: every MCP name selects one fixed
-// daemon typed method.
+// DefaultTools is the typed owner registry. It intentionally has no catch-all
+// tool: every MCP name selects one fixed daemon typed method.
 func DefaultTools() []Tool {
 	return []Tool{
 		tool("profile.get", "Read the active profile.", objectSchema(``)),
@@ -29,6 +28,10 @@ func DefaultTools() []Tool {
 		tool("friend.search", "Search friends.", searchSchema()),
 		tool("blacklist.list", "List blacklist entries.", pageSchema(``)),
 		tool("blacklist.get", "Read one blacklist entry.", objectSchema(`"user_id":{"type":"string"}`, "user_id")),
+		tool("run.list", "List bounded daemon run diagnostics.", pageSchema(``)),
+		tool("run.cancel", "Cancel one active daemon run.", objectSchema(`"run_id":{"type":"string","minLength":1}`, "run_id")),
+		tool("operation.get", "Read one redacted operation diagnostic.", objectSchema(`"operation_id":{"type":"string","minLength":1}`, "operation_id")),
+		tool("operation.mark_unknown", "Mark one operation outcome unknown.", objectSchema(`"operation_id":{"type":"string","minLength":1}`, "operation_id")),
 	}
 }
 

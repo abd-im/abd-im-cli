@@ -180,6 +180,13 @@ func TestDefaultToolsIgnoreMethodsOutsideFixedRegistry(t *testing.T) {
 	}
 }
 
+func TestDefaultToolsNeverExposeOwnerRunOperations(t *testing.T) {
+	tools := DefaultTools([]string{"message.history", "run.list", "run.cancel", "operation.get", "operation.mark_unknown"})
+	if len(tools) != 1 || tools[0].Name != "abdim.message.history" {
+		t.Fatalf("DefaultTools() exposed owner operations: %+v", tools)
+	}
+}
+
 func TestServerRejectsToolsOutsideConstructionSnapshot(t *testing.T) {
 	proxy := &recordingProxy{}
 	visible := false

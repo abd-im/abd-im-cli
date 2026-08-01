@@ -116,9 +116,9 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 | 能力族 | 状态 | 实现所有权 | 共享收口 | 验证 |
 | --- | --- | --- | --- | --- |
 | 多 provider | deferred | `internal/agent/provider`、`internal/launcher` | deployment provider registry、run construction | 暂不进入当前交付；保留单 Codex provider |
-| 兼容矩阵 | planned | `tests/compatibility`、capability evidence contract | release gate、capability status registry | fixed SDK/server/provider matrix |
+| 兼容矩阵 | delivered | `tests/compatibility`、capability evidence contract | daemon manifest construction | fixed SDK/server/provider matrix + controlled OpenIM probe |
 | session migration | deferred | `internal/agent/provider`、`internal/agent/run` | session envelope/version registry | 依赖多 provider，暂不进入当前交付 |
-| run operations | planned | `internal/agent/run`、`internal/operation`、owner service | local RPC typed dispatcher | owner authorization/cancellation/privacy e2e |
+| run operations | delivered | `internal/agent/run`、`internal/operation`、owner service | local RPC typed dispatcher | owner authorization/cancellation/privacy e2e |
 
 ## 当前实现状态
 
@@ -126,7 +126,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 
 所有 P1 typed read 都经固定 server source 提供，不读取 SDK 本地数据库。写入面已包括群创建、成员关系和群资料/禁言/群主转让、文本/控制/媒体消息、会话设置、好友和黑名单；每项均经 method-scoped target、operation/idempotency guard 和未知结果 fail-closed 保护。媒体内容只在 profile 私有目录和 daemon 内 file handle 中流转，control DB 只保存不透明引用和约束 metadata。群成员和群管理动作以固定 server endpoint 验证角色和成员状态，不调用会同步本地状态的 SDK Group API。默认入站 policy 仍只授予 `message.history`；`conversation.unread` 因服务端未公开该值而保持 `not_validated`。
 
-`available` 必须由固定 SDK/server 组合的 integration gate 证明，不能由 manifest 静态声明替代。
+`available` 必须由固定 SDK/server/provider 组合的 integration gate 证明，不能由 manifest 静态声明替代。daemon 启动时将实际 MCP/SDK 组合与固定 evidence 精确匹配；未命中时 action manifest 自动降为 `not_validated`。run/operation 诊断只经 owner local service 暴露，provider tool registry 明确排除这些方法。
 
 ## 架构不变量
 

@@ -42,8 +42,8 @@ func TestOpenMigratesIdempotently(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&migrations); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrations != 4 {
-		t.Fatalf("migration count = %d, want 4", migrations)
+	if migrations != 5 {
+		t.Fatalf("migration count = %d, want 5", migrations)
 	}
 }
 
@@ -114,6 +114,16 @@ func TestStorePersistsOnlyControlMetadata(t *testing.T) {
 	if operation.Status != OperationUnknown {
 		t.Fatalf("operation status = %q, want %q", operation.Status, OperationUnknown)
 	}
+	if err := store.PutRun(ctx, Run{ID: "run-1", ProfileID: "work", ConversationID: "conversation-1", EventID: "event-1", Status: RunQueued, CreatedAt: now}); err != nil {
+		t.Fatalf("PutRun() error = %v", err)
+	}
+	if err := store.UpdateRunStatus(ctx, "work", "run-1", RunRunning, ""); err != nil {
+		t.Fatalf("UpdateRunStatus() error = %v", err)
+	}
+	storedRun, err := store.RunByID(ctx, "work", "run-1")
+	if err != nil || storedRun.Status != RunRunning {
+		t.Fatalf("RunByID() = %#v, %v", storedRun, err)
+	}
 
 	grant, err := store.Grant(ctx, "grant-1")
 	if err != nil {
@@ -139,6 +149,7 @@ func TestStorePersistsOnlyControlMetadata(t *testing.T) {
 		"grants":            true,
 		"reply_slots":       true,
 		"attachments":       true,
+		"runs":              true,
 	}
 	for rows.Next() {
 		var name, definition string
