@@ -3,7 +3,7 @@ package provider
 import (
 	"encoding/json"
 
-	"github.com/abd-im/abd-im-cli/internal/capability/groupcreate"
+	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
 	"github.com/abd-im/abd-im-cli/internal/mcp/owner"
 )
 
@@ -28,11 +28,11 @@ func DefaultTools(methods []string) []Tool {
 			Visible:     func() bool { return true },
 		})
 	}
-	if _, exists := allowed[groupcreate.Method]; exists {
+	if _, exists := allowed[groupcapability.Method]; exists {
 		tools = append(tools, Tool{
-			Name:        "abdim." + groupcreate.Method,
+			Name:        "abdim." + groupcapability.Method,
 			Description: "Create a group with approved members.",
-			Method:      groupcreate.Method,
+			Method:      groupcapability.Method,
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","minLength":1},"member_ids":{"type":"array","minItems":1,"maxItems":100,"items":{"type":"string"}},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["name","member_ids","idempotency_key"]}`),
 			Visible:     func() bool { return true },
 		})

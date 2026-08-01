@@ -9,7 +9,7 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/bridge"
 	"github.com/abd-im/abd-im-cli/internal/bridge/abdim"
-	groupcreate "github.com/abd-im/abd-im-cli/internal/capability/groupcreate"
+	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/profile"
 	conversationservice "github.com/abd-im/abd-im-cli/internal/service/conversation"
@@ -91,11 +91,11 @@ func (p *Prepared) GroupSource() (*groupservice.SDKSource, error) {
 
 // GroupCreator exposes the verified server action through the daemon-owned
 // adapter context. It does not expose SDK local synchronization APIs.
-func (p *Prepared) GroupCreator() (*groupcreate.OpenIMCreator, error) {
+func (p *Prepared) GroupCreator() (*groupcapability.OpenIMCreator, error) {
 	if p == nil || p.Adapter == nil {
 		return nil, errors.New("prepared daemon adapter is required")
 	}
-	return groupcreate.NewOpenIMCreator(groupcreate.OpenIMCreator{Context: p.Adapter.Context})
+	return groupcapability.NewOpenIMCreator(groupcapability.OpenIMCreator{Context: p.Adapter.Context})
 }
 
 // ConversationSource exposes the verified server-read conversation facade

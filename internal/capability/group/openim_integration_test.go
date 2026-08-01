@@ -1,6 +1,6 @@
 //go:build integration
 
-package groupcreate
+package group
 
 import (
 	"context"

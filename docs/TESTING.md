@@ -110,7 +110,7 @@ the response schema and capability metadata. It does not create or modify data.
 
 ## OpenIM Group Create Integration
 
-`internal/capability/groupcreate` calls the authenticated
+`internal/capability/group` calls the authenticated
 `/group/create_group` action without using the SDK local synchronization API.
 This gate creates one group, so use a disposable owner account and a distinct,
 pre-provisioned disposable member. Do not use a production account.
@@ -123,7 +123,7 @@ pre-provisioned disposable member. Do not use a production account.
 Run the gate with:
 
 ```bash
-go test -tags=integration ./internal/capability/groupcreate -run TestOpenIMGroupCreateIntegration
+go test -tags=integration ./internal/capability/group -run TestOpenIMGroupCreateIntegration
 ```
 
 The test verifies the fixed server action with the authenticated user as owner

@@ -22,7 +22,7 @@ import (
 	runmanager "github.com/abd-im/abd-im-cli/internal/agent/run"
 	"github.com/abd-im/abd-im-cli/internal/bridge"
 	"github.com/abd-im/abd-im-cli/internal/capability"
-	groupcreate "github.com/abd-im/abd-im-cli/internal/capability/groupcreate"
+	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
 	"github.com/abd-im/abd-im-cli/internal/cli"
 	"github.com/abd-im/abd-im-cli/internal/connector"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
@@ -383,11 +383,11 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	groupManifest, err := capability.New([]capability.Entry{{Method: groupcreate.Method, Scope: groupcreate.Scope, Status: capability.Available}})
+	groupManifest, err := capability.New([]capability.Entry{{Method: groupcapability.Method, Scope: groupcapability.Scope, Status: capability.Available}})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	groupCreate, err := groupcreate.New(groupManifest, groupOperations, groupCreator)
+	groupCreate, err := groupcapability.New(groupManifest, groupOperations, groupCreator)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}

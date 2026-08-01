@@ -10,7 +10,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
 	"github.com/abd-im/abd-im-cli/internal/capability"
-	groupcreate "github.com/abd-im/abd-im-cli/internal/capability/groupcreate"
+	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
@@ -25,11 +25,11 @@ func TestGroupCreateAllowlistAndIdempotencyE2E(t *testing.T) {
 
 	creator := &e2eGroupCreator{}
 	tool, credential := newGroupCreateTool(t, store, creator, "run-confirmed", []string{"member-allowed"})
-	if response := callGroupCreate(t, tool, credential, "outside", groupcreate.Input{Name: "team", MemberIDs: []string{"member-outside"}}); response.OK || response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || creator.calls != 0 {
+	if response := callGroupCreate(t, tool, credential, "outside", groupcapability.Input{Name: "team", MemberIDs: []string{"member-outside"}}); response.OK || response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || creator.calls != 0 {
 		t.Fatalf("outside member response/calls = %+v/%d", response, creator.calls)
 	}
 
-	input := groupcreate.Input{Name: "team", MemberIDs: []string{"member-allowed"}}
+	input := groupcapability.Input{Name: "team", MemberIDs: []string{"member-allowed"}}
 	first := callGroupCreate(t, tool, credential, "confirmed", input)
 	if !first.OK || creator.calls != 1 {
 		t.Fatalf("first group.create response/calls = %+v/%d", first, creator.calls)
@@ -45,7 +45,7 @@ func TestGroupCreateAllowlistAndIdempotencyE2E(t *testing.T) {
 	if !second.OK || creator.calls != 1 || string(second.Data) != string(first.Data) {
 		t.Fatalf("same key response/calls = %+v/%d", second, creator.calls)
 	}
-	if response := callGroupCreate(t, tool, credential, "confirmed", groupcreate.Input{Name: "different-team", MemberIDs: []string{"member-allowed"}}); response.OK || response.Error == nil || response.Error.Code != contracts.CodeIdempotencyConflict || creator.calls != 1 {
+	if response := callGroupCreate(t, tool, credential, "confirmed", groupcapability.Input{Name: "different-team", MemberIDs: []string{"member-allowed"}}); response.OK || response.Error == nil || response.Error.Code != contracts.CodeIdempotencyConflict || creator.calls != 1 {
 		t.Fatalf("conflicting key response/calls = %+v/%d", response, creator.calls)
 	}
 }
@@ -56,7 +56,7 @@ func TestUnknownGroupCreateSurvivesRecoveryWithoutRetryE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := groupcreate.Input{Name: "team", MemberIDs: []string{"member-allowed"}}
+	input := groupcapability.Input{Name: "team", MemberIDs: []string{"member-allowed"}}
 	firstCreator := &e2eGroupCreator{err: operation.ErrOutcomeUnknown}
 	tool, credential := newGroupCreateTool(t, store, firstCreator, "run-unknown", []string{"member-allowed"})
 	if response := callGroupCreate(t, tool, credential, "unknown-first", input); response.OK || response.Error == nil || response.Error.Code != contracts.CodeOutcomeUnknown || firstCreator.calls != 1 {
@@ -78,9 +78,9 @@ func TestUnknownGroupCreateSurvivesRecoveryWithoutRetryE2E(t *testing.T) {
 	}
 }
 
-func newGroupCreateTool(t *testing.T, store *control.Store, creator groupcreate.Creator, runID string, members []string) (*proxy.Proxy, string) {
+func newGroupCreateTool(t *testing.T, store *control.Store, creator groupcapability.Creator, runID string, members []string) (*proxy.Proxy, string) {
 	t.Helper()
-	manifest, err := capability.New([]capability.Entry{{Method: groupcreate.Method, Scope: groupcreate.Scope, Status: capability.Available}})
+	manifest, err := capability.New([]capability.Entry{{Method: groupcapability.Method, Scope: groupcapability.Scope, Status: capability.Available}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func newGroupCreateTool(t *testing.T, store *control.Store, creator groupcreate.
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := groupcreate.New(manifest, guard, creator)
+	handler, err := groupcapability.New(manifest, guard, creator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,8 +97,8 @@ func newGroupCreateTool(t *testing.T, store *control.Store, creator groupcreate.
 		RunID:           runID,
 		ProfileID:       "work",
 		Principal:       "provider",
-		Methods:         []string{groupcreate.Method},
-		Scopes:          []string{groupcreate.Scope},
+		Methods:         []string{groupcapability.Method},
+		Scopes:          []string{groupcapability.Scope},
 		TargetAllowlist: append([]string(nil), members...),
 		ExpiresAt:       time.Now().Add(time.Hour),
 		RateBudget:      10,
@@ -113,7 +113,7 @@ func newGroupCreateTool(t *testing.T, store *control.Store, creator groupcreate.
 	return tool, credential
 }
 
-func callGroupCreate(t *testing.T, tool *proxy.Proxy, credential, idempotencyKey string, input groupcreate.Input) contracts.Response {
+func callGroupCreate(t *testing.T, tool *proxy.Proxy, credential, idempotencyKey string, input groupcapability.Input) contracts.Response {
 	t.Helper()
 	params, err := json.Marshal(input)
 	if err != nil {
@@ -123,7 +123,7 @@ func callGroupCreate(t *testing.T, tool *proxy.Proxy, credential, idempotencyKey
 		APIVersion:     contracts.APIVersionV1,
 		RequestID:      "request-" + idempotencyKey,
 		ProfileID:      "work",
-		Method:         groupcreate.Method,
+		Method:         groupcapability.Method,
 		Params:         params,
 		Grant:          credential,
 		IdempotencyKey: idempotencyKey,
@@ -139,9 +139,9 @@ type e2eGroupCreator struct {
 	err   error
 }
 
-func (c *e2eGroupCreator) CreateGroup(context.Context, groupcreate.Input) error {
+func (c *e2eGroupCreator) CreateGroup(context.Context, groupcapability.Input) error {
 	c.calls++
 	return c.err
 }
 
-var _ groupcreate.Creator = (*e2eGroupCreator)(nil)
+var _ groupcapability.Creator = (*e2eGroupCreator)(nil)

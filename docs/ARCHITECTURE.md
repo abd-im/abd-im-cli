@@ -91,7 +91,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 | [`internal/agent/proxy`](../internal/agent/proxy) | provider 的 run-private typed tool 边界。 |
 | [`internal/agent/run`](../internal/agent/run) | per-conversation 排队、deadline、取消和 provider session 生命周期。 |
 | [`internal/agent/provider/codex`](../internal/agent/provider/codex) | 固定 `codex app-server --listen stdio://` 的 JSON-RPC session、取消和审批拒绝。 |
-| [`internal/capability`](../internal/capability) | capability manifest、operation-bound action handler 与 daemon-owned server action source。 |
+| [`internal/capability`](../internal/capability) | capability manifest；action handler 与 daemon-owned server action source 按 IM 领域组织（当前为 [`group`](../internal/capability/group)）。 |
 | [`internal/service`](../internal/service) | owner/provider 共用的 typed read service contract 及各领域实现；group source 使用 daemon SDK context 调用服务端 API，不触及 SDK 本地数据库。 |
 | [`internal/mcp`](../internal/mcp) | 基于 MCP `2026-07-28` 的 stdio JSON-RPC、owner daemon adapter 与 run-private provider adapter。 |
 | [`docs/CONNECTOR.md`](CONNECTOR.md) | 外部部署 connector 的配置边界、启动顺序和 capability 验证门禁。 |

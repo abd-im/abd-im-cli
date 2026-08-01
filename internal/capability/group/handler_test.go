@@ -1,4 +1,4 @@
-package groupcreate
+package group
 
 import (
 	"context"

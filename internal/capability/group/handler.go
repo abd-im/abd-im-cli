@@ -1,5 +1,5 @@
-// Package groupcreate implements the first verified remote side effect.
-package groupcreate
+// Package group implements verified group-domain remote actions.
+package group
 
 import (
 	"context"
