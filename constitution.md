@@ -34,6 +34,10 @@ Direct user instructions supersede this document. Record every durable user corr
 
 Group related, verified work into meaningful delivery milestones; do not create a separate commit for every independently completed task unless the user requests that cadence.
 
+### Controlled Release Verification
+
+When the user explicitly supplies authorized controlled-environment credentials and endpoints, execute the applicable integration and release gates before treating external access as unavailable.
+
 ### IX. Mainline Priority
 Security and logging follow-up work must be tracked separately and must not interrupt active mainline feature delivery unless the user explicitly elevates it to a release blocker.
 
