@@ -94,14 +94,14 @@ func providerMCPTool(t *testing.T, method *providerMCPMethod) (*proxy.Proxy, str
 	t.Helper()
 	grants := grant.NewStore()
 	_, credential, err := grants.Issue(grant.Policy{
-		RunID:           "run-private",
-		ProfileID:       "work",
-		Principal:       "provider",
-		Methods:         []string{"message.history"},
-		Scopes:          []string{"message.read"},
-		TargetAllowlist: []string{"conversation-1"},
-		ExpiresAt:       time.Now().Add(time.Minute),
-		RateBudget:      1,
+		RunID:            "run-private",
+		ProfileID:        "work",
+		Principal:        "provider",
+		Methods:          []string{"message.history"},
+		Scopes:           []string{"message.read"},
+		TargetAllowlists: map[string][]string{"message.history": {grant.ConversationTarget("conversation-1")}},
+		ExpiresAt:        time.Now().Add(time.Minute),
+		RateBudget:       1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func providerMCPTool(t *testing.T, method *providerMCPMethod) (*proxy.Proxy, str
 			if err := json.Unmarshal(raw, &input); err != nil {
 				return nil, err
 			}
-			return []string{input.ConversationID}, nil
+			return []string{grant.ConversationTarget(input.ConversationID)}, nil
 		},
 		Handle: method.Handle,
 	}})

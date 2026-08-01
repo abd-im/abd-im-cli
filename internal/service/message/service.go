@@ -113,7 +113,7 @@ func (s *Service) authorize(access service.Access, method, conversationID string
 	if capability.Status != "available" {
 		return service.Meta{}, fmt.Errorf("%w: %s", service.ErrCapabilityUnavailable, capability.Status)
 	}
-	if err := access.Authorize(method, capability.Scope, conversationID); err != nil {
+	if err := access.Authorize(method, capability.Scope, grant.ConversationTarget(conversationID)); err != nil {
 		return service.Meta{}, err
 	}
 	if !access.Owner {
@@ -311,21 +311,21 @@ func (s *Service) Methods() []proxy.Method {
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return nil, err
 		}
-		return []string{input.ConversationID}, nil
+		return []string{grant.ConversationTarget(input.ConversationID)}, nil
 	}
 	searchTargets := func(raw json.RawMessage) ([]string, error) {
 		var input SearchInput
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return nil, err
 		}
-		return []string{input.ConversationID}, nil
+		return []string{grant.ConversationTarget(input.ConversationID)}, nil
 	}
 	getTargets := func(raw json.RawMessage) ([]string, error) {
 		var input GetInput
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return nil, err
 		}
-		return []string{input.ConversationID}, nil
+		return []string{grant.ConversationTarget(input.ConversationID)}, nil
 	}
 	return []proxy.Method{
 		wrap(HistoryMethod, historyTargets, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {

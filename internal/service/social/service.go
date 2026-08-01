@@ -112,7 +112,7 @@ func (s *Service) authorize(access service.Access, method string, targets ...str
 	if capability.Status != "available" {
 		return service.Meta{}, fmt.Errorf("%w: %s", service.ErrCapabilityUnavailable, capability.Status)
 	}
-	if err := access.Authorize(method, capability.Scope, targets...); err != nil {
+	if err := access.Authorize(method, capability.Scope, userTargets(targets)...); err != nil {
 		return service.Meta{}, err
 	}
 	return service.NewMeta(s.options.ProfileID, s.options.Stale(), capability), nil
@@ -134,7 +134,7 @@ func (s *Service) Friends(ctx context.Context, access service.Access, input List
 	if err != nil {
 		return service.PageResult[Friend]{}, fmt.Errorf("list friends: %w", err)
 	}
-	items = restrictFriends(items, access)
+	items = restrictFriends(items, access, FriendListMethod)
 	page, err := friendPage(items, offset, input.Limit, "friends")
 	if err != nil {
 		return service.PageResult[Friend]{}, err
@@ -179,7 +179,7 @@ func (s *Service) SearchFriends(ctx context.Context, access service.Access, inpu
 	if err != nil {
 		return service.PageResult[Friend]{}, fmt.Errorf("search friends: %w", err)
 	}
-	items = restrictFriends(items, access)
+	items = restrictFriends(items, access, FriendSearchMethod)
 	page, err := friendPage(items, offset, input.Limit, query)
 	if err != nil {
 		return service.PageResult[Friend]{}, err
@@ -203,7 +203,7 @@ func (s *Service) Blacklist(ctx context.Context, access service.Access, input Li
 	if err != nil {
 		return service.PageResult[BlacklistEntry]{}, fmt.Errorf("list blacklist: %w", err)
 	}
-	items = restrictBlack(items, access)
+	items = restrictBlack(items, access, BlackListMethod)
 	page, err := blackPage(items, offset, input.Limit, "blacklist")
 	if err != nil {
 		return service.PageResult[BlacklistEntry]{}, err
@@ -231,25 +231,25 @@ func (s *Service) Black(ctx context.Context, access service.Access, input GetInp
 	return service.Result[BlacklistEntry]{Data: item, Meta: meta}, nil
 }
 
-func restrictFriends(items []Friend, access service.Access) []Friend {
+func restrictFriends(items []Friend, access service.Access, method string) []Friend {
 	if access.Owner {
 		return items
 	}
 	result := make([]Friend, 0, len(items))
 	for _, item := range items {
-		if access.Grant.AllowsTarget(item.UserID) {
+		if access.Grant.AllowsTarget(method, grant.UserTarget(item.UserID)) {
 			result = append(result, item)
 		}
 	}
 	return result
 }
-func restrictBlack(items []BlacklistEntry, access service.Access) []BlacklistEntry {
+func restrictBlack(items []BlacklistEntry, access service.Access, method string) []BlacklistEntry {
 	if access.Owner {
 		return items
 	}
 	result := make([]BlacklistEntry, 0, len(items))
 	for _, item := range items {
-		if access.Grant.AllowsTarget(item.UserID) {
+		if access.Grant.AllowsTarget(method, grant.UserTarget(item.UserID)) {
 			result = append(result, item)
 		}
 	}
@@ -308,7 +308,7 @@ func (s *Service) Methods() []proxy.Method {
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return nil, err
 		}
-		return []string{input.UserID}, nil
+		return []string{grant.UserTarget(input.UserID)}, nil
 	}
 	return []proxy.Method{
 		wrap(FriendListMethod, noTargets, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
@@ -352,4 +352,12 @@ func (s *Service) Methods() []proxy.Method {
 			return result.Data, err
 		}),
 	}
+}
+
+func userTargets(ids []string) []string {
+	targets := make([]string, 0, len(ids))
+	for _, id := range ids {
+		targets = append(targets, grant.UserTarget(id))
+	}
+	return targets
 }

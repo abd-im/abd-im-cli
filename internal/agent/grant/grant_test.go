@@ -9,22 +9,22 @@ import (
 func TestAuthorizeRequiresRunMethodScopeTargetAndBudget(t *testing.T) {
 	store := NewStore()
 	_, credential, err := store.Issue(Policy{
-		RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{"message.history"}, Scopes: []string{"message.read"}, TargetAllowlist: []string{"conversation-1"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 1,
+		RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{"message.history"}, Scopes: []string{"message.read"}, TargetAllowlists: map[string][]string{"message.history": {ConversationTarget("conversation-1")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 1,
 	})
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
-	if _, err := store.Authorize(credential, "run-1", "work", "message.history", "message.read", []string{"conversation-2"}); !errors.Is(err, ErrTargetDenied) {
+	if _, err := store.Authorize(credential, "run-1", "work", "message.history", "message.read", []string{ConversationTarget("conversation-2")}); !errors.Is(err, ErrTargetDenied) {
 		t.Fatalf("unauthorized target error = %v, want ErrTargetDenied", err)
 	}
-	access, err := store.Authorize(credential, "run-1", "work", "message.history", "message.read", []string{"conversation-1"})
+	access, err := store.Authorize(credential, "run-1", "work", "message.history", "message.read", []string{ConversationTarget("conversation-1")})
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
-	if access.RemainingBudget != 0 || !access.AllowsMethod("message.history") || !access.AllowsTarget("conversation-1") {
+	if access.RemainingBudget != 0 || !access.AllowsMethod("message.history") || !access.AllowsTarget("message.history", ConversationTarget("conversation-1")) {
 		t.Fatalf("access = %#v", access)
 	}
-	if _, err := store.Authorize(credential, "run-1", "work", "message.history", "message.read", []string{"conversation-1"}); !errors.Is(err, ErrRateLimited) {
+	if _, err := store.Authorize(credential, "run-1", "work", "message.history", "message.read", []string{ConversationTarget("conversation-1")}); !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("budget error = %v, want ErrRateLimited", err)
 	}
 }
@@ -46,5 +46,45 @@ func TestGrantExpiryAndRevocationFailClosed(t *testing.T) {
 	store.RevokeRun("run-revoked")
 	if _, err := store.Authorize(credential, "run-revoked", "work", "profile.get", "profile.read", nil); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("revoked Authorize() error = %v, want ErrRevoked", err)
+	}
+}
+
+func TestTargetsAreScopedToMethodAndResource(t *testing.T) {
+	store := NewStore()
+	_, credential, err := store.Issue(Policy{
+		RunID:     "run-1",
+		ProfileID: "work",
+		Principal: "provider",
+		Methods:   []string{"message.history", "message.send_text"},
+		Scopes:    []string{"message.read", "message.send"},
+		TargetAllowlists: map[string][]string{
+			"message.history":   {ConversationTarget("shared-id")},
+			"message.send_text": {UserTarget("shared-id")},
+		},
+		ExpiresAt:  time.Now().Add(time.Hour),
+		RateBudget: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Authorize(credential, "run-1", "work", "message.history", "message.read", []string{UserTarget("shared-id")}); !errors.Is(err, ErrTargetDenied) {
+		t.Fatalf("user target accepted for message.history: %v", err)
+	}
+	if _, err := store.Authorize(credential, "run-1", "work", "message.send_text", "message.send", []string{ConversationTarget("shared-id")}); !errors.Is(err, ErrTargetDenied) {
+		t.Fatalf("conversation target accepted for message.send_text: %v", err)
+	}
+	if _, err := store.Authorize(credential, "run-1", "work", "message.history", "message.read", []string{ConversationTarget("shared-id")}); err != nil {
+		t.Fatalf("message.history authorized target: %v", err)
+	}
+	if _, err := store.Authorize(credential, "run-1", "work", "message.send_text", "message.send", []string{UserTarget("shared-id")}); err != nil {
+		t.Fatalf("message.send_text authorized target: %v", err)
+	}
+	if _, _, err := store.Issue(Policy{
+		RunID: "run-2", ProfileID: "work", Principal: "provider",
+		Methods: []string{"message.history"}, Scopes: []string{"message.read"},
+		TargetAllowlists: map[string][]string{"message.send_text": {UserTarget("user-1")}},
+		ExpiresAt:        time.Now().Add(time.Hour), RateBudget: 1,
+	}); err == nil {
+		t.Fatal("Issue() accepted targets for an ungranted method")
 	}
 }

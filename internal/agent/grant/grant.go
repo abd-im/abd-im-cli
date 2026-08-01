@@ -22,6 +22,25 @@ var (
 	ErrRateLimited       = errors.New("grant rate budget is exhausted")
 )
 
+const (
+	TargetConversation = "conversation"
+	TargetGroup        = "group"
+	TargetUser         = "user"
+)
+
+// Target gives an allowlist entry a stable resource namespace. It prevents a
+// user, group, and conversation that share an ID from being interchangeable.
+func Target(resource, id string) string {
+	if strings.TrimSpace(resource) == "" || strings.TrimSpace(id) == "" {
+		return ""
+	}
+	return resource + ":" + id
+}
+
+func ConversationTarget(id string) string { return Target(TargetConversation, id) }
+func GroupTarget(id string) string        { return Target(TargetGroup, id) }
+func UserTarget(id string) string         { return Target(TargetUser, id) }
+
 // MessageWindow limits the history made available to a provider run.
 type MessageWindow struct {
 	ConversationID  string
@@ -31,15 +50,15 @@ type MessageWindow struct {
 
 // Policy is the complete authorization decision for one run.
 type Policy struct {
-	RunID           string
-	ProfileID       string
-	Principal       string
-	Methods         []string
-	Scopes          []string
-	TargetAllowlist []string
-	MessageWindow   MessageWindow
-	ExpiresAt       time.Time
-	RateBudget      int
+	RunID            string
+	ProfileID        string
+	Principal        string
+	Methods          []string
+	Scopes           []string
+	TargetAllowlists map[string][]string
+	MessageWindow    MessageWindow
+	ExpiresAt        time.Time
+	RateBudget       int
 }
 
 // Grant is the credential-free authorization state supplied to a typed handler.
@@ -54,7 +73,7 @@ type Grant struct {
 
 	methods map[string]struct{}
 	scopes  map[string]struct{}
-	targets map[string]struct{}
+	targets map[string]map[string]struct{}
 }
 
 // AllowsScope reports whether a handler may use its required capability scope.
@@ -71,13 +90,13 @@ func (g Grant) AllowsMethod(method string) bool {
 	return allowed
 }
 
-// AllowsTarget reports whether a typed target belongs to this run's allowlist.
-// An empty target is always safe for target-free typed methods.
-func (g Grant) AllowsTarget(target string) bool {
+// AllowsTarget reports whether a typed target belongs to this method's
+// allowlist. An empty target is always safe for target-free typed methods.
+func (g Grant) AllowsTarget(method, target string) bool {
 	if target == "" {
 		return true
 	}
-	_, allowed := g.targets[target]
+	_, allowed := g.targets[method][target]
 	return allowed
 }
 
@@ -116,7 +135,7 @@ func (s *Store) Issue(policy Policy) (Grant, string, error) {
 		RemainingBudget: policy.RateBudget,
 		methods:         toSet(policy.Methods),
 		scopes:          toSet(policy.Scopes),
-		targets:         toSet(policy.TargetAllowlist),
+		targets:         toMethodTargetSets(policy.TargetAllowlists),
 	}
 	s.mu.Lock()
 	s.grants[credentialHash(credential)] = &storedGrant{grant: item}
@@ -150,7 +169,7 @@ func (s *Store) Authorize(credential, runID, profileID, method, scope string, ta
 		return Grant{}, ErrScopeDenied
 	}
 	for _, target := range targets {
-		if !item.AllowsTarget(target) {
+		if !item.AllowsTarget(method, target) {
 			return Grant{}, ErrTargetDenied
 		}
 	}
@@ -185,20 +204,39 @@ func validatePolicy(policy Policy) error {
 	if policy.RateBudget <= 0 {
 		return errors.New("grant rate budget must be positive")
 	}
-	for _, values := range [][]string{policy.Methods, policy.Scopes, policy.TargetAllowlist} {
+	methods := toSet(policy.Methods)
+	for _, values := range [][]string{policy.Methods, policy.Scopes} {
 		for _, value := range values {
 			if strings.TrimSpace(value) == "" {
 				return errors.New("grant allowlists must not contain empty values")
 			}
 		}
 	}
+	for method, targets := range policy.TargetAllowlists {
+		if strings.TrimSpace(method) == "" {
+			return errors.New("grant target method must not be empty")
+		}
+		if _, allowed := methods[method]; !allowed {
+			return errors.New("grant target method must be allowed")
+		}
+		for _, target := range targets {
+			if !validTarget(target) {
+				return errors.New("grant targets must not be empty")
+			}
+		}
+	}
 	return nil
+}
+
+func validTarget(target string) bool {
+	resource, id, found := strings.Cut(target, ":")
+	return found && strings.TrimSpace(resource) != "" && strings.TrimSpace(id) != ""
 }
 
 func publicGrant(item Grant) Grant {
 	item.methods = cloneSet(item.methods)
 	item.scopes = cloneSet(item.scopes)
-	item.targets = cloneSet(item.targets)
+	item.targets = cloneMethodTargetSets(item.targets)
 	return item
 }
 
@@ -214,6 +252,22 @@ func cloneSet(values map[string]struct{}) map[string]struct{} {
 	result := make(map[string]struct{}, len(values))
 	for value := range values {
 		result[value] = struct{}{}
+	}
+	return result
+}
+
+func toMethodTargetSets(values map[string][]string) map[string]map[string]struct{} {
+	result := make(map[string]map[string]struct{}, len(values))
+	for method, targets := range values {
+		result[method] = toSet(targets)
+	}
+	return result
+}
+
+func cloneMethodTargetSets(values map[string]map[string]struct{}) map[string]map[string]struct{} {
+	result := make(map[string]map[string]struct{}, len(values))
+	for method, targets := range values {
+		result[method] = cloneSet(targets)
 	}
 	return result
 }

@@ -46,7 +46,7 @@ func TestListUsesOpaqueCursorAndFiltersProviderTargets(t *testing.T) {
 	assertMeta(t, unread.Meta, UnreadMethod)
 
 	grants := grant.NewStore()
-	item, _, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{ListMethod, GetMethod}, Scopes: []string{ReadScope}, TargetAllowlist: []string{"conversation-2"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3})
+	item, _, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{ListMethod, GetMethod}, Scopes: []string{ReadScope}, TargetAllowlists: map[string][]string{ListMethod: {grant.ConversationTarget("conversation-2")}, GetMethod: {grant.ConversationTarget("conversation-2")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3})
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}

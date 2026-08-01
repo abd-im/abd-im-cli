@@ -89,8 +89,8 @@ P1 交付 US-01、US-02 和 US-03 所需的单 profile 闭环、event-bound repl
 
 ### 授权、写入与审计
 
-- **FR-014**：grant 必须绑定 run、profile、principal、scope、目标 allowlist、消息窗口、附件额度、到期时间、速率预算和 approval policy。自动 run 默认只有触发会话的受限读取权限。
-- **FR-015**：受限 provider 只能连接每 run 私有的 tool proxy；proxy 必须逐请求验证一次性 credential、run、grant、到期时间、capability manifest、method allowlist 和读取窗口，拒绝 controller 命令、endpoint 覆盖和未授权方法。
+- **FR-014**：grant 必须绑定 run、profile、principal、scope、按 typed method 隔离且带资源类型命名的目标 allowlist、消息窗口、附件额度、到期时间、速率预算和 approval policy。自动 run 默认只有触发会话的受限读取权限。
+- **FR-015**：受限 provider 只能连接每 run 私有的 tool proxy；proxy 必须逐请求验证一次性 credential、run、grant、到期时间、capability manifest、method allowlist、method-scoped target 和读取窗口，拒绝 controller 命令、endpoint 覆盖和未授权方法。
 - **FR-016**：event-bound reply 由 daemon 执行而非通用 `message.send`；它以 `profile + event_id + reply_slot` 幂等。确认前中断为 `unknown`，不得创建新消息补发。
 - **FR-017**：每个远端副作用都必须具有独立 scope、输入/目标 allowlist、数量上限、批准策略和 operation/idempotency。P1 以 `group.create` 作为首个经过验证的 handler：相同 key 返回原 operation，参数摘要不同返回 `IDEMPOTENCY_CONFLICT`，未知结果不得自动重建群。新 handler 只有在 manifest、授权规则和集成测试齐备后才能公开。
 - **FR-018**：listener 回调只校验、复制和入队。事件账本使用 daemon `event_id`、profile sequence 和独立 SDK dedup key；SDK 重启不得伪造停机期间的 `message.received`。

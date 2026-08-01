@@ -119,7 +119,7 @@ type Grant struct {
 	RunID               string
 	Principal           string
 	Scopes              []string
-	TargetAllowlist     []string
+	TargetAllowlists    map[string][]string
 	MessageWindow       MessageWindow
 	AttachmentByteLimit int64
 	RateLimit           int64
@@ -140,9 +140,14 @@ func (grant Grant) validate() error {
 			return errors.New("grant scopes must not be empty")
 		}
 	}
-	for _, target := range grant.TargetAllowlist {
-		if strings.TrimSpace(target) == "" {
-			return errors.New("grant targets must not be empty")
+	for method, targets := range grant.TargetAllowlists {
+		if strings.TrimSpace(method) == "" {
+			return errors.New("grant target method must not be empty")
+		}
+		for _, target := range targets {
+			if strings.TrimSpace(target) == "" {
+				return errors.New("grant targets must not be empty")
+			}
 		}
 	}
 	if grant.AttachmentByteLimit < 0 || grant.RateLimit < 0 {

@@ -37,9 +37,10 @@ func (f PolicyFunc) Decide(ctx context.Context, event contracts.Event) (Decision
 
 // Decision selects a subset of the daemon's fixed typed tool registry.
 type Decision struct {
-	Principal  string
-	Methods    []string
-	RateBudget int
+	Principal        string
+	Methods          []string
+	TargetAllowlists map[string][]string
+	RateBudget       int
 }
 
 type Config struct {
@@ -187,6 +188,10 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	if err != nil {
 		return outcome, err
 	}
+	targetAllowlists, err := targetAllowlists(decision, selected, conversation.ConversationID)
+	if err != nil {
+		return outcome, err
+	}
 	if strings.TrimSpace(decision.Principal) == "" || decision.RateBudget <= 0 {
 		return outcome, errors.New("policy must set a principal and positive rate budget")
 	}
@@ -204,12 +209,12 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		return outcome, err
 	}
 	issued, credential, err := d.grants.Issue(grant.Policy{
-		RunID:           runID,
-		ProfileID:       d.profileID,
-		Principal:       decision.Principal,
-		Methods:         methodNames(selected),
-		Scopes:          scopes,
-		TargetAllowlist: []string{conversation.ConversationID},
+		RunID:            runID,
+		ProfileID:        d.profileID,
+		Principal:        decision.Principal,
+		Methods:          methodNames(selected),
+		Scopes:           scopes,
+		TargetAllowlists: targetAllowlists,
 		MessageWindow: grant.MessageWindow{
 			ConversationID: conversation.ConversationID,
 			AfterMessageID: conversation.MessageID,
@@ -250,6 +255,28 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	outcome.RunID = runID
 	go d.finish(recorded.Event.EventID, handle)
 	return outcome, nil
+}
+
+func targetAllowlists(decision Decision, methods []proxy.Method, defaultTarget string) (map[string][]string, error) {
+	if strings.TrimSpace(defaultTarget) == "" {
+		return nil, errors.New("default grant target is required")
+	}
+	result := make(map[string][]string, len(methods))
+	allowed := make(map[string]struct{}, len(methods))
+	for _, method := range methods {
+		allowed[method.Name] = struct{}{}
+		result[method.Name] = []string{grant.ConversationTarget(defaultTarget)}
+	}
+	for method, targets := range decision.TargetAllowlists {
+		if _, exists := allowed[method]; !exists {
+			return nil, fmt.Errorf("policy supplied targets for unselected method %q", method)
+		}
+		if len(targets) == 0 {
+			return nil, fmt.Errorf("policy supplied no targets for method %q", method)
+		}
+		result[method] = append([]string(nil), targets...)
+	}
+	return result, nil
 }
 
 // CancelEvent prevents the corresponding run from producing an event-bound

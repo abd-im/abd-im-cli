@@ -109,7 +109,7 @@ func (s *Service) authorize(access service.Access, method string, targets ...str
 	if capability.Status != "available" {
 		return service.Meta{}, fmt.Errorf("%w: %s", service.ErrCapabilityUnavailable, capability.Status)
 	}
-	if err := access.Authorize(method, capability.Scope, targets...); err != nil {
+	if err := access.Authorize(method, capability.Scope, conversationTargets(targets)...); err != nil {
 		return service.Meta{}, err
 	}
 	return service.NewMeta(s.options.ProfileID, s.options.Stale(), capability), nil
@@ -132,7 +132,7 @@ func (s *Service) List(ctx context.Context, access service.Access, input ListInp
 	if err != nil {
 		return service.PageResult[Conversation]{}, fmt.Errorf("list conversations: %w", err)
 	}
-	items = restrict(items, access)
+	items = restrict(items, access, ListMethod)
 	page, err := page(items, offset, input.Limit, query)
 	if err != nil {
 		return service.PageResult[Conversation]{}, err
@@ -180,7 +180,7 @@ func (s *Service) Search(ctx context.Context, access service.Access, input Searc
 	if err != nil {
 		return service.PageResult[Conversation]{}, fmt.Errorf("search conversations: %w", err)
 	}
-	items = restrict(items, access)
+	items = restrict(items, access, SearchMethod)
 	page, err := page(items, offset, input.Limit, query)
 	if err != nil {
 		return service.PageResult[Conversation]{}, err
@@ -203,13 +203,13 @@ func (s *Service) Unread(ctx context.Context, access service.Access) (service.Re
 	return service.Result[int]{Data: count, Meta: meta}, nil
 }
 
-func restrict(items []Conversation, access service.Access) []Conversation {
+func restrict(items []Conversation, access service.Access, method string) []Conversation {
 	if access.Owner {
 		return items
 	}
 	result := make([]Conversation, 0, len(items))
 	for _, item := range items {
-		if access.Grant.AllowsTarget(item.ID) {
+		if access.Grant.AllowsTarget(method, grant.ConversationTarget(item.ID)) {
 			result = append(result, item)
 		}
 	}
@@ -249,7 +249,7 @@ func (s *Service) Methods() []proxy.Method {
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return nil, err
 		}
-		return []string{input.ConversationID}, nil
+		return []string{grant.ConversationTarget(input.ConversationID)}, nil
 	}
 	return []proxy.Method{
 		wrap(ListMethod, s.capability(ListMethod).Scope, noTargets, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
@@ -281,4 +281,12 @@ func (s *Service) Methods() []proxy.Method {
 			return result.Data, err
 		}),
 	}
+}
+
+func conversationTargets(ids []string) []string {
+	targets := make([]string, 0, len(ids))
+	for _, id := range ids {
+		targets = append(targets, grant.ConversationTarget(id))
+	}
+	return targets
 }

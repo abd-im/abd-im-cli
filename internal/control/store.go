@@ -363,7 +363,7 @@ func (s *Store) PutGrant(ctx context.Context, grant Grant) error {
 	if err != nil {
 		return fmt.Errorf("encode grant scopes: %w", err)
 	}
-	targets, err := json.Marshal(grant.TargetAllowlist)
+	targets, err := json.Marshal(grant.TargetAllowlists)
 	if err != nil {
 		return fmt.Errorf("encode grant targets: %w", err)
 	}
@@ -509,8 +509,12 @@ func scanGrant(row scanner) (Grant, error) {
 	if err := json.Unmarshal([]byte(scopes), &grant.Scopes); err != nil {
 		return Grant{}, fmt.Errorf("decode grant scopes: %w", err)
 	}
-	if err := json.Unmarshal([]byte(targets), &grant.TargetAllowlist); err != nil {
-		return Grant{}, fmt.Errorf("decode grant targets: %w", err)
+	if err := json.Unmarshal([]byte(targets), &grant.TargetAllowlists); err != nil {
+		var legacyTargets []string
+		if legacyErr := json.Unmarshal([]byte(targets), &legacyTargets); legacyErr != nil {
+			return Grant{}, fmt.Errorf("decode grant targets: %w", err)
+		}
+		grant.TargetAllowlists = map[string][]string{"legacy": legacyTargets}
 	}
 	if err := json.Unmarshal([]byte(window), &grant.MessageWindow); err != nil {
 		return Grant{}, fmt.Errorf("decode grant message window: %w", err)

@@ -16,7 +16,7 @@ func TestMessageReadsAreBoundToGrantConversationAndWindow(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	grants := grant.NewStore()
-	item, _, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{HistoryMethod, SearchMethod, GetMethod}, Scopes: []string{ReadScope}, TargetAllowlist: []string{"conversation-1"}, MessageWindow: grant.MessageWindow{ConversationID: "conversation-1", AfterMessageID: "message-1", BeforeMessageID: "message-3"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 5})
+	item, _, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{HistoryMethod, SearchMethod, GetMethod}, Scopes: []string{ReadScope}, TargetAllowlists: map[string][]string{HistoryMethod: {grant.ConversationTarget("conversation-1")}, SearchMethod: {grant.ConversationTarget("conversation-1")}, GetMethod: {grant.ConversationTarget("conversation-1")}}, MessageWindow: grant.MessageWindow{ConversationID: "conversation-1", AfterMessageID: "message-1", BeforeMessageID: "message-3"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 5})
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}

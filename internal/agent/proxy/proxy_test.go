@@ -13,7 +13,7 @@ import (
 func TestProxyOnlyInvokesAllowedTypedMethodsAndTargets(t *testing.T) {
 	store := grant.NewStore()
 	_, credential, err := store.Issue(grant.Policy{
-		RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{"conversation.get"}, Scopes: []string{"conversation.read"}, TargetAllowlist: []string{"conversation-1"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 2,
+		RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{"conversation.get"}, Scopes: []string{"conversation.read"}, TargetAllowlists: map[string][]string{"conversation.get": {grant.ConversationTarget("conversation-1")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 2,
 	})
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
@@ -29,7 +29,7 @@ func TestProxyOnlyInvokesAllowedTypedMethodsAndTargets(t *testing.T) {
 			if err := json.Unmarshal(params, &input); err != nil {
 				return nil, err
 			}
-			return []string{input.ConversationID}, nil
+			return []string{grant.ConversationTarget(input.ConversationID)}, nil
 		},
 		Handle: func(_ context.Context, _ contracts.Request, _ grant.Grant) (json.RawMessage, error) {
 			calls++

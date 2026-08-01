@@ -23,6 +23,10 @@ and the after/before message window for history, search, and get.
 proxy, operation guard, and control database to verify the group member
 allowlist, idempotency conflict behavior, and that an unknown action remains
 non-retryable after reopening the database.
+`tests/e2e/message_send_operation_test.go` applies the same checks to a
+message target: the grant must name the user or group, repeated idempotency
+keys return the recorded operation, and an unknown send cannot be rebuilt
+after reopening the database.
 
 Run it directly with:
 
@@ -130,6 +134,31 @@ The test verifies the fixed server action with the authenticated user as owner
 and the supplied member. Unit tests cover the manifest/grant/member allowlist
 intersection and preserve an `unknown` operation when no server result can be
 verified.
+
+## OpenIM Text Send Integration
+
+`internal/capability/message` exercises the daemon-owned `UserContext`
+lifecycle and its `SendTextMessage` callback path. It sends one timestamped
+text to a distinct controlled account, so never use a production recipient.
+The configured platform must match the short-lived token's platform.
+
+- `ABDIM_OPENIM_API_ADDR`
+- `ABDIM_OPENIM_WS_ADDR`
+- `ABDIM_OPENIM_USER_ID`
+- `ABDIM_OPENIM_TOKEN`
+- `ABDIM_OPENIM_PLATFORM_ID`
+- `ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID`
+
+Run the gate with:
+
+```bash
+go test -tags=integration ./internal/capability/message -run TestOpenIMTextSendIntegration
+```
+
+The gate reaches `ready` through `InitSDK -> InitResources -> listener ->
+Login` and only passes after the SDK reports the text delivery callback. The
+message action handler's no-retry behavior is covered by its unit and e2e
+tests; this controlled test only verifies the pinned SDK/server send path.
 
 ## OpenIM Profile Integration
 

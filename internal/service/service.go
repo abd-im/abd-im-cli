@@ -127,7 +127,7 @@ func (a Access) Authorize(method, scope string, targets ...string) error {
 		return fmt.Errorf("%w: scope %q", ErrScopeDenied, scope)
 	}
 	for _, target := range targets {
-		if !a.Grant.AllowsTarget(target) {
+		if !a.Grant.AllowsTarget(method, target) {
 			return fmt.Errorf("%w: target %q", ErrTargetDenied, target)
 		}
 	}

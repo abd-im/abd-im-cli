@@ -71,13 +71,17 @@ func TestProviderGrantBoundMessageReadsE2E(t *testing.T) {
 }
 
 func messageGrant(runID string, methods []string, rateBudget int) grant.Policy {
+	targets := make(map[string][]string, len(methods))
+	for _, method := range methods {
+		targets[method] = []string{grant.ConversationTarget("conversation-1")}
+	}
 	return grant.Policy{
-		RunID:           runID,
-		ProfileID:       "work",
-		Principal:       "provider",
-		Methods:         methods,
-		Scopes:          []string{message.ReadScope},
-		TargetAllowlist: []string{"conversation-1"},
+		RunID:            runID,
+		ProfileID:        "work",
+		Principal:        "provider",
+		Methods:          methods,
+		Scopes:           []string{message.ReadScope},
+		TargetAllowlists: targets,
 		MessageWindow: grant.MessageWindow{
 			ConversationID:  "conversation-1",
 			AfterMessageID:  "message-trigger",

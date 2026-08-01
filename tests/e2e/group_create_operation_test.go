@@ -94,14 +94,14 @@ func newGroupCreateTool(t *testing.T, store *control.Store, creator groupcapabil
 	}
 	grants := grant.NewStore()
 	_, credential, err := grants.Issue(grant.Policy{
-		RunID:           runID,
-		ProfileID:       "work",
-		Principal:       "provider",
-		Methods:         []string{groupcapability.Method},
-		Scopes:          []string{groupcapability.Scope},
-		TargetAllowlist: append([]string(nil), members...),
-		ExpiresAt:       time.Now().Add(time.Hour),
-		RateBudget:      10,
+		RunID:            runID,
+		ProfileID:        "work",
+		Principal:        "provider",
+		Methods:          []string{groupcapability.Method},
+		Scopes:           []string{groupcapability.Scope},
+		TargetAllowlists: map[string][]string{groupcapability.Method: userTargets(members)},
+		ExpiresAt:        time.Now().Add(time.Hour),
+		RateBudget:       10,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -145,3 +145,11 @@ func (c *e2eGroupCreator) CreateGroup(context.Context, groupcapability.Input) er
 }
 
 var _ groupcapability.Creator = (*e2eGroupCreator)(nil)
+
+func userTargets(ids []string) []string {
+	targets := make([]string, 0, len(ids))
+	for _, id := range ids {
+		targets = append(targets, grant.UserTarget(id))
+	}
+	return targets
+}

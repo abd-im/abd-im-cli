@@ -23,7 +23,7 @@ func TestGroupCreateRequiresManifestGrantAndMemberAllowlist(t *testing.T) {
 	guard, _ := operation.NewGuard(store)
 	handler, _ := New(manifest, guard, creator)
 	tools := grant.NewStore()
-	_, credential, _ := tools.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{Method}, Scopes: []string{Scope}, TargetAllowlist: []string{"member-1", "member-2"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3})
+	_, credential, _ := tools.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{Method}, Scopes: []string{Scope}, TargetAllowlists: map[string][]string{Method: {grant.UserTarget("member-1"), grant.UserTarget("member-2")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3})
 	toolProxy, _ := proxy.New(tools, "run-1", "work", []proxy.Method{handler.ProxyMethod()})
 	call := func(key string, members []string) contracts.Response {
 		raw, _ := json.Marshal(Input{Name: "team", MemberIDs: members})
@@ -52,7 +52,7 @@ func TestUnknownGroupCreateCannotBeRebuiltWithNewKey(t *testing.T) {
 	guard, _ := operation.NewGuard(store)
 	handler, _ := New(manifest, guard, creator)
 	tools := grant.NewStore()
-	_, credential, _ := tools.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{Method}, Scopes: []string{Scope}, TargetAllowlist: []string{"member-1"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3})
+	_, credential, _ := tools.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{Method}, Scopes: []string{Scope}, TargetAllowlists: map[string][]string{Method: {grant.UserTarget("member-1")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3})
 	toolProxy, _ := proxy.New(tools, "run-1", "work", []proxy.Method{handler.ProxyMethod()})
 	raw, _ := json.Marshal(Input{Name: "team", MemberIDs: []string{"member-1"}})
 	call := func(key string) contracts.Response {

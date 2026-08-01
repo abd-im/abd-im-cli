@@ -106,6 +106,21 @@ func TestServerUsesIdempotencyKeyFromToolArguments(t *testing.T) {
 	}
 }
 
+func TestServerExposesTextSendWithItsIdempotencyKey(t *testing.T) {
+	proxy := &recordingProxy{}
+	server, err := New("work", "daemon-grant", proxy, DefaultTools([]string{"message.send_text"}))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, err = serve(server, encodeRequest("call", "tools/call", metaParams(`,"name":"abdim.message.send_text","arguments":{"text":"hello","recipient_id":"user-1","idempotency_key":"send-1"}`)))
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if len(proxy.calls) != 1 || proxy.calls[0].Method != "message.send_text" || proxy.calls[0].IdempotencyKey != "send-1" {
+		t.Fatalf("message.send_text request = %+v", proxy.calls)
+	}
+}
+
 func TestDefaultToolsIgnoreMethodsOutsideFixedRegistry(t *testing.T) {
 	tools := DefaultTools([]string{"message.history", "daemon.shutdown", "sdk.call"})
 	if len(tools) != 1 || tools[0].Name != "abdim.message.history" {

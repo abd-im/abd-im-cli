@@ -121,7 +121,7 @@ func (s *Service) authorize(access service.Access, method string, targets ...str
 	if capability.Status != "available" {
 		return service.Meta{}, fmt.Errorf("%w: %s", service.ErrCapabilityUnavailable, capability.Status)
 	}
-	if err := access.Authorize(method, capability.Scope, targets...); err != nil {
+	if err := access.Authorize(method, capability.Scope, groupTargets(targets)...); err != nil {
 		return service.Meta{}, err
 	}
 	return service.NewMeta(s.options.ProfileID, s.options.Stale(), capability), nil
@@ -143,7 +143,7 @@ func (s *Service) List(ctx context.Context, access service.Access, input ListInp
 	if err != nil {
 		return service.PageResult[Group]{}, fmt.Errorf("list groups: %w", err)
 	}
-	items = allowedGroups(items, access)
+	items = allowedGroups(items, access, ListMethod)
 	page, err := groupPage(items, offset, input.Limit, "list")
 	if err != nil {
 		return service.PageResult[Group]{}, err
@@ -188,7 +188,7 @@ func (s *Service) Search(ctx context.Context, access service.Access, input Searc
 	if err != nil {
 		return service.PageResult[Group]{}, fmt.Errorf("search groups: %w", err)
 	}
-	items = allowedGroups(items, access)
+	items = allowedGroups(items, access, SearchMethod)
 	page, err := groupPage(items, offset, input.Limit, query)
 	if err != nil {
 		return service.PageResult[Group]{}, err
@@ -260,13 +260,13 @@ func (s *Service) SearchMembers(ctx context.Context, access service.Access, inpu
 	return service.PageResult[Member]{Data: page, Meta: meta}, nil
 }
 
-func allowedGroups(items []Group, access service.Access) []Group {
+func allowedGroups(items []Group, access service.Access, method string) []Group {
 	if access.Owner {
 		return items
 	}
 	result := make([]Group, 0, len(items))
 	for _, item := range items {
-		if access.Grant.AllowsTarget(item.ID) {
+		if access.Grant.AllowsTarget(method, grant.GroupTarget(item.ID)) {
 			result = append(result, item)
 		}
 	}
@@ -327,7 +327,7 @@ func (s *Service) Methods() []proxy.Method {
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return nil, err
 		}
-		return []string{input.GroupID}, nil
+		return []string{grant.GroupTarget(input.GroupID)}, nil
 	}
 	return []proxy.Method{
 		wrap(ListMethod, noTargets, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
@@ -371,4 +371,12 @@ func (s *Service) Methods() []proxy.Method {
 			return result.Data, err
 		}),
 	}
+}
+
+func groupTargets(ids []string) []string {
+	targets := make([]string, 0, len(ids))
+	for _, id := range ids {
+		targets = append(targets, grant.GroupTarget(id))
+	}
+	return targets
 }

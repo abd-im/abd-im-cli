@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/operation"
 	"github.com/abd-im/abd-im-cli/internal/reply"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk_callback"
@@ -67,6 +68,7 @@ type Adapter struct {
 	user             userContext
 	listener         contracts.EventListener
 	connectionResult chan error
+	loginStarted     bool
 }
 
 // New creates an adapter that constructs a fresh SDK UserContext through the
@@ -177,6 +179,11 @@ func (a *Adapter) Login(ctx context.Context) error {
 	if err := user.Login(ccontext.WithOperationID(loginContext, uuid.NewString()), a.userID, a.token); err != nil {
 		return errors.New("OpenIM login failed")
 	}
+	a.mu.Lock()
+	if a.user == user {
+		a.loginStarted = true
+	}
+	a.mu.Unlock()
 	timer := time.NewTimer(a.connectTimeout)
 	defer timer.Stop()
 	select {
@@ -201,14 +208,19 @@ func (a *Adapter) Shutdown(ctx context.Context) error {
 	config := a.config
 	userID := a.userID
 	token := a.token
+	loginStarted := a.loginStarted
 	a.user = nil
 	a.listener = nil
+	a.loginStarted = false
 	a.mu.Unlock()
 	if user == nil {
 		return nil
 	}
-	logoutContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: userID, Token: token, IMConfig: &config})
-	err := user.Logout(ccontext.WithOperationID(logoutContext, uuid.NewString()))
+	var err error
+	if loginStarted {
+		logoutContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: userID, Token: token, IMConfig: &config})
+		err = user.Logout(ccontext.WithOperationID(logoutContext, uuid.NewString()))
+	}
 	user.UnInitSDK()
 	if err != nil {
 		return errors.New("OpenIM logout failed")
@@ -240,6 +252,34 @@ func (a *Adapter) Reply(ctx context.Context, delivery reply.Delivery) error {
 		return err
 	case <-ctx.Done():
 		return reply.ErrOutcomeUnknown
+	}
+}
+
+// SendText delivers a grant-authorized text message through the daemon-owned
+// SDK context. Authorization, target selection, and idempotency are enforced
+// by the message capability handler before this method is reached.
+func (a *Adapter) SendText(ctx context.Context, text, recipientID, groupID string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if strings.TrimSpace(text) == "" || len(text) > 4096 || (strings.TrimSpace(recipientID) == "" && strings.TrimSpace(groupID) == "") || (strings.TrimSpace(recipientID) != "" && strings.TrimSpace(groupID) != "") {
+		return errors.New("invalid text message delivery")
+	}
+	user, err := a.currentUser()
+	if err != nil {
+		return err
+	}
+	callback := newSendCallback()
+	config := a.config
+	sendContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
+	if err := user.SendTextMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), callback, text, recipientID, groupID); err != nil {
+		return errors.New("OpenIM message send submission failed")
+	}
+	select {
+	case err := <-callback.done:
+		return err
+	case <-ctx.Done():
+		return operation.ErrOutcomeUnknown
 	}
 }
 
@@ -404,9 +444,11 @@ type sendCallback struct {
 
 func newSendCallback() *sendCallback { return &sendCallback{done: make(chan error, 1)} }
 
-func (c *sendCallback) OnError(int32, string) { c.complete(errors.New("OpenIM reply delivery failed")) }
-func (c *sendCallback) OnSuccess(string)      { c.complete(nil) }
-func (*sendCallback) OnProgress(int)          {}
+func (c *sendCallback) OnError(int32, string) {
+	c.complete(errors.New("OpenIM message delivery failed"))
+}
+func (c *sendCallback) OnSuccess(string) { c.complete(nil) }
+func (*sendCallback) OnProgress(int)     {}
 
 func (c *sendCallback) complete(err error) {
 	c.once.Do(func() { c.done <- err })

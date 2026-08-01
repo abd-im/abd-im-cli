@@ -59,7 +59,7 @@ func TestUserReadsRequireGrantTargetAndProxyCarriesMeta(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	grants := grant.NewStore()
-	access, credential, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{UserGet}, Scopes: []string{"user.get.read"}, TargetAllowlist: []string{"user-1"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3})
+	access, credential, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{UserGet}, Scopes: []string{"user.get.read"}, TargetAllowlists: map[string][]string{UserGet: {grant.UserTarget("user-1")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3})
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}

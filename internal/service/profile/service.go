@@ -171,7 +171,7 @@ func (s *Service) Users(ctx context.Context, access service.Access, ids []string
 	if capability.Status != "available" {
 		return service.Result[[]User]{}, fmt.Errorf("%w: %s", service.ErrCapabilityUnavailable, capability.Status)
 	}
-	if err := access.Authorize(UserGet, capability.Scope, ids...); err != nil {
+	if err := access.Authorize(UserGet, capability.Scope, userTargets(ids)...); err != nil {
 		return service.Result[[]User]{}, err
 	}
 	items, err := s.source.Users(ctx, append([]string(nil), ids...))
@@ -232,7 +232,7 @@ func (s *Service) Methods() []proxy.Method {
 				if err := json.Unmarshal(raw, &input); err != nil {
 					return nil, err
 				}
-				return input.UserIDs, nil
+				return userTargets(input.UserIDs), nil
 			},
 			Handle: func(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {
 				value, err := handle(ctx, request, service.ProviderAccess(item, s.capability(name)))
@@ -271,4 +271,12 @@ func (s *Service) Methods() []proxy.Method {
 			return result.Data, err
 		}),
 	}
+}
+
+func userTargets(ids []string) []string {
+	targets := make([]string, 0, len(ids))
+	for _, id := range ids {
+		targets = append(targets, grant.UserTarget(id))
+	}
+	return targets
 }

@@ -46,14 +46,14 @@ func TestGrantExpiryCancelsRunAndClosesProxyE2E(t *testing.T) {
 	provider := newCancellationProvider()
 	tools := grant.NewStore()
 	_, credential, err := tools.Issue(grant.Policy{
-		RunID:           "run-expired",
-		ProfileID:       "work",
-		Principal:       "provider",
-		Methods:         []string{"message.history"},
-		Scopes:          []string{"message.read"},
-		TargetAllowlist: []string{"conversation-1"},
-		ExpiresAt:       time.Now().Add(30 * time.Millisecond),
-		RateBudget:      1,
+		RunID:            "run-expired",
+		ProfileID:        "work",
+		Principal:        "provider",
+		Methods:          []string{"message.history"},
+		Scopes:           []string{"message.read"},
+		TargetAllowlists: map[string][]string{"message.history": {grant.ConversationTarget("conversation-1")}},
+		ExpiresAt:        time.Now().Add(30 * time.Millisecond),
+		RateBudget:       1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func cancellationMethod() proxy.Method {
 			if err := json.Unmarshal(raw, &input); err != nil {
 				return nil, err
 			}
-			return []string{input.ConversationID}, nil
+			return []string{grant.ConversationTarget(input.ConversationID)}, nil
 		},
 		Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
 			return json.RawMessage(`{"items":[]}`), nil

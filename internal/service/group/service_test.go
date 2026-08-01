@@ -24,7 +24,7 @@ func TestGroupAndMemberReadsExposeCapabilityAndRespectScope(t *testing.T) {
 	}
 
 	grants := grant.NewStore()
-	item, _, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{MembersListMethod}, Scopes: []string{ReadScope}, TargetAllowlist: []string{"group-1"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 2})
+	item, _, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{MembersListMethod}, Scopes: []string{ReadScope}, TargetAllowlists: map[string][]string{MembersListMethod: {grant.GroupTarget("group-1")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 2})
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}

@@ -45,12 +45,8 @@ func TestAdapterOwnsSDKLifecycleAndRedactsLoginError(t *testing.T) {
 	if err := adapter.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
-	if !user.logoutCalled || !user.uninitialized {
-		t.Fatal("Shutdown() did not close the SDK user context")
-	}
-	config, ok := user.logoutContext.Value(ccontext.GlobalConfigKey{}).(*ccontext.GlobalConfig)
-	if !ok || config == nil || config.UserID != "user-1" || config.Token != "token-marker" || config.IMConfig == nil || config.IMConfig.ApiAddr != "https://api.example.test" {
-		t.Fatalf("Shutdown() context does not contain the SDK configuration")
+	if user.logoutCalled || !user.uninitialized {
+		t.Fatal("Shutdown() did not safely close the SDK user context")
 	}
 }
 
@@ -72,6 +68,40 @@ func TestAdapterLoginWaitsForOnlineCallback(t *testing.T) {
 	}
 	if err := adapter.Login(context.Background()); err != nil {
 		t.Fatalf("Login() error = %v", err)
+	}
+	if err := adapter.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if !user.logoutCalled || !user.uninitialized {
+		t.Fatal("Shutdown() did not close a logged-in SDK user context")
+	}
+	config, ok := user.logoutContext.Value(ccontext.GlobalConfigKey{}).(*ccontext.GlobalConfig)
+	if !ok || config == nil || config.UserID != "user-1" || config.Token != "token-marker" || config.IMConfig == nil || config.IMConfig.ApiAddr != "https://api.example.test" {
+		t.Fatal("Shutdown() context does not contain the SDK configuration")
+	}
+}
+
+func TestAdapterShutdownAfterLoginSubmissionFailureSkipsLogout(t *testing.T) {
+	user := &fakeUserContext{loginErr: errors.New("submission failure")}
+	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
+	if err := adapter.InitSDK(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.InitResources(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Login(context.Background()); err == nil {
+		t.Fatal("Login() error = nil")
+	}
+	if err := adapter.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if user.logoutCalled || !user.uninitialized {
+		t.Fatalf("shutdown after failed login = %+v", user)
 	}
 }
 
@@ -193,6 +223,30 @@ func TestAdapterRepliesOnlyToEventBoundRecipient(t *testing.T) {
 	}
 	if err := adapter.Reply(context.Background(), reply.Delivery{RecipientID: "user-2", GroupID: "group-1", Text: "must fail"}); err == nil {
 		t.Fatal("Reply() accepted an ambiguous target")
+	}
+}
+
+func TestAdapterSendsTextToOneExplicitTarget(t *testing.T) {
+	user := &fakeUserContext{}
+	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
+	if err := adapter.InitSDK(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.InitResources(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.SendText(context.Background(), "outbound text", "user-2", ""); err != nil {
+		t.Fatalf("SendText() error = %v", err)
+	}
+	if user.replyRecipient != "user-2" || user.replyGroup != "" || user.replyText != "outbound text" {
+		t.Fatalf("SDK text target = recipient=%q group=%q text=%q", user.replyRecipient, user.replyGroup, user.replyText)
+	}
+	if err := adapter.SendText(context.Background(), "must fail", "user-2", "group-1"); err == nil {
+		t.Fatal("SendText() accepted an ambiguous target")
 	}
 }
 

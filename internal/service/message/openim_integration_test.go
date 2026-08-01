@@ -72,15 +72,15 @@ func TestOpenIMMessageReadsIntegration(t *testing.T) {
 	assertMessageIntegrationMeta(t, get.Meta, GetMethod)
 
 	item, _, err := grant.NewStore().Issue(grant.Policy{
-		RunID:           "run-integration",
-		ProfileID:       "integration",
-		Principal:       "provider",
-		Methods:         []string{HistoryMethod},
-		Scopes:          []string{ReadScope},
-		TargetAllowlist: []string{conversationID},
-		MessageWindow:   grant.MessageWindow{ConversationID: conversationID, AfterMessageID: afterMessageID},
-		ExpiresAt:       time.Now().Add(time.Hour),
-		RateBudget:      1,
+		RunID:            "run-integration",
+		ProfileID:        "integration",
+		Principal:        "provider",
+		Methods:          []string{HistoryMethod},
+		Scopes:           []string{ReadScope},
+		TargetAllowlists: map[string][]string{HistoryMethod: {grant.ConversationTarget(conversationID)}},
+		MessageWindow:    grant.MessageWindow{ConversationID: conversationID, AfterMessageID: afterMessageID},
+		ExpiresAt:        time.Now().Add(time.Hour),
+		RateBudget:       1,
 	})
 	if err != nil {
 		t.Fatal(err)

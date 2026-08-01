@@ -38,6 +38,10 @@ Group related, verified work into meaningful delivery milestones; do not create 
 
 When the user explicitly supplies authorized controlled-environment credentials and endpoints, execute the applicable integration and release gates before treating external access as unavailable.
 
+### Capability Delivery
+
+Treat an initial action handler as a proof path, not the endpoint of requested capability delivery; continue subsequent typed actions as independently verifiable work items with explicit authorization.
+
 ### IX. Mainline Priority
 Security and logging follow-up work must be tracked separately and must not interrupt active mainline feature delivery unless the user explicitly elevates it to a release blocker.
 

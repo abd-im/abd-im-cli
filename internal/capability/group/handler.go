@@ -44,7 +44,11 @@ func memberIDs(raw json.RawMessage) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return input.MemberIDs, nil
+	targets := make([]string, 0, len(input.MemberIDs))
+	for _, id := range input.MemberIDs {
+		targets = append(targets, grant.UserTarget(id))
+	}
+	return targets, nil
 }
 func (h *Handler) handle(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {
 	input, err := parse(request.Params)

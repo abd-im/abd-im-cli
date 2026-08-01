@@ -23,6 +23,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/bridge"
 	"github.com/abd-im/abd-im-cli/internal/capability"
 	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
+	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/cli"
 	"github.com/abd-im/abd-im-cli/internal/connector"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
@@ -379,6 +380,10 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
+	messageSender, err := prepared.MessageSender()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
 	groupOperations, err := operation.NewGuard(store)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -388,6 +393,14 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	groupCreate, err := groupcapability.New(groupManifest, groupOperations, groupCreator)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	messageManifest, err := capability.New([]capability.Entry{{Method: messagecapability.Method, Scope: messagecapability.Scope, Status: capability.Available}})
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	messageSend, err := messagecapability.New(messageManifest, groupOperations, messageSender)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -455,7 +468,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		Replies:   replies,
 		Runs:      runs,
 		Grants:    grant.NewStore(),
-		Methods:   append(serviceMethods(services), groupCreate.ProxyMethod()),
+		Methods:   append(serviceMethods(services), groupCreate.ProxyMethod(), messageSend.ProxyMethod()),
 		Policy: daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
 			return daemon.Decision{Principal: "codex", Methods: []string{"message.history"}, RateBudget: 1}, true, nil
 		}),

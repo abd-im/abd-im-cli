@@ -206,7 +206,7 @@ func newHarness(t *testing.T, blockTurn bool) *harness {
 			if err := json.Unmarshal(raw, &input); err != nil {
 				return nil, err
 			}
-			return []string{input.ConversationID}, nil
+			return []string{grant.ConversationTarget(input.ConversationID)}, nil
 		},
 		Handle: func(_ context.Context, _ contracts.Request, access grant.Grant) (json.RawMessage, error) {
 			h.mu.Lock()

@@ -16,7 +16,7 @@ func TestSocialReadsFilterListsAndCheckIndividualTargets(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	grants := grant.NewStore()
-	item, _, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{FriendListMethod, FriendGetMethod, FriendSearchMethod, BlackListMethod, BlackGetMethod}, Scopes: []string{FriendReadScope, BlackReadScope}, TargetAllowlist: []string{"user-2"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 10})
+	item, _, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{FriendListMethod, FriendGetMethod, FriendSearchMethod, BlackListMethod, BlackGetMethod}, Scopes: []string{FriendReadScope, BlackReadScope}, TargetAllowlists: map[string][]string{FriendListMethod: {grant.UserTarget("user-2")}, FriendGetMethod: {grant.UserTarget("user-2")}, FriendSearchMethod: {grant.UserTarget("user-2")}, BlackListMethod: {grant.UserTarget("user-2")}, BlackGetMethod: {grant.UserTarget("user-2")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 10})
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}

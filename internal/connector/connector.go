@@ -10,6 +10,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/bridge"
 	"github.com/abd-im/abd-im-cli/internal/bridge/abdim"
 	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
+	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/profile"
 	conversationservice "github.com/abd-im/abd-im-cli/internal/service/conversation"
@@ -96,6 +97,15 @@ func (p *Prepared) GroupCreator() (*groupcapability.OpenIMCreator, error) {
 		return nil, errors.New("prepared daemon adapter is required")
 	}
 	return groupcapability.NewOpenIMCreator(groupcapability.OpenIMCreator{Context: p.Adapter.Context})
+}
+
+// MessageSender exposes the daemon-owned adapter only through the narrow
+// message action interface. It does not expose the SDK or its local store.
+func (p *Prepared) MessageSender() (messagecapability.Sender, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return p.Adapter, nil
 }
 
 // ConversationSource exposes the verified server-read conversation facade
