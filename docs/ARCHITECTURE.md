@@ -109,7 +109,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 | 好友关系 | delivered | `internal/capability/friend` | `internal/connector` | `internal/mcp/provider`、`cmd/abdim` | `internal/capability/friend` unit + controlled integration |
 | 黑名单管理 | delivered | `internal/capability/blacklist` | `internal/connector` | `internal/mcp/provider`、`cmd/abdim` | `internal/capability/blacklist` unit + fixed server source |
 | 群成员关系 | delivered | `internal/capability/group` | `internal/connector` | `internal/mcp/provider`、`cmd/abdim` | unit/proxy + controlled server integration |
-| 群管理 | planned | `internal/capability/group` | `internal/connector` | `internal/mcp/provider`、`cmd/abdim` | fixed server action integration |
+| 群管理 | delivered | `internal/capability/group` | `internal/connector` | `internal/mcp/provider`、`cmd/abdim` | unit/proxy + controlled server integration |
 
 ### P4 Ownership
 
@@ -124,7 +124,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 
 `daemon serve` 由单一 daemon 持有 SDK、控制库、owner socket、run manager 和固定 Codex App Server adapter。每个 run 都有独立 `CODEX_HOME`、MCP 配置、Unix bridge 和 grant；provider 只能发现 construction snapshot 中 manifest 与 grant 共同允许的 typed tools。`internal/launcher` 以部署指定的独立 UID/GID 运行 provider，拒绝文件和命令审批，并在取消时销毁进程组与 run 目录。
 
-所有 P1 typed read 都经固定 server source 提供，不读取 SDK 本地数据库。写入面已包括群创建与成员关系、文本/控制/媒体消息、会话设置、好友和黑名单；每项均经 method-scoped target、operation/idempotency guard 和未知结果 fail-closed 保护。媒体内容只在 profile 私有目录和 daemon 内 file handle 中流转，control DB 只保存不透明引用和约束 metadata。群成员动作以固定 server endpoint 验证角色和成员状态，不调用会同步本地状态的 SDK Group API。默认入站 policy 仍只授予 `message.history`；`conversation.unread` 因服务端未公开该值而保持 `not_validated`。
+所有 P1 typed read 都经固定 server source 提供，不读取 SDK 本地数据库。写入面已包括群创建、成员关系和群资料/禁言/群主转让、文本/控制/媒体消息、会话设置、好友和黑名单；每项均经 method-scoped target、operation/idempotency guard 和未知结果 fail-closed 保护。媒体内容只在 profile 私有目录和 daemon 内 file handle 中流转，control DB 只保存不透明引用和约束 metadata。群成员和群管理动作以固定 server endpoint 验证角色和成员状态，不调用会同步本地状态的 SDK Group API。默认入站 policy 仍只授予 `message.history`；`conversation.unread` 因服务端未公开该值而保持 `not_validated`。
 
 `available` 必须由固定 SDK/server 组合的 integration gate 证明，不能由 manifest 静态声明替代。
 

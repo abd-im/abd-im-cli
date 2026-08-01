@@ -64,7 +64,6 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与记录 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | ABD-053 | ready | US-02 | 交付群管理能力族：`group.set_info`、`group.set_mute`、`group.set_member_mute` 和 `group.transfer_owner`。详见 [`issues/ABD-053-group-administration.md`](issues/ABD-053-group-administration.md)。 | ABD-041, ABD-052 | grant 同时约束 group 和成员 target；只公开有限群资料字段、mute boolean 与有上限的 member mute 时长；固定 source/action 验证管理或 owner 权限；每个方法有 operation/idempotency、未知结果 fail closed 与 integration gate。 |
 
 ## Phase 9: P4 Provider and Run Operations
 
@@ -75,8 +74,8 @@
 | [ ] | ABD-055 | ready | US-01, US-02, US-03 | `[P]` 交付单 Codex provider 的 SDK/server compatibility matrix 与 capability evidence gate。 | ABD-048, ABD-052, ABD-053 | 支持组合有自动化 gate 和版本证据；未验证组合保持 `not_validated`，不会因 manifest 静态声明变成 `available`。 |
 | [ ] | ABD-057 | ready | US-01, US-02, US-03 | `[P]` 交付高级 run 运维能力族：run 状态查询、显式取消和 operation 诊断。 | ABD-032, ABD-039 | owner 只能通过 typed local service 查看 run/operation 状态并取消指定 run；取消有终态和审计记录，不发送补偿 reply，不重试 `unknown` operation。 |
 
-**当前状态**：`ABD-024` 至 `ABD-032`、`ABD-035` 至 `ABD-052` 已完成 daemon、provider deployment boundary、P1 typed server-read/action source、消息控制、媒体、会话设置、好友/黑名单和群成员能力族。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。当前 P3 只剩 `ABD-053` 群管理；完成后可并行推进单 Codex compatibility 的 `ABD-055` 与 run 运维 `ABD-057`。多 provider `ABD-054` 与 session migration `ABD-056` 已 deferred。所有 action 只在 manifest、显式 grant 和对应 handler 共同允许时公开；默认入站 policy 仍只授予 `message.history`。
+**当前状态**：`ABD-024` 至 `ABD-032`、`ABD-035` 至 `ABD-053` 已完成 daemon、provider deployment boundary、P1 typed server-read/action source、消息控制、媒体、会话设置、好友/黑名单及群组管理能力族。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。Phase 8 已完成，`ABD-055` 单 Codex compatibility 与 `ABD-057` run 运维现可并行推进。多 provider `ABD-054` 与 session migration `ABD-056` 已 deferred。所有 action 只在 manifest、显式 grant 和对应 handler 共同允许时公开；默认入站 policy 仍只授予 `message.history`。
 
 ## 执行顺序
 
-`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。`ABD-048` 与 `ABD-052` 已在领域实现和验证阶段并行完成，并在共享 daemon/provider registry 串行收口。`ABD-053` 依赖 `ABD-052`，现在可以开始；P3 完成后，`ABD-055` 与 `ABD-057` 可并行，`ABD-054`、`ABD-056` 暂缓。共享注册表的修改不再并行写入。
+`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。`ABD-048` 与 `ABD-052` 已在领域实现和验证阶段并行完成，并在共享 daemon/provider registry 串行收口；`ABD-053` 在 `ABD-052` 完成后交付。现在 `ABD-055` 与 `ABD-057` 可并行，`ABD-054`、`ABD-056` 暂缓。共享注册表的修改不再并行写入。

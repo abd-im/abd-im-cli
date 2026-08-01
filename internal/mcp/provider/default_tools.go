@@ -48,6 +48,13 @@ func DefaultTools(methods []string) []Tool {
 		description, schema := groupMembershipTool(method)
 		tools = append(tools, Tool{Name: "abdim." + method, Description: description, Method: method, InputSchema: schema, Visible: func() bool { return true }})
 	}
+	for _, method := range []string{groupcapability.SetInfoMethod, groupcapability.SetMuteMethod, groupcapability.SetMemberMuteMethod, groupcapability.TransferOwnerMethod} {
+		if _, exists := allowed[method]; !exists {
+			continue
+		}
+		description, schema := groupAdministrationTool(method)
+		tools = append(tools, Tool{Name: "abdim." + method, Description: description, Method: method, InputSchema: schema, Visible: func() bool { return true }})
+	}
 	if _, exists := allowed[messagecapability.Method]; exists {
 		tools = append(tools, Tool{
 			Name:        "abdim." + messagecapability.Method,
@@ -160,6 +167,19 @@ func groupMembershipTool(method string) (string, json.RawMessage) {
 		return "Invite approved users to one approved group.", json.RawMessage(`{"type":"object","properties":{"group_id":{"type":"string","minLength":1,"maxLength":256},"user_ids":{"type":"array","minItems":1,"maxItems":50,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":256}},"reason":{"type":"string","maxLength":512},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["group_id","user_ids","idempotency_key"]}`)
 	default:
 		return "Remove approved users from one approved group.", json.RawMessage(`{"type":"object","properties":{"group_id":{"type":"string","minLength":1,"maxLength":256},"user_ids":{"type":"array","minItems":1,"maxItems":50,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":256}},"reason":{"type":"string","maxLength":512},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["group_id","user_ids","idempotency_key"]}`)
+	}
+}
+
+func groupAdministrationTool(method string) (string, json.RawMessage) {
+	switch method {
+	case groupcapability.SetInfoMethod:
+		return "Update approved group profile fields.", json.RawMessage(`{"type":"object","properties":{"group_id":{"type":"string","minLength":1,"maxLength":256},"name":{"type":"string","minLength":1,"maxLength":256},"notification":{"type":"string","maxLength":1024},"introduction":{"type":"string","maxLength":1024},"face_url":{"type":"string","maxLength":2048},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["group_id","idempotency_key"],"anyOf":[{"required":["name"]},{"required":["notification"]},{"required":["introduction"]},{"required":["face_url"]}]}`)
+	case groupcapability.SetMuteMethod:
+		return "Set all-member mute for one approved group.", json.RawMessage(`{"type":"object","properties":{"group_id":{"type":"string","minLength":1,"maxLength":256},"muted":{"type":"boolean"},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["group_id","muted","idempotency_key"]}`)
+	case groupcapability.SetMemberMuteMethod:
+		return "Set mute for one approved member in an approved group.", json.RawMessage(`{"type":"object","properties":{"group_id":{"type":"string","minLength":1,"maxLength":256},"user_id":{"type":"string","minLength":1,"maxLength":256},"muted":{"type":"boolean"},"duration_seconds":{"type":"integer","minimum":1,"maximum":604800},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["group_id","user_id","muted","idempotency_key"],"oneOf":[{"properties":{"muted":{"const":true}},"required":["duration_seconds"]},{"properties":{"muted":{"const":false}},"not":{"required":["duration_seconds"]}}]}`)
+	default:
+		return "Transfer ownership of one approved group to an approved member.", json.RawMessage(`{"type":"object","properties":{"group_id":{"type":"string","minLength":1,"maxLength":256},"new_owner_user_id":{"type":"string","minLength":1,"maxLength":256},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["group_id","new_owner_user_id","idempotency_key"]}`)
 	}
 }
 

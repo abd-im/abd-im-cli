@@ -161,6 +161,32 @@ Unlike the older group-create gate, this test skips when its dedicated fixture
 variables are absent. It uses only short-lived IM tokens and never records the
 tokens, message bodies, or group member data.
 
+## OpenIM Group Administration Integration
+
+`internal/capability/group` reads current member roles through
+`/group/get_group_members_info`, then invokes only
+`/group/set_group_info_ex`, group mute/cancel-mute, member mute/cancel-mute,
+and `/group/transfer_group`. The gate creates a disposable working group with
+the second controlled account as a member, updates its bounded profile, toggles
+both mute states, and transfers ownership last. It does not call an SDK Group
+API or write local synchronized group state.
+
+- `ABDIM_OPENIM_API_ADDR`
+- `ABDIM_OPENIM_GROUP_MEMBERSHIP_OWNER_ID`
+- `ABDIM_OPENIM_GROUP_MEMBERSHIP_OWNER_TOKEN`
+- `ABDIM_OPENIM_GROUP_MEMBERSHIP_MEMBER_ID`
+
+Run the gate with:
+
+```bash
+go test -tags=integration ./internal/capability/group -run TestOpenIMGroupAdministrationIntegration
+```
+
+The test skips without this dedicated fixture and uses only a short-lived
+owner IM token. Unit and proxy tests cover field and duration bounds,
+method-scoped group/user grants, role rejection, idempotency, and unknown
+outcomes.
+
 ## OpenIM Message Actions Integration
 
 `internal/capability/message` exercises the daemon-owned `UserContext`

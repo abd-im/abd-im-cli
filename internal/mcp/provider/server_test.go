@@ -136,21 +136,22 @@ func TestServerExposesTextAtWithItsIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestServerExposesMediaAndGroupMembershipTools(t *testing.T) {
+func TestServerExposesMediaAndGroupTools(t *testing.T) {
 	proxy := &recordingProxy{}
-	server, err := New("work", "daemon-grant", proxy, DefaultTools([]string{"message.send_image", "group.invite_members"}))
+	server, err := New("work", "daemon-grant", proxy, DefaultTools([]string{"message.send_image", "group.invite_members", "group.set_member_mute"}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = serve(server, strings.Join([]string{
 		encodeRequest("image", "tools/call", metaParams(`,"name":"abdim.message.send_image","arguments":{"attachment_ref":"attachment-1","file_name":"photo.png","recipient_id":"user-1","idempotency_key":"image-1"}`)),
 		encodeRequest("invite", "tools/call", metaParams(`,"name":"abdim.group.invite_members","arguments":{"group_id":"group-1","user_ids":["user-1"],"idempotency_key":"invite-1"}`)),
+		encodeRequest("mute", "tools/call", metaParams(`,"name":"abdim.group.set_member_mute","arguments":{"group_id":"group-1","user_id":"user-1","muted":true,"duration_seconds":60,"idempotency_key":"mute-1"}`)),
 	}, "\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(proxy.calls) != 2 || proxy.calls[0].Method != "message.send_image" || proxy.calls[0].IdempotencyKey != "image-1" || proxy.calls[1].Method != "group.invite_members" || proxy.calls[1].IdempotencyKey != "invite-1" {
-		t.Fatalf("media and membership calls = %+v", proxy.calls)
+	if len(proxy.calls) != 3 || proxy.calls[0].Method != "message.send_image" || proxy.calls[0].IdempotencyKey != "image-1" || proxy.calls[1].Method != "group.invite_members" || proxy.calls[1].IdempotencyKey != "invite-1" || proxy.calls[2].Method != "group.set_member_mute" || proxy.calls[2].IdempotencyKey != "mute-1" {
+		t.Fatalf("media and group calls = %+v", proxy.calls)
 	}
 }
 

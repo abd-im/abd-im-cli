@@ -387,6 +387,10 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
+	groupAdministrationActions, err := prepared.GroupAdministrationActions()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
 	messageSender, err := prepared.MessageSender()
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -445,6 +449,10 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		{Method: groupcapability.LeaveMethod, Scope: groupcapability.LeaveScope, Status: capability.Available},
 		{Method: groupcapability.InviteMembersMethod, Scope: groupcapability.InviteMembersScope, Status: capability.Available},
 		{Method: groupcapability.RemoveMembersMethod, Scope: groupcapability.RemoveMembersScope, Status: capability.Available},
+		{Method: groupcapability.SetInfoMethod, Scope: groupcapability.SetInfoScope, Status: capability.Available},
+		{Method: groupcapability.SetMuteMethod, Scope: groupcapability.SetMuteScope, Status: capability.Available},
+		{Method: groupcapability.SetMemberMuteMethod, Scope: groupcapability.SetMemberMuteScope, Status: capability.Available},
+		{Method: groupcapability.TransferOwnerMethod, Scope: groupcapability.TransferOwnerScope, Status: capability.Available},
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -454,6 +462,10 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	groupMembership, err := groupcapability.NewMembership(groupManifest, groupOperations, groupMembershipActions)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	groupAdministration, err := groupcapability.NewAdministration(groupManifest, groupOperations, groupAdministrationActions)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -604,6 +616,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	}
 	methods := append(serviceMethods(services), groupCreate.ProxyMethod(), messageSend.ProxyMethod(), messageAt.ProxyMethod(), messageQuote.ProxyMethod(), messageLocation.ProxyMethod(), messageCustom.ProxyMethod(), messageRevoke.ProxyMethod())
 	methods = append(methods, groupMembership.ProxyMethods()...)
+	methods = append(methods, groupAdministration.ProxyMethods()...)
 	methods = append(methods, messageMedia.ProxyMethods()...)
 	methods = append(methods, conversationMarkRead.ProxyMethod(), conversationPinned.ProxyMethod(), conversationReceiveOption.ProxyMethod())
 	methods = append(methods, friendHandler.ProxyMethods()...)

@@ -7,3 +7,4 @@
 | ABD-046 | 2026-08-01 | [`2026-08-01-ABD-046-attachment-foundation.md`](2026-08-01-ABD-046-attachment-foundation.md) |
 | ABD-048 | 2026-08-01 | [`2026-08-01-ABD-048-media-messages.md`](2026-08-01-ABD-048-media-messages.md) |
 | ABD-052 | 2026-08-01 | [`2026-08-01-ABD-052-group-membership.md`](2026-08-01-ABD-052-group-membership.md) |
+| ABD-053 | 2026-08-01 | [`2026-08-01-ABD-053-group-administration.md`](2026-08-01-ABD-053-group-administration.md) |

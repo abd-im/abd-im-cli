@@ -1,6 +1,6 @@
 # ABD-053: Group Administration
 
-状态：`ready`
+状态：`completed`（2026-08-01）
 
 ## Outcome
 
@@ -24,6 +24,7 @@
 - 固定 source/action 验证管理或 owner 权限。
 - 每个方法有 operation/idempotency、未知结果 fail closed 和 integration gate。
 
-## Development Record
+## Verification
 
-尚未开始实现、验证或提交。
+- unit/proxy、HTTP contract 和 provider MCP tests 覆盖有限群资料字段、group/user grant、角色拒绝、method-scoped operation/idempotency 与 unknown 终态；daemon/provider registry 只映射四个固定 typed methods。
+- 受控两账号 server gate 创建临时群后完成资料更新、全员禁言切换、成员禁言切换和最终群主转让；实现只调用固定 server source/action，不调用 SDK Group API。

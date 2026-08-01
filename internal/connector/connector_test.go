@@ -57,6 +57,9 @@ func TestPrepareResolvesCredentialWithoutStartingSDK(t *testing.T) {
 	if actions, err := prepared.GroupMembershipActions(); err != nil || actions == nil {
 		t.Fatalf("GroupMembershipActions() = %v, %v", actions, err)
 	}
+	if actions, err := prepared.GroupAdministrationActions(); err != nil || actions == nil {
+		t.Fatalf("GroupAdministrationActions() = %v, %v", actions, err)
+	}
 	if sender, err := prepared.MessageSender(); err != nil || sender == nil {
 		t.Fatalf("MessageSender() = %v, %v", sender, err)
 	}
