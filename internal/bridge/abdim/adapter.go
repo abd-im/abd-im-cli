@@ -6,12 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 	"github.com/abd-im/abd-im-cli/internal/reply"
@@ -50,6 +54,10 @@ type userContext interface {
 	SendQuoteMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string, *sdk_struct.MsgStruct) error
 	SendLocationMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, float64, float64, string, string) error
 	SendCustomMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string, string, string) error
+	SendImageMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string) error
+	SendFileMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string, string) error
+	SendSoundMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, int64, string, string) error
+	SendVideoMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, int64, string, string, string) error
 	Logout(context.Context) error
 	UnInitSDK()
 }
@@ -98,6 +106,46 @@ func (u sdkUserContext) SendCustomMessage(ctx context.Context, callback open_im_
 	}
 	ctx = ccontext.WithSendMessageCallback(ctx, callback)
 	_, err = u.Conversation().SendMessageNotOss(ctx, message, recipientID, groupID, nil, false)
+	return err
+}
+
+func (u sdkUserContext) SendImageMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, imagePath, recipientID, groupID string) error {
+	message, err := u.Conversation().CreateImageMessage(ctx, imagePath)
+	if err != nil {
+		return err
+	}
+	ctx = ccontext.WithSendMessageCallback(ctx, callback)
+	_, err = u.Conversation().SendMessage(ctx, message, recipientID, groupID, nil, false)
+	return err
+}
+
+func (u sdkUserContext) SendFileMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, filePath, fileName, recipientID, groupID string) error {
+	message, err := u.Conversation().CreateFileMessage(ctx, filePath, fileName)
+	if err != nil {
+		return err
+	}
+	ctx = ccontext.WithSendMessageCallback(ctx, callback)
+	_, err = u.Conversation().SendMessage(ctx, message, recipientID, groupID, nil, false)
+	return err
+}
+
+func (u sdkUserContext) SendSoundMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, soundPath string, duration int64, recipientID, groupID string) error {
+	message, err := u.Conversation().CreateSoundMessage(ctx, soundPath, duration)
+	if err != nil {
+		return err
+	}
+	ctx = ccontext.WithSendMessageCallback(ctx, callback)
+	_, err = u.Conversation().SendMessage(ctx, message, recipientID, groupID, nil, false)
+	return err
+}
+
+func (u sdkUserContext) SendVideoMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, videoPath, videoType string, duration int64, snapshotPath, recipientID, groupID string) error {
+	message, err := u.Conversation().CreateVideoMessage(ctx, videoPath, videoType, duration, snapshotPath)
+	if err != nil {
+		return err
+	}
+	ctx = ccontext.WithSendMessageCallback(ctx, callback)
+	_, err = u.Conversation().SendMessage(ctx, message, recipientID, groupID, nil, false)
 	return err
 }
 
@@ -443,6 +491,173 @@ func (a *Adapter) SendCustom(ctx context.Context, data, extension, description, 
 	case <-ctx.Done():
 		return operation.ErrOutcomeUnknown
 	}
+}
+
+// SendImage uploads a daemon-held image attachment and sends the resulting
+// media message to one grant-authorized target.
+func (a *Adapter) SendImage(ctx context.Context, payload messagecapability.MediaPayload, recipientID, groupID string) error {
+	return a.sendMedia(ctx, mediaImage, payload, messagecapability.MediaPayload{}, 0, recipientID, groupID)
+}
+
+// SendFile uploads one daemon-held file attachment. The file name is display
+// metadata only; it is never treated as a local path.
+func (a *Adapter) SendFile(ctx context.Context, payload messagecapability.MediaPayload, recipientID, groupID string) error {
+	return a.sendMedia(ctx, mediaFile, payload, messagecapability.MediaPayload{}, 0, recipientID, groupID)
+}
+
+// SendSound uploads one daemon-held sound attachment with its bounded duration.
+func (a *Adapter) SendSound(ctx context.Context, payload messagecapability.MediaPayload, duration int64, recipientID, groupID string) error {
+	return a.sendMedia(ctx, mediaSound, payload, messagecapability.MediaPayload{}, duration, recipientID, groupID)
+}
+
+// SendVideo uploads a daemon-held video and its required image thumbnail.
+func (a *Adapter) SendVideo(ctx context.Context, payload, thumbnail messagecapability.MediaPayload, duration int64, recipientID, groupID string) error {
+	return a.sendMedia(ctx, mediaVideo, payload, thumbnail, duration, recipientID, groupID)
+}
+
+type mediaKind uint8
+
+const (
+	mediaImage mediaKind = iota + 1
+	mediaFile
+	mediaSound
+	mediaVideo
+)
+
+type materializedMedia struct {
+	sdkPath    string
+	sourcePath string
+	cachePath  string
+}
+
+func (a *Adapter) sendMedia(ctx context.Context, kind mediaKind, payload, thumbnail messagecapability.MediaPayload, duration int64, recipientID, groupID string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if !validMediaTarget(recipientID, groupID) || !validMediaPayload(payload) || (kind == mediaVideo && !validMediaPayload(thumbnail)) || (kind != mediaImage && kind != mediaFile && duration <= 0) {
+		return errors.New("invalid media message delivery")
+	}
+	primary, err := a.materializeMedia(payload)
+	if err != nil {
+		return errors.New("prepare media attachment")
+	}
+	cleanupPrimary := func(includeCache bool) {
+		_ = os.Remove(primary.sourcePath)
+		if includeCache {
+			_ = os.Remove(primary.cachePath)
+		}
+	}
+	var snapshot materializedMedia
+	if kind == mediaVideo {
+		snapshot, err = a.materializeMedia(thumbnail)
+		if err != nil {
+			cleanupPrimary(true)
+			return errors.New("prepare media thumbnail")
+		}
+	}
+	cleanupSnapshot := func(includeCache bool) {
+		if kind != mediaVideo {
+			return
+		}
+		_ = os.Remove(snapshot.sourcePath)
+		if includeCache {
+			_ = os.Remove(snapshot.cachePath)
+		}
+	}
+
+	user, err := a.currentUser()
+	if err != nil {
+		cleanupPrimary(true)
+		cleanupSnapshot(true)
+		return err
+	}
+	callback := newSendCallback()
+	config := a.config
+	sendContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
+	sendContext = ccontext.WithOperationID(sendContext, uuid.NewString())
+	switch kind {
+	case mediaImage:
+		err = user.SendImageMessage(sendContext, callback, primary.sdkPath, recipientID, groupID)
+	case mediaFile:
+		err = user.SendFileMessage(sendContext, callback, primary.sdkPath, payload.FileName, recipientID, groupID)
+	case mediaSound:
+		err = user.SendSoundMessage(sendContext, callback, primary.sdkPath, duration, recipientID, groupID)
+	case mediaVideo:
+		videoType := strings.TrimPrefix(strings.ToLower(filepath.Ext(payload.FileName)), ".")
+		err = user.SendVideoMessage(sendContext, callback, primary.sdkPath, videoType, duration, snapshot.sdkPath, recipientID, groupID)
+	default:
+		err = errors.New("unsupported media message kind")
+	}
+	if err != nil {
+		cleanupPrimary(true)
+		cleanupSnapshot(true)
+		return errors.New("OpenIM media submission failed")
+	}
+	select {
+	case err := <-callback.done:
+		if err != nil {
+			cleanupPrimary(true)
+			cleanupSnapshot(true)
+			return err
+		}
+		// The SDK removes the cache path after successful upload. The source
+		// path is only an adapter-private staging file and can be removed now.
+		cleanupPrimary(false)
+		cleanupSnapshot(false)
+		return nil
+	case <-ctx.Done():
+		// The SDK may still complete after caller cancellation; retaining these
+		// private files avoids changing an outcome into a failed upload.
+		return operation.ErrOutcomeUnknown
+	}
+}
+
+func (a *Adapter) materializeMedia(payload messagecapability.MediaPayload) (materializedMedia, error) {
+	if !validMediaPayload(payload) {
+		return materializedMedia{}, errors.New("invalid media payload")
+	}
+	if err := os.MkdirAll(a.config.DataDir, 0o700); err != nil {
+		return materializedMedia{}, err
+	}
+	if err := os.Chmod(a.config.DataDir, 0o700); err != nil {
+		return materializedMedia{}, err
+	}
+	file, err := os.CreateTemp(a.config.DataDir, ".abdim-media-*"+filepath.Ext(payload.FileName))
+	if err != nil {
+		return materializedMedia{}, err
+	}
+	path := file.Name()
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return materializedMedia{}, err
+	}
+	if _, err := io.Copy(file, payload.Reader); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return materializedMedia{}, err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return materializedMedia{}, err
+	}
+	cachePath := utils.FileTmpPath(path, a.config.DataDir)
+	if err := os.Link(path, cachePath); err != nil {
+		_ = os.Remove(path)
+		return materializedMedia{}, err
+	}
+	return materializedMedia{sdkPath: string(os.PathSeparator) + filepath.Base(path), sourcePath: path, cachePath: cachePath}, nil
+}
+
+func validMediaTarget(recipientID, groupID string) bool {
+	return (strings.TrimSpace(recipientID) != "" && strings.TrimSpace(groupID) == "") || (strings.TrimSpace(recipientID) == "" && strings.TrimSpace(groupID) != "")
+}
+
+func validMediaPayload(payload messagecapability.MediaPayload) bool {
+	if payload.Reader == nil || strings.TrimSpace(payload.FileName) == "" || strings.ContainsAny(payload.FileName, "/\\\x00") || filepath.Base(payload.FileName) != payload.FileName {
+		return false
+	}
+	return true
 }
 
 // Context returns a daemon-private SDK context for a typed server API source.

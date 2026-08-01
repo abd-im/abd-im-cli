@@ -135,6 +135,32 @@ and the supplied member. Unit tests cover the manifest/grant/member allowlist
 intersection and preserve an `unknown` operation when no server result can be
 verified.
 
+## OpenIM Group Membership Integration
+
+`internal/capability/group` verifies member state through
+`/group/get_group_members_info` before quit, invite, or kick. Join uses the
+fixed server action directly because a non-member cannot read group members.
+The gate creates a disposable working group, has the member leave, then
+verifies invite, remove, and join with the two controlled accounts. The owner
+group remains after the test because group dismissal is not part of the public
+capability surface.
+
+- `ABDIM_OPENIM_API_ADDR`
+- `ABDIM_OPENIM_GROUP_MEMBERSHIP_OWNER_ID`
+- `ABDIM_OPENIM_GROUP_MEMBERSHIP_OWNER_TOKEN`
+- `ABDIM_OPENIM_GROUP_MEMBERSHIP_MEMBER_ID`
+- `ABDIM_OPENIM_GROUP_MEMBERSHIP_MEMBER_TOKEN`
+
+Run the gate with:
+
+```bash
+go test -tags=integration ./internal/capability/group -run TestOpenIMGroupMembershipIntegration
+```
+
+Unlike the older group-create gate, this test skips when its dedicated fixture
+variables are absent. It uses only short-lived IM tokens and never records the
+tokens, message bodies, or group member data.
+
 ## OpenIM Message Actions Integration
 
 `internal/capability/message` exercises the daemon-owned `UserContext`
@@ -161,6 +187,33 @@ Login` and only passes after each SDK delivery callback. Quote sends select the
 source message through the fixed authenticated history endpoint; @ sends first
 create a disposable controlled group containing the recipient. Unit and e2e
 tests cover method-scoped grants, idempotency and unknown-outcome behavior.
+
+## OpenIM Media Message Integration
+
+`internal/bridge/abdim` streams daemon-held image, file, sound, and video
+attachments into the narrow SDK sender. The provider supplies only opaque
+attachment references and display names; the SDK receives a temporary private
+upload path and cleans its cache after a confirmed callback.
+
+Use the same six environment variables as the message action gate:
+
+- `ABDIM_OPENIM_API_ADDR`
+- `ABDIM_OPENIM_WS_ADDR`
+- `ABDIM_OPENIM_USER_ID`
+- `ABDIM_OPENIM_TOKEN`
+- `ABDIM_OPENIM_PLATFORM_ID`
+- `ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID`
+
+Run the gate with:
+
+```bash
+go test -tags=integration ./internal/bridge/abdim -run TestAdapterMediaUploadIntegration
+```
+
+The gate uses generated disposable payloads and requires a confirmed SDK
+callback for all four media kinds. Unit and provider MCP tests cover attachment
+kind, run/grant/target binding, path rejection, idempotency, and unknown
+outcomes.
 
 ## OpenIM Mark Read Integration
 

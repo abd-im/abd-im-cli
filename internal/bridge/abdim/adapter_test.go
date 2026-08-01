@@ -1,13 +1,16 @@
 package abdim
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/reply"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk_callback"
@@ -335,6 +338,36 @@ func TestAdapterSendsLocationAndCustomMessagesToOneExplicitTarget(t *testing.T) 
 	}
 }
 
+func TestAdapterUploadsMediaFromDaemonPrivateStagingFiles(t *testing.T) {
+	user := &fakeUserContext{}
+	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
+	if err := adapter.InitSDK(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.InitResources(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.SendImage(context.Background(), messagecapability.MediaPayload{Reader: bytes.NewReader([]byte("image")), FileName: "photo.png"}, "user-2", ""); err != nil {
+		t.Fatalf("SendImage() error = %v", err)
+	}
+	if user.mediaKind != "image" || user.mediaPath == "" || !strings.HasPrefix(user.mediaPath, string(os.PathSeparator)+".abdim-media-") || user.replyRecipient != "user-2" {
+		t.Fatalf("SDK image = %+v", user)
+	}
+	if err := adapter.SendVideo(context.Background(), messagecapability.MediaPayload{Reader: bytes.NewReader([]byte("video")), FileName: "clip.mp4"}, messagecapability.MediaPayload{Reader: bytes.NewReader([]byte("thumbnail")), FileName: "cover.png"}, 8, "", "group-1"); err != nil {
+		t.Fatalf("SendVideo() error = %v", err)
+	}
+	if user.mediaKind != "video" || user.mediaType != "mp4" || user.mediaDuration != 8 || user.thumbnailPath == "" || user.replyGroup != "group-1" {
+		t.Fatalf("SDK video = %+v", user)
+	}
+	if err := adapter.SendFile(context.Background(), messagecapability.MediaPayload{Reader: bytes.NewReader([]byte("file")), FileName: "../../secret"}, "user-2", ""); err == nil {
+		t.Fatal("SendFile() accepted a path-like file name")
+	}
+}
+
 func testConfig(t *testing.T) Config {
 	t.Helper()
 	root := t.TempDir()
@@ -376,6 +409,11 @@ type fakeUserContext struct {
 	customData          string
 	customExtension     string
 	customDescription   string
+	mediaKind           string
+	mediaPath           string
+	thumbnailPath       string
+	mediaType           string
+	mediaDuration       int64
 }
 
 func (f *fakeUserContext) InitSDK(_ *sdk_struct.IMConfig, listener open_im_sdk_callback.OnConnListener) bool {
@@ -451,6 +489,55 @@ func (f *fakeUserContext) SendCustomMessage(ctx context.Context, callback open_i
 	f.customData = data
 	f.customExtension = extension
 	f.customDescription = description
+	callback.OnSuccess(`{}`)
+	return nil
+}
+
+func (f *fakeUserContext) SendImageMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, imagePath, recipientID, groupID string) error {
+	f.replyCallback = callback
+	f.replyContext = ctx
+	f.replyRecipient = recipientID
+	f.replyGroup = groupID
+	f.mediaKind = "image"
+	f.mediaPath = imagePath
+	callback.OnSuccess(`{}`)
+	return nil
+}
+
+func (f *fakeUserContext) SendFileMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, filePath, fileName, recipientID, groupID string) error {
+	f.replyCallback = callback
+	f.replyContext = ctx
+	f.replyRecipient = recipientID
+	f.replyGroup = groupID
+	f.mediaKind = "file"
+	f.mediaPath = filePath
+	f.customDescription = fileName
+	callback.OnSuccess(`{}`)
+	return nil
+}
+
+func (f *fakeUserContext) SendSoundMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, soundPath string, duration int64, recipientID, groupID string) error {
+	f.replyCallback = callback
+	f.replyContext = ctx
+	f.replyRecipient = recipientID
+	f.replyGroup = groupID
+	f.mediaKind = "sound"
+	f.mediaPath = soundPath
+	f.mediaDuration = duration
+	callback.OnSuccess(`{}`)
+	return nil
+}
+
+func (f *fakeUserContext) SendVideoMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, videoPath, videoType string, duration int64, snapshotPath, recipientID, groupID string) error {
+	f.replyCallback = callback
+	f.replyContext = ctx
+	f.replyRecipient = recipientID
+	f.replyGroup = groupID
+	f.mediaKind = "video"
+	f.mediaPath = videoPath
+	f.thumbnailPath = snapshotPath
+	f.mediaType = videoType
+	f.mediaDuration = duration
 	callback.OnSuccess(`{}`)
 	return nil
 }

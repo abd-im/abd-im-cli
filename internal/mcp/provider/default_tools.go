@@ -41,6 +41,13 @@ func DefaultTools(methods []string) []Tool {
 			Visible:     func() bool { return true },
 		})
 	}
+	for _, method := range []string{groupcapability.JoinMethod, groupcapability.LeaveMethod, groupcapability.InviteMembersMethod, groupcapability.RemoveMembersMethod} {
+		if _, exists := allowed[method]; !exists {
+			continue
+		}
+		description, schema := groupMembershipTool(method)
+		tools = append(tools, Tool{Name: "abdim." + method, Description: description, Method: method, InputSchema: schema, Visible: func() bool { return true }})
+	}
 	if _, exists := allowed[messagecapability.Method]; exists {
 		tools = append(tools, Tool{
 			Name:        "abdim." + messagecapability.Method,
@@ -85,6 +92,13 @@ func DefaultTools(methods []string) []Tool {
 			Name: "abdim." + messagecapability.RevokeMethod, Description: "Revoke one approved message sent by the profile owner.", Method: messagecapability.RevokeMethod,
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"conversation_id":{"type":"string","minLength":1,"maxLength":256},"message_id":{"type":"string","minLength":1,"maxLength":256},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["conversation_id","message_id","idempotency_key"]}`), Visible: func() bool { return true },
 		})
+	}
+	for _, method := range []string{messagecapability.ImageMethod, messagecapability.FileMethod, messagecapability.SoundMethod, messagecapability.VideoMethod} {
+		if _, exists := allowed[method]; !exists {
+			continue
+		}
+		description, schema := mediaTool(method)
+		tools = append(tools, Tool{Name: "abdim." + method, Description: description, Method: method, InputSchema: schema, Visible: func() bool { return true }})
 	}
 	if _, exists := allowed[conversationcapability.Method]; exists {
 		tools = append(tools, Tool{
@@ -133,5 +147,32 @@ func friendTool(method string) (string, json.RawMessage) {
 		return "Set one approved friend remark.", json.RawMessage(`{"type":"object","properties":{"user_id":{"type":"string","minLength":1,"maxLength":256},"remark":{"type":"string","maxLength":128},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["user_id","remark","idempotency_key"]}`)
 	default:
 		return "Delete one approved friend relationship.", json.RawMessage(`{"type":"object","properties":{"user_id":{"type":"string","minLength":1,"maxLength":256},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["user_id","idempotency_key"]}`)
+	}
+}
+
+func groupMembershipTool(method string) (string, json.RawMessage) {
+	switch method {
+	case groupcapability.JoinMethod:
+		return "Request to join one approved group.", json.RawMessage(`{"type":"object","properties":{"group_id":{"type":"string","minLength":1,"maxLength":256},"message":{"type":"string","maxLength":512},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["group_id","idempotency_key"]}`)
+	case groupcapability.LeaveMethod:
+		return "Leave one approved group.", json.RawMessage(`{"type":"object","properties":{"group_id":{"type":"string","minLength":1,"maxLength":256},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["group_id","idempotency_key"]}`)
+	case groupcapability.InviteMembersMethod:
+		return "Invite approved users to one approved group.", json.RawMessage(`{"type":"object","properties":{"group_id":{"type":"string","minLength":1,"maxLength":256},"user_ids":{"type":"array","minItems":1,"maxItems":50,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":256}},"reason":{"type":"string","maxLength":512},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["group_id","user_ids","idempotency_key"]}`)
+	default:
+		return "Remove approved users from one approved group.", json.RawMessage(`{"type":"object","properties":{"group_id":{"type":"string","minLength":1,"maxLength":256},"user_ids":{"type":"array","minItems":1,"maxItems":50,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":256}},"reason":{"type":"string","maxLength":512},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["group_id","user_ids","idempotency_key"]}`)
+	}
+}
+
+func mediaTool(method string) (string, json.RawMessage) {
+	target := `"recipient_id":{"type":"string","minLength":1},"group_id":{"type":"string","minLength":1}`
+	switch method {
+	case messagecapability.ImageMethod:
+		return "Send one approved image attachment to an approved user or group.", json.RawMessage(`{"type":"object","properties":{"attachment_ref":{"type":"string","minLength":8,"maxLength":128},"file_name":{"type":"string","minLength":1,"maxLength":255},` + target + `,"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["attachment_ref","file_name","idempotency_key"],"oneOf":[{"required":["recipient_id"]},{"required":["group_id"]}]}`)
+	case messagecapability.FileMethod:
+		return "Send one approved file attachment to an approved user or group.", json.RawMessage(`{"type":"object","properties":{"attachment_ref":{"type":"string","minLength":8,"maxLength":128},"file_name":{"type":"string","minLength":1,"maxLength":255},` + target + `,"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["attachment_ref","file_name","idempotency_key"],"oneOf":[{"required":["recipient_id"]},{"required":["group_id"]}]}`)
+	case messagecapability.SoundMethod:
+		return "Send one approved sound attachment to an approved user or group.", json.RawMessage(`{"type":"object","properties":{"attachment_ref":{"type":"string","minLength":8,"maxLength":128},"file_name":{"type":"string","minLength":1,"maxLength":255},"duration_seconds":{"type":"integer","minimum":1,"maximum":14400},` + target + `,"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["attachment_ref","file_name","duration_seconds","idempotency_key"],"oneOf":[{"required":["recipient_id"]},{"required":["group_id"]}]}`)
+	default:
+		return "Send one approved video attachment and image thumbnail to an approved user or group.", json.RawMessage(`{"type":"object","properties":{"attachment_ref":{"type":"string","minLength":8,"maxLength":128},"file_name":{"type":"string","minLength":1,"maxLength":255},"duration_seconds":{"type":"integer","minimum":1,"maximum":14400},"thumbnail_ref":{"type":"string","minLength":8,"maxLength":128},"thumbnail_file_name":{"type":"string","minLength":1,"maxLength":255},` + target + `,"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["attachment_ref","file_name","duration_seconds","thumbnail_ref","thumbnail_file_name","idempotency_key"],"oneOf":[{"required":["recipient_id"]},{"required":["group_id"]}]}`)
 	}
 }

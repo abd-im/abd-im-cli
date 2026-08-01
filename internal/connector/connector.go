@@ -134,6 +134,15 @@ func (p *Prepared) MessageCustomSender() (messagecapability.CustomSender, error)
 	return p.Adapter, nil
 }
 
+// MessageMediaSender exposes only the typed SDK media upload actions. The
+// attachment streams remain daemon-internal and are never provider paths.
+func (p *Prepared) MessageMediaSender() (messagecapability.MediaSender, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return p.Adapter, nil
+}
+
 // MessageQuoteSource exposes the fixed server history and narrow quote sender
 // as one daemon-owned action source. It has no local SDK database API.
 func (p *Prepared) MessageQuoteSource() (*messagecapability.OpenIMQuoteSource, error) {

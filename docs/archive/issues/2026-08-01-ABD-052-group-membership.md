@@ -1,6 +1,6 @@
 # ABD-052: Group Membership
 
-状态：`ready`
+状态：`completed`（2026-08-01）
 
 ## Outcome
 
@@ -23,6 +23,7 @@
 - leave、invite 和 remove 由固定 source/action 验证成员状态及操作者权限。
 - 每个方法有 operation/idempotency、未知结果 fail closed 和 integration gate。
 
-## Development Record
+## Verification
 
-尚未开始实现、验证或提交。
+- unit/proxy 和 HTTP contract 测试覆盖 manifest、group/user grant、角色与成员状态拒绝、operation/idempotency 和 unknown 终态；daemon/provider registry 只映射四个固定 typed methods。
+- 两账号受控 server gate 创建临时群后完成 leave、invite、remove 与 join；实现只调用固定 server source/action，不调用 SDK Group API。

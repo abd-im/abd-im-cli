@@ -136,6 +136,24 @@ func TestServerExposesTextAtWithItsIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestServerExposesMediaAndGroupMembershipTools(t *testing.T) {
+	proxy := &recordingProxy{}
+	server, err := New("work", "daemon-grant", proxy, DefaultTools([]string{"message.send_image", "group.invite_members"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = serve(server, strings.Join([]string{
+		encodeRequest("image", "tools/call", metaParams(`,"name":"abdim.message.send_image","arguments":{"attachment_ref":"attachment-1","file_name":"photo.png","recipient_id":"user-1","idempotency_key":"image-1"}`)),
+		encodeRequest("invite", "tools/call", metaParams(`,"name":"abdim.group.invite_members","arguments":{"group_id":"group-1","user_ids":["user-1"],"idempotency_key":"invite-1"}`)),
+	}, "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proxy.calls) != 2 || proxy.calls[0].Method != "message.send_image" || proxy.calls[0].IdempotencyKey != "image-1" || proxy.calls[1].Method != "group.invite_members" || proxy.calls[1].IdempotencyKey != "invite-1" {
+		t.Fatalf("media and membership calls = %+v", proxy.calls)
+	}
+}
+
 func TestServerExposesQuoteAndMarkReadWithTheirIdempotencyKeys(t *testing.T) {
 	proxy := &recordingProxy{}
 	server, err := New("work", "daemon-grant", proxy, DefaultTools([]string{"message.send_quote", "conversation.mark_read"}))

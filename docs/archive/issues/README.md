@@ -5,3 +5,5 @@
 | Issue | 完成 | 记录 |
 | --- | --- | --- |
 | ABD-046 | 2026-08-01 | [`2026-08-01-ABD-046-attachment-foundation.md`](2026-08-01-ABD-046-attachment-foundation.md) |
+| ABD-048 | 2026-08-01 | [`2026-08-01-ABD-048-media-messages.md`](2026-08-01-ABD-048-media-messages.md) |
+| ABD-052 | 2026-08-01 | [`2026-08-01-ABD-052-group-membership.md`](2026-08-01-ABD-052-group-membership.md) |

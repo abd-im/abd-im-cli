@@ -383,6 +383,10 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
+	groupMembershipActions, err := prepared.GroupMembershipActions()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
 	messageSender, err := prepared.MessageSender()
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -396,6 +400,10 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	messageCustomSender, err := prepared.MessageCustomSender()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	messageMediaSender, err := prepared.MessageMediaSender()
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -423,15 +431,29 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
+	messageAttachments, err := messagecapability.NewAttachmentStore(store, paths)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
 	groupOperations, err := operation.NewGuard(store)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	groupManifest, err := capability.New([]capability.Entry{{Method: groupcapability.Method, Scope: groupcapability.Scope, Status: capability.Available}})
+	groupManifest, err := capability.New([]capability.Entry{
+		{Method: groupcapability.Method, Scope: groupcapability.Scope, Status: capability.Available},
+		{Method: groupcapability.JoinMethod, Scope: groupcapability.JoinScope, Status: capability.Available},
+		{Method: groupcapability.LeaveMethod, Scope: groupcapability.LeaveScope, Status: capability.Available},
+		{Method: groupcapability.InviteMembersMethod, Scope: groupcapability.InviteMembersScope, Status: capability.Available},
+		{Method: groupcapability.RemoveMembersMethod, Scope: groupcapability.RemoveMembersScope, Status: capability.Available},
+	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	groupCreate, err := groupcapability.New(groupManifest, groupOperations, groupCreator)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	groupMembership, err := groupcapability.NewMembership(groupManifest, groupOperations, groupMembershipActions)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -442,6 +464,10 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		{Method: messagecapability.LocationMethod, Scope: messagecapability.LocationScope, Status: capability.Available},
 		{Method: messagecapability.CustomMethod, Scope: messagecapability.CustomScope, Status: capability.Available},
 		{Method: messagecapability.RevokeMethod, Scope: messagecapability.RevokeScope, Status: capability.Available},
+		{Method: messagecapability.ImageMethod, Scope: messagecapability.ImageScope, Status: capability.Available},
+		{Method: messagecapability.FileMethod, Scope: messagecapability.FileScope, Status: capability.Available},
+		{Method: messagecapability.SoundMethod, Scope: messagecapability.SoundScope, Status: capability.Available},
+		{Method: messagecapability.VideoMethod, Scope: messagecapability.VideoScope, Status: capability.Available},
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -467,6 +493,10 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	messageRevoke, err := messagecapability.NewRevoke(messageManifest, groupOperations, messageRevokeSource)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	messageMedia, err := messagecapability.NewMedia(messageManifest, groupOperations, messageAttachments, messageMediaSender)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -572,13 +602,19 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
+	methods := append(serviceMethods(services), groupCreate.ProxyMethod(), messageSend.ProxyMethod(), messageAt.ProxyMethod(), messageQuote.ProxyMethod(), messageLocation.ProxyMethod(), messageCustom.ProxyMethod(), messageRevoke.ProxyMethod())
+	methods = append(methods, groupMembership.ProxyMethods()...)
+	methods = append(methods, messageMedia.ProxyMethods()...)
+	methods = append(methods, conversationMarkRead.ProxyMethod(), conversationPinned.ProxyMethod(), conversationReceiveOption.ProxyMethod())
+	methods = append(methods, friendHandler.ProxyMethods()...)
+	methods = append(methods, blacklistHandler.ProxyMethods()...)
 	inbound, err := daemon.New(daemon.Config{
 		ProfileID: item.Name,
 		Ledger:    ledger,
 		Replies:   replies,
 		Runs:      runs,
 		Grants:    grant.NewStore(),
-		Methods:   append(append(serviceMethods(services), groupCreate.ProxyMethod(), messageSend.ProxyMethod(), messageAt.ProxyMethod(), messageQuote.ProxyMethod(), messageLocation.ProxyMethod(), messageCustom.ProxyMethod(), messageRevoke.ProxyMethod(), conversationMarkRead.ProxyMethod(), conversationPinned.ProxyMethod(), conversationReceiveOption.ProxyMethod()), append(friendHandler.ProxyMethods(), blacklistHandler.ProxyMethods()...)...),
+		Methods:   methods,
 		Policy: daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
 			return daemon.Decision{Principal: "codex", Methods: []string{"message.history"}, RateBudget: 1}, true, nil
 		}),
