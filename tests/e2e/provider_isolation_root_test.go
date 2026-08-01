@@ -25,7 +25,11 @@ func TestProviderSeparateUIDDeploymentGate(t *testing.T) {
 	}
 	uid := providerDeploymentID(t, "ABDIM_E2E_PROVIDER_UID")
 	gid := providerDeploymentID(t, "ABDIM_E2E_PROVIDER_GID")
-	root := t.TempDir()
+	root, err := os.MkdirTemp("", "abdim-provider-isolation-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	if err := os.Chmod(root, 0o755); err != nil {
 		t.Fatal(err)
 	}

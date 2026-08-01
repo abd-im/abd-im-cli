@@ -135,7 +135,7 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 		cancel()
 		_ = mcpBridge.Close()
 		cleanup()
-		return nil, errors.New("start Codex app-server")
+		return nil, fmt.Errorf("start Codex app-server: %w", err)
 	}
 
 	session := &session{

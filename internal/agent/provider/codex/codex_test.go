@@ -129,6 +129,18 @@ func TestNewRequiresIsolatedCompositionInputs(t *testing.T) {
 	}
 }
 
+func TestAdapterPreservesAppServerStartError(t *testing.T) {
+	adapter := newAdapter(t, "", false)
+	script := filepath.Join(t.TempDir(), "broken-codex")
+	if err := os.WriteFile(script, []byte("#!/missing/interpreter\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	adapter.config.Executable = script
+	if _, err := adapter.Start(context.Background(), startRequest()); err == nil || !strings.Contains(err.Error(), "start Codex app-server:") {
+		t.Fatalf("Start() error = %v, want app-server start cause", err)
+	}
+}
+
 func newAdapter(t *testing.T, capture string, block bool) *Adapter {
 	return newAdapterWithRunner(t, capture, block, testRunner{})
 }
