@@ -9,6 +9,7 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/bridge"
 	"github.com/abd-im/abd-im-cli/internal/bridge/abdim"
+	conversationcapability "github.com/abd-im/abd-im-cli/internal/capability/conversation"
 	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
 	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
@@ -106,6 +107,36 @@ func (p *Prepared) MessageSender() (messagecapability.Sender, error) {
 		return nil, errors.New("prepared daemon adapter is required")
 	}
 	return p.Adapter, nil
+}
+
+// MessageAtSender exposes only the daemon-owned text-at sender to the
+// message capability. It does not expose a general SDK conversation API.
+func (p *Prepared) MessageAtSender() (messagecapability.AtSender, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return p.Adapter, nil
+}
+
+// MessageQuoteSource exposes the fixed server history and narrow quote sender
+// as one daemon-owned action source. It has no local SDK database API.
+func (p *Prepared) MessageQuoteSource() (*messagecapability.OpenIMQuoteSource, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return messagecapability.NewOpenIMQuoteSource(messageservice.OpenIMClient{Context: p.Adapter.Context}, p.Adapter, p.userID)
+}
+
+// ConversationMarkRead exposes the fixed server message-boundary read and
+// mark-conversation-as-read action without exposing SDK local state.
+func (p *Prepared) ConversationMarkRead() (*conversationcapability.OpenIMMarkRead, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return conversationcapability.NewOpenIMMarkRead(conversationcapability.OpenIMMarkRead{
+		Context: p.Adapter.Context,
+		Client:  messageservice.OpenIMClient{Context: p.Adapter.Context},
+	})
 }
 
 // ConversationSource exposes the verified server-read conversation facade

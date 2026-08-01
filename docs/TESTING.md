@@ -135,12 +135,13 @@ and the supplied member. Unit tests cover the manifest/grant/member allowlist
 intersection and preserve an `unknown` operation when no server result can be
 verified.
 
-## OpenIM Text Send Integration
+## OpenIM Message Actions Integration
 
 `internal/capability/message` exercises the daemon-owned `UserContext`
-lifecycle and its `SendTextMessage` callback path. It sends one timestamped
-text to a distinct controlled account, so never use a production recipient.
-The configured platform must match the short-lived token's platform.
+lifecycle and the fixed server-read message source. It sends a text and quote
+to a distinct controlled account, then creates a disposable controlled group
+and sends one @ message to that account. The configured platform must match
+the short-lived token's platform.
 
 - `ABDIM_OPENIM_API_ADDR`
 - `ABDIM_OPENIM_WS_ADDR`
@@ -152,13 +153,39 @@ The configured platform must match the short-lived token's platform.
 Run the gate with:
 
 ```bash
-go test -tags=integration ./internal/capability/message -run TestOpenIMTextSendIntegration
+go test -tags=integration ./internal/capability/message -run 'TestOpenIM(TextSend|QuoteSend|TextAt)Integration'
 ```
 
 The gate reaches `ready` through `InitSDK -> InitResources -> listener ->
-Login` and only passes after the SDK reports the text delivery callback. The
-message action handler's no-retry behavior is covered by its unit and e2e
-tests; this controlled test only verifies the pinned SDK/server send path.
+Login` and only passes after each SDK delivery callback. Quote sends select the
+source message through the fixed authenticated history endpoint; @ sends first
+create a disposable controlled group containing the recipient. Unit and e2e
+tests cover method-scoped grants, idempotency and unknown-outcome behavior.
+
+## OpenIM Mark Read Integration
+
+`internal/capability/conversation` sends three disposable controlled messages,
+resolves ordered server sequence boundaries through `/msg/pull_msg_by_seq`, and
+calls the fixed `/msg/mark_conversation_as_read` action. The provider-facing
+method never accepts a server sequence.
+
+Use the same six environment variables as the message action gate:
+
+- `ABDIM_OPENIM_API_ADDR`
+- `ABDIM_OPENIM_WS_ADDR`
+- `ABDIM_OPENIM_USER_ID`
+- `ABDIM_OPENIM_TOKEN`
+- `ABDIM_OPENIM_PLATFORM_ID`
+- `ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID`
+
+Run the gate with:
+
+```bash
+go test -tags=integration ./internal/capability/conversation -run TestOpenIMMarkReadIntegration
+```
+
+The test changes only the controlled account's read marker. Unit and e2e tests
+verify grant target, finite window, idempotency and unknown-outcome semantics.
 
 ## OpenIM Profile Integration
 

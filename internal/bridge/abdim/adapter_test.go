@@ -250,6 +250,58 @@ func TestAdapterSendsTextToOneExplicitTarget(t *testing.T) {
 	}
 }
 
+func TestAdapterSendsTextAtToExplicitGroupAndUsers(t *testing.T) {
+	user := &fakeUserContext{}
+	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
+	if err := adapter.InitSDK(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.InitResources(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.SendAt(context.Background(), "attention", "group-1", []string{"user-2", "user-3"}); err != nil {
+		t.Fatalf("SendAt() error = %v", err)
+	}
+	if user.replyGroup != "group-1" || user.replyText != "attention" || len(user.atMentionUserIDs) != 2 || user.atMentionUserIDs[0] != "user-2" || user.atMentionUserIDs[1] != "user-3" {
+		t.Fatalf("SDK text-at target = %+v", user)
+	}
+	if err := adapter.SendAt(context.Background(), "must fail", "", []string{"user-2"}); err == nil {
+		t.Fatal("SendAt() accepted an empty group")
+	}
+}
+
+func TestAdapterSendsVerifiedQuoteToOneExplicitTarget(t *testing.T) {
+	user := &fakeUserContext{}
+	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
+	if err := adapter.InitSDK(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.InitResources(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	quoted := &sdk_struct.MsgStruct{ServerMsgID: "quoted-1"}
+	if err := adapter.SendQuote(context.Background(), "reply", "user-2", "", quoted); err != nil {
+		t.Fatalf("SendQuote() error = %v", err)
+	}
+	if user.replyRecipient != "user-2" || user.replyGroup != "" || user.replyText != "reply" || user.quotedMessage != quoted {
+		t.Fatalf("SDK quote target = %+v", user)
+	}
+	if err := adapter.SendQuote(context.Background(), "reply", "user-2", "group-1", quoted); err == nil {
+		t.Fatal("SendQuote() accepted an ambiguous target")
+	}
+	if err := adapter.SendQuote(context.Background(), "reply", "user-2", "", nil); err == nil {
+		t.Fatal("SendQuote() accepted a missing quote source")
+	}
+}
+
 func testConfig(t *testing.T) Config {
 	t.Helper()
 	root := t.TempDir()
@@ -268,21 +320,23 @@ func testConfig(t *testing.T) Config {
 }
 
 type fakeUserContext struct {
-	listener        open_im_sdk_callback.OnConnListener
-	messageListener open_im_sdk_callback.OnAdvancedMsgListener
-	loginErr        error
-	loginCalled     bool
-	loginTokenSet   bool
-	loginContext    context.Context
-	connectOnLogin  bool
-	logoutCalled    bool
-	uninitialized   bool
-	logoutContext   context.Context
-	replyCallback   open_im_sdk_callback.SendMsgCallBack
-	replyContext    context.Context
-	replyText       string
-	replyRecipient  string
-	replyGroup      string
+	listener         open_im_sdk_callback.OnConnListener
+	messageListener  open_im_sdk_callback.OnAdvancedMsgListener
+	loginErr         error
+	loginCalled      bool
+	loginTokenSet    bool
+	loginContext     context.Context
+	connectOnLogin   bool
+	logoutCalled     bool
+	uninitialized    bool
+	logoutContext    context.Context
+	replyCallback    open_im_sdk_callback.SendMsgCallBack
+	replyContext     context.Context
+	replyText        string
+	replyRecipient   string
+	replyGroup       string
+	atMentionUserIDs []string
+	quotedMessage    *sdk_struct.MsgStruct
 }
 
 func (f *fakeUserContext) InitSDK(_ *sdk_struct.IMConfig, listener open_im_sdk_callback.OnConnListener) bool {
@@ -312,6 +366,28 @@ func (f *fakeUserContext) SendTextMessage(ctx context.Context, callback open_im_
 	f.replyText = text
 	f.replyRecipient = recipientID
 	f.replyGroup = groupID
+	callback.OnSuccess(`{}`)
+	return nil
+}
+
+func (f *fakeUserContext) SendAtMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, text, groupID string, mentionUserIDs []string) error {
+	f.replyCallback = callback
+	f.replyContext = ctx
+	f.replyText = text
+	f.replyRecipient = ""
+	f.replyGroup = groupID
+	f.atMentionUserIDs = append([]string(nil), mentionUserIDs...)
+	callback.OnSuccess(`{}`)
+	return nil
+}
+
+func (f *fakeUserContext) SendQuoteMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, text, recipientID, groupID string, quoted *sdk_struct.MsgStruct) error {
+	f.replyCallback = callback
+	f.replyContext = ctx
+	f.replyText = text
+	f.replyRecipient = recipientID
+	f.replyGroup = groupID
+	f.quotedMessage = quoted
 	callback.OnSuccess(`{}`)
 	return nil
 }

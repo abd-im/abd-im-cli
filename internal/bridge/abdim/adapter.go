@@ -45,8 +45,37 @@ type userContext interface {
 	SetAdvancedMsgListener(open_im_sdk_callback.OnAdvancedMsgListener)
 	Login(context.Context, string, string) error
 	SendTextMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string) error
+	SendAtMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, []string) error
+	SendQuoteMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string, *sdk_struct.MsgStruct) error
 	Logout(context.Context) error
 	UnInitSDK()
+}
+
+type sdkUserContext struct{ *open_im_sdk.UserContext }
+
+func newSDKUserContext() userContext { return sdkUserContext{open_im_sdk.NewLoginMgr()} }
+
+func (u sdkUserContext) SendAtMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, text, groupID string, mentionUserIDs []string) error {
+	message, err := u.Conversation().CreateTextAtMessage(ctx, text, mentionUserIDs, nil, nil)
+	if err != nil {
+		return err
+	}
+	ctx = ccontext.WithSendMessageCallback(ctx, callback)
+	_, err = u.Conversation().SendMessageNotOss(ctx, message, "", groupID, nil, false)
+	return err
+}
+
+func (u sdkUserContext) SendQuoteMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, text, recipientID, groupID string, quoted *sdk_struct.MsgStruct) error {
+	if quoted == nil {
+		return errors.New("quoted message is required")
+	}
+	message, err := u.Conversation().CreateQuoteMessage(ctx, text, quoted)
+	if err != nil {
+		return err
+	}
+	ctx = ccontext.WithSendMessageCallback(ctx, callback)
+	_, err = u.Conversation().SendMessageNotOss(ctx, message, recipientID, groupID, nil, false)
+	return err
 }
 
 // Adapter is the sole owner of one SDK UserContext. Its Context method is for
@@ -74,7 +103,7 @@ type Adapter struct {
 // New creates an adapter that constructs a fresh SDK UserContext through the
 // forked SDK's NewLoginMgr function when bridge.LoginMgr starts it.
 func New(config Config) (*Adapter, error) {
-	return newAdapter(config, func() userContext { return open_im_sdk.NewLoginMgr() })
+	return newAdapter(config, newSDKUserContext)
 }
 
 func newAdapter(config Config, factory func() userContext) (*Adapter, error) {
@@ -274,6 +303,61 @@ func (a *Adapter) SendText(ctx context.Context, text, recipientID, groupID strin
 	sendContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
 	if err := user.SendTextMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), callback, text, recipientID, groupID); err != nil {
 		return errors.New("OpenIM message send submission failed")
+	}
+	select {
+	case err := <-callback.done:
+		return err
+	case <-ctx.Done():
+		return operation.ErrOutcomeUnknown
+	}
+}
+
+// SendAt delivers a grant-authorized text message that mentions approved
+// users in one approved group. The message capability validates all targets
+// before this daemon-owned SDK call.
+func (a *Adapter) SendAt(ctx context.Context, text, groupID string, mentionUserIDs []string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if strings.TrimSpace(text) == "" || len(text) > 4096 || strings.TrimSpace(groupID) == "" || len(mentionUserIDs) == 0 || len(mentionUserIDs) > 10 {
+		return errors.New("invalid text-at message delivery")
+	}
+	user, err := a.currentUser()
+	if err != nil {
+		return err
+	}
+	callback := newSendCallback()
+	config := a.config
+	sendContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
+	if err := user.SendAtMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), callback, text, groupID, append([]string(nil), mentionUserIDs...)); err != nil {
+		return errors.New("OpenIM message at submission failed")
+	}
+	select {
+	case err := <-callback.done:
+		return err
+	case <-ctx.Done():
+		return operation.ErrOutcomeUnknown
+	}
+}
+
+// SendQuote delivers a quote whose source message was retrieved and verified
+// by a daemon-owned server source. Providers cannot supply the SDK message.
+func (a *Adapter) SendQuote(ctx context.Context, text, recipientID, groupID string, quoted *sdk_struct.MsgStruct) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if strings.TrimSpace(text) == "" || len(text) > 4096 || quoted == nil || (strings.TrimSpace(recipientID) == "" && strings.TrimSpace(groupID) == "") || (strings.TrimSpace(recipientID) != "" && strings.TrimSpace(groupID) != "") {
+		return errors.New("invalid quote message delivery")
+	}
+	user, err := a.currentUser()
+	if err != nil {
+		return err
+	}
+	callback := newSendCallback()
+	config := a.config
+	sendContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
+	if err := user.SendQuoteMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), callback, text, recipientID, groupID, quoted); err != nil {
+		return errors.New("OpenIM message quote submission failed")
 	}
 	select {
 	case err := <-callback.done:

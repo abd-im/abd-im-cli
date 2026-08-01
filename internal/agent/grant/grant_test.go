@@ -88,3 +88,28 @@ func TestTargetsAreScopedToMethodAndResource(t *testing.T) {
 		t.Fatal("Issue() accepted targets for an ungranted method")
 	}
 }
+
+func TestMessageTargetsCannotBeUsedAsConversationTargets(t *testing.T) {
+	store := NewStore()
+	_, credential, err := store.Issue(Policy{
+		RunID:     "run-1",
+		ProfileID: "work",
+		Principal: "provider",
+		Methods:   []string{"message.send_quote"},
+		Scopes:    []string{"message.send_quote"},
+		TargetAllowlists: map[string][]string{
+			"message.send_quote": {ConversationTarget("shared-id"), MessageTarget("shared-id")},
+		},
+		ExpiresAt:  time.Now().Add(time.Hour),
+		RateBudget: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Authorize(credential, "run-1", "work", "message.send_quote", "message.send_quote", []string{UserTarget("shared-id")}); !errors.Is(err, ErrTargetDenied) {
+		t.Fatalf("user target accepted for quote: %v", err)
+	}
+	if _, err := store.Authorize(credential, "run-1", "work", "message.send_quote", "message.send_quote", []string{ConversationTarget("shared-id"), MessageTarget("shared-id")}); err != nil {
+		t.Fatalf("quote targets not authorized: %v", err)
+	}
+}

@@ -121,6 +121,39 @@ func TestServerExposesTextSendWithItsIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestServerExposesTextAtWithItsIdempotencyKey(t *testing.T) {
+	proxy := &recordingProxy{}
+	server, err := New("work", "daemon-grant", proxy, DefaultTools([]string{"message.send_at"}))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, err = serve(server, encodeRequest("call", "tools/call", metaParams(`,"name":"abdim.message.send_at","arguments":{"text":"hello","group_id":"group-1","mention_user_ids":["user-1"],"idempotency_key":"at-1"}`)))
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if len(proxy.calls) != 1 || proxy.calls[0].Method != "message.send_at" || proxy.calls[0].IdempotencyKey != "at-1" {
+		t.Fatalf("message.send_at request = %+v", proxy.calls)
+	}
+}
+
+func TestServerExposesQuoteAndMarkReadWithTheirIdempotencyKeys(t *testing.T) {
+	proxy := &recordingProxy{}
+	server, err := New("work", "daemon-grant", proxy, DefaultTools([]string{"message.send_quote", "conversation.mark_read"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = serve(server, strings.Join([]string{
+		encodeRequest("quote", "tools/call", metaParams(`,"name":"abdim.message.send_quote","arguments":{"text":"reply","recipient_id":"user-1","conversation_id":"si_user-1_user-2","message_id":"message-1","idempotency_key":"quote-1"}`)),
+		encodeRequest("read", "tools/call", metaParams(`,"name":"abdim.conversation.mark_read","arguments":{"conversation_id":"si_user-1_user-2","up_to_message_id":"message-1","idempotency_key":"read-1"}`)),
+	}, "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proxy.calls) != 2 || proxy.calls[0].Method != "message.send_quote" || proxy.calls[0].IdempotencyKey != "quote-1" || proxy.calls[1].Method != "conversation.mark_read" || proxy.calls[1].IdempotencyKey != "read-1" {
+		t.Fatalf("action requests = %+v", proxy.calls)
+	}
+}
+
 func TestDefaultToolsIgnoreMethodsOutsideFixedRegistry(t *testing.T) {
 	tools := DefaultTools([]string{"message.history", "daemon.shutdown", "sdk.call"})
 	if len(tools) != 1 || tools[0].Name != "abdim.message.history" {

@@ -22,6 +22,7 @@ import (
 	runmanager "github.com/abd-im/abd-im-cli/internal/agent/run"
 	"github.com/abd-im/abd-im-cli/internal/bridge"
 	"github.com/abd-im/abd-im-cli/internal/capability"
+	conversationcapability "github.com/abd-im/abd-im-cli/internal/capability/conversation"
 	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
 	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/cli"
@@ -384,6 +385,18 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
+	messageAtSender, err := prepared.MessageAtSender()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	messageQuoteSource, err := prepared.MessageQuoteSource()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	conversationMarkReadSource, err := prepared.ConversationMarkRead()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
 	groupOperations, err := operation.NewGuard(store)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -396,11 +409,31 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	messageManifest, err := capability.New([]capability.Entry{{Method: messagecapability.Method, Scope: messagecapability.Scope, Status: capability.Available}})
+	messageManifest, err := capability.New([]capability.Entry{
+		{Method: messagecapability.Method, Scope: messagecapability.Scope, Status: capability.Available},
+		{Method: messagecapability.AtMethod, Scope: messagecapability.AtScope, Status: capability.Available},
+		{Method: messagecapability.QuoteMethod, Scope: messagecapability.QuoteScope, Status: capability.Available},
+	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	messageSend, err := messagecapability.New(messageManifest, groupOperations, messageSender)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	messageAt, err := messagecapability.NewAt(messageManifest, groupOperations, messageAtSender)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	messageQuote, err := messagecapability.NewQuote(messageManifest, groupOperations, messageQuoteSource, messageQuoteSource)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	conversationManifest, err := capability.New([]capability.Entry{{Method: conversationcapability.Method, Scope: conversationcapability.Scope, Status: capability.Available}})
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	conversationMarkRead, err := conversationcapability.New(conversationManifest, groupOperations, conversationMarkReadSource, conversationMarkReadSource)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -468,7 +501,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		Replies:   replies,
 		Runs:      runs,
 		Grants:    grant.NewStore(),
-		Methods:   append(serviceMethods(services), groupCreate.ProxyMethod(), messageSend.ProxyMethod()),
+		Methods:   append(serviceMethods(services), groupCreate.ProxyMethod(), messageSend.ProxyMethod(), messageAt.ProxyMethod(), messageQuote.ProxyMethod(), conversationMarkRead.ProxyMethod()),
 		Policy: daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
 			return daemon.Decision{Principal: "codex", Methods: []string{"message.history"}, RateBudget: 1}, true, nil
 		}),

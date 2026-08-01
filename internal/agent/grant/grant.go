@@ -25,6 +25,7 @@ var (
 const (
 	TargetConversation = "conversation"
 	TargetGroup        = "group"
+	TargetMessage      = "message"
 	TargetUser         = "user"
 )
 
@@ -39,6 +40,7 @@ func Target(resource, id string) string {
 
 func ConversationTarget(id string) string { return Target(TargetConversation, id) }
 func GroupTarget(id string) string        { return Target(TargetGroup, id) }
+func MessageTarget(id string) string      { return Target(TargetMessage, id) }
 func UserTarget(id string) string         { return Target(TargetUser, id) }
 
 // MessageWindow limits the history made available to a provider run.

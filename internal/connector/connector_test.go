@@ -57,6 +57,15 @@ func TestPrepareResolvesCredentialWithoutStartingSDK(t *testing.T) {
 	if sender, err := prepared.MessageSender(); err != nil || sender == nil {
 		t.Fatalf("MessageSender() = %v, %v", sender, err)
 	}
+	if sender, err := prepared.MessageAtSender(); err != nil || sender == nil {
+		t.Fatalf("MessageAtSender() = %v, %v", sender, err)
+	}
+	if source, err := prepared.MessageQuoteSource(); err != nil || source == nil {
+		t.Fatalf("MessageQuoteSource() = %v, %v", source, err)
+	}
+	if action, err := prepared.ConversationMarkRead(); err != nil || action == nil {
+		t.Fatalf("ConversationMarkRead() = %v, %v", action, err)
+	}
 	if source, err := prepared.ConversationSource(); err != nil || source == nil {
 		t.Fatalf("ConversationSource() = %v, %v", source, err)
 	}

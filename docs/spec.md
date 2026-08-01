@@ -161,7 +161,7 @@ P1 只在同一 daemon 生命周期内复用 provider session；重启中的 tur
 | --- | --- | --- |
 | P0 | SDK 日志脱敏、v1 IPC/error/event schema、fake SDK/provider/proxy、生命周期 contract test | 测试日志无真实 token；无凭据环境可覆盖协议和生命周期。 |
 | P1 | 一 profile daemon、event ledger、reply slot、单 provider bot、run proxy、profile/user/conversation/message/friend/blacklist/group typed 读取能力、capability manifest、首个 `group.create` handler、最小 operation/idempotency | 私聊仅向原会话回复一次；Agent 只可使用 grant 允许的能力；副作用未知结果 fail closed。 |
-| P2 | 通用文本/引用/@ 发送、mark-read、受控附件基础设施和更多 verified action handler | 同幂等键只创建一个消息；超时或崩溃不静默产生第二条。 |
+| P2 | `message.send_text`、`message.send_quote`、`message.send_at`、`conversation.mark_read`、受控附件基础设施和更多 verified action handler | 同幂等键只创建一个消息；超时或崩溃不静默产生第二条。 |
 | P3 | 媒体/文件、会话设置、好友/黑名单和群组写入 | 每项公开能力都有 schema、scope、approval、integration test 和 capability 状态。 |
 | P4 | 多 provider、兼容矩阵、session migration 和高级 run 运维 | 不改变 P1 的 reply target、调用模型或授权边界。 |
 
