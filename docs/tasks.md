@@ -6,7 +6,7 @@
 
 **输入**：[`spec.md`](spec.md) 的 US、FR 和 SC。
 
-**测试**：每个实现 task 的完成条件都必须有自动化验证；P1 发布门禁由 `ABD-032` 至 `ABD-034` 共同执行。
+**测试**：每个实现 task 的完成条件都必须有自动化验证；P1 发布门禁由 `ABD-032`、`ABD-038` 至 `ABD-040` 共同执行。
 
 **格式**：`[P]` 表示在其依赖完成后可与其他 `[P]` task 并行，`US-*` 追溯到用户场景。路径是该 task 的预期代码所有权，变更路径时必须保留同等隔离和验收条件。
 
@@ -48,13 +48,9 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与路径 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | ABD-035 | ready | US-02 | 在 `internal/capability/groupcreate/`、`internal/connector/` 和 `cmd/abdim/` 将 `group.create` 接至 daemon-owned、经认证的 server action source，并建立 integration gate。 | ABD-012, ABD-024 | SDK 本地同步 API 不可达；handler 仅由 manifest 与 grant 共同开放，server 请求只带 owner 和 allowlisted member IDs。 |
-| [ ] | ABD-036 | ready | US-02 | 在 `tests/e2e/` 验证 provider 的 grant-bound typed message reads、会话/目标限制与消息窗口。 | ABD-009, ABD-015, ABD-025, ABD-027 至 ABD-031 | SC-004 可自动验证。 |
-| [ ] | ABD-037 | ready | US-02 | 在 `tests/e2e/` 验证 `group.create` 的 allowlist、operation/idempotency 与未知结果恢复。 | ABD-035 | SC-005 可自动验证。 |
-| [ ] | ABD-034 | ready | US-01, US-02 | 在 `tests/e2e/` 验证 provider 隔离、撤销/权限变化/过期取消和 token/message privacy 回归。 | ABD-003, ABD-009 至 ABD-011, ABD-025 至 ABD-026, ABD-032, ABD-036, ABD-037 | SC-006 至 SC-008 可自动验证。 |
 
-**当前状态**：`ABD-024` 至 `ABD-032` 已完成 daemon、provider deployment boundary、全部 P1 typed server-read source 接线和 runtime/inbound e2e gate；每个可用 source 都有固定 SDK/server integration gate。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。发现 `group.create` 尚未接入 daemon-owned action source，故原 `ABD-033` 已拆为 `ABD-035` 至 `ABD-037`；它们与 `ABD-034` 是首个发布版本剩余的门禁。
+**当前状态**：`ABD-024` 至 `ABD-032`、`ABD-035` 至 `ABD-040` 已完成 daemon、provider deployment boundary、全部 P1 typed server-read/action source 及 runtime/inbound、grant-bound message、action recovery、provider isolation、cancellation、privacy e2e gate。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。`group.create` 只经 daemon-owned `/group/create_group` 调用，默认入站 policy 不授予该写入方法。首个发布版本的自动化门禁已经完成；受控 OpenIM 与 root deployment gate 由发布环境执行。
 
 ## 执行顺序
 
-`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。US-02 先交付 capability 执行面和首个 action handler，再由共享 typed read service 同时补齐 US-02 与 US-03；`ABD-024` 至 `ABD-032` 已完成 daemon、provider MCP、部署边界、全部 P1 server-read source 及 lifecycle/inbound e2e。`ABD-035` 完成后，`ABD-036` 与 `ABD-037` 可独立执行；`ABD-034` 在两者完成后组成发布门禁。
+`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。US-02 先交付 capability 执行面和首个 action handler，再由共享 typed read service 同时补齐 US-02 与 US-03；`ABD-024` 至 `ABD-032`、`ABD-035` 至 `ABD-040` 已完成 daemon、provider MCP、部署边界、全部 P1 server-read/action source 及 lifecycle/inbound/grant/action/isolation/cancellation/privacy e2e。下一项工作必须以新的活动 task 进入本清单。

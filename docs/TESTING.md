@@ -9,17 +9,72 @@ go vet ./...
 
 ## P1 Runtime E2E
 
-`tests/e2e/runtime_inbound_reply_test.go` is a no-credential, in-process P1
-gate and is included in `go test ./...`. It composes the daemon runtime with
-the shared fake SDK/provider, verifies the profile lock before SDK allocation,
-then verifies the ready Unix socket, callback deduplication, one reply slot and
-event-bound reply. It reopens the control database and verifies restart work is
-recorded as `state.reconciled`, not as a fabricated inbound message.
+`tests/e2e/runtime_inbound_reply_test.go` and
+`tests/e2e/grant_bound_message_reads_test.go` are no-credential, in-process P1
+gates included in `go test ./...`. The runtime gate composes the daemon runtime
+with the shared fake SDK/provider, verifies the profile lock before SDK
+allocation, then verifies the ready Unix socket, callback deduplication, one
+reply slot and event-bound reply. It reopens the control database and verifies
+restart work is recorded as `state.reconciled`, not as a fabricated inbound
+message. The grant gate composes a real run-private proxy, grant store, and
+typed message service to verify policy tool selection, conversation targets,
+and the after/before message window for history, search, and get.
+`tests/e2e/group_create_operation_test.go` composes the real run-private
+proxy, operation guard, and control database to verify the group member
+allowlist, idempotency conflict behavior, and that an unknown action remains
+non-retryable after reopening the database.
 
 Run it directly with:
 
 ```bash
 go test ./tests/e2e -run TestRuntimeInboundReplyE2E
+```
+
+## Provider Isolation E2E
+
+`tests/e2e/provider_mcp_boundary_test.go` launches the fixed Codex adapter
+against a helper process. It verifies that a run creates a fresh `CODEX_HOME`,
+does not inherit the provider's source MCP configuration, exposes only the
+allowed MCP tool snapshot through one run-private socket, and removes the run
+directory after close.
+
+```bash
+go test ./tests/e2e -run TestProviderRunPrivateMCPBoundaryE2E
+```
+
+The release launcher gate is tagged because it requires a root-owned daemon
+process. Supply an existing non-root provider UID/GID in a controlled CI or
+deployment host; the test starts the helper under that identity and verifies
+the run paths and socket ownership.
+
+```bash
+sudo env ABDIM_E2E_PROVIDER_UID="$ABDIM_PROVIDER_UID" \
+  ABDIM_E2E_PROVIDER_GID="$ABDIM_PROVIDER_GID" \
+  go test -tags=e2e ./tests/e2e -run TestProviderSeparateUIDDeploymentGate
+```
+
+## Run Cancellation E2E
+
+`tests/e2e/run_cancellation_test.go` uses the event-bound inbound path to
+verify that a policy change cancels an active provider, revokes its private
+proxy, and suppresses its reply. A companion run-manager case verifies the
+`grant_expired` terminal status and proxy closure at grant expiry.
+
+```bash
+go test ./tests/e2e -run 'Test(PolicyChangeCancelsEventBoundRunAndRevokesProxyE2E|GrantExpiryCancelsRunAndClosesProxyE2E)'
+```
+
+## Privacy Regression E2E
+
+`tests/e2e/privacy_regression_test.go` injects token and inbound-body markers
+through the runtime callback path. It verifies that the markers are absent from
+the control database, durable ledger, owner RPC response, and reply. It also
+checks the SDK, HTTP, WebSocket, stderr, and audit logging surfaces. The
+run-private provider configuration test additionally verifies that source
+Codex configuration markers are not inherited.
+
+```bash
+go test ./tests/e2e -run TestTokenAndInboundBodyStayOutOfVisibleBoundariesE2E
 ```
 
 ## OpenIM Group Integration
@@ -52,6 +107,29 @@ go test -tags=integration ./internal/service/group -run TestOpenIMGroupReadsInte
 The tagged test fails if any required variable is absent. It exercises group
 list/get/search and member list/search through the typed service and validates
 the response schema and capability metadata. It does not create or modify data.
+
+## OpenIM Group Create Integration
+
+`internal/capability/groupcreate` calls the authenticated
+`/group/create_group` action without using the SDK local synchronization API.
+This gate creates one group, so use a disposable owner account and a distinct,
+pre-provisioned disposable member. Do not use a production account.
+
+- `ABDIM_OPENIM_API_ADDR`
+- `ABDIM_OPENIM_USER_ID`
+- `ABDIM_OPENIM_TOKEN`
+- `ABDIM_OPENIM_GROUP_CREATE_MEMBER_ID`
+
+Run the gate with:
+
+```bash
+go test -tags=integration ./internal/capability/groupcreate -run TestOpenIMGroupCreateIntegration
+```
+
+The test verifies the fixed server action with the authenticated user as owner
+and the supplied member. Unit tests cover the manifest/grant/member allowlist
+intersection and preserve an `unknown` operation when no server result can be
+verified.
 
 ## OpenIM Profile Integration
 

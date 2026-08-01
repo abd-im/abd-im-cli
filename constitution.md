@@ -30,6 +30,10 @@ Deliver every active task and its acceptance criteria. When requirements or inte
 
 Direct user instructions supersede this document. Record every durable user correction here in the same turn, in concise and project-agnostic form; the newest instruction wins.
 
+### Commit Cadence
+
+Group related, verified work into meaningful delivery milestones; do not create a separate commit for every independently completed task unless the user requests that cadence.
+
 ### IX. Mainline Priority
 Security and logging follow-up work must be tracked separately and must not interrupt active mainline feature delivery unless the user explicitly elevates it to a release blocker.
 

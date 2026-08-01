@@ -168,3 +168,13 @@ The social source uses `/friend/get_friend_list`,
 the requested `userID` or `ownerUserID`; lists are read page by page from the
 server and `friend.search` filters only that authenticated friend result.
 Neither friend nor blacklist reads call SDK local-table APIs.
+
+`group.create` calls the authenticated `/group/create_group` server action
+directly through the daemon-owned SDK context. It fixes `OwnerUserID` to the
+authenticated daemon user, fixes the group type to `WorkingGroup`, and copies
+only the handler input's allowlisted member IDs. It does not call the SDK
+`Group.CreateGroup` convenience API because that API synchronizes local SDK
+state after a successful request. Network, HTTP-status, or undecodable-response
+failures remain `unknown` operations, so a later idempotency key cannot create
+another group with the same input. The default inbound policy does not grant
+this write method.

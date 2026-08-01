@@ -21,6 +21,8 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
 	runmanager "github.com/abd-im/abd-im-cli/internal/agent/run"
 	"github.com/abd-im/abd-im-cli/internal/bridge"
+	"github.com/abd-im/abd-im-cli/internal/capability"
+	groupcreate "github.com/abd-im/abd-im-cli/internal/capability/groupcreate"
 	"github.com/abd-im/abd-im-cli/internal/cli"
 	"github.com/abd-im/abd-im-cli/internal/connector"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
@@ -30,6 +32,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/ipc"
 	"github.com/abd-im/abd-im-cli/internal/launcher"
 	mcpowner "github.com/abd-im/abd-im-cli/internal/mcp/owner"
+	"github.com/abd-im/abd-im-cli/internal/operation"
 	"github.com/abd-im/abd-im-cli/internal/profile"
 	"github.com/abd-im/abd-im-cli/internal/reply"
 	conversationservice "github.com/abd-im/abd-im-cli/internal/service/conversation"
@@ -372,6 +375,22 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
+	groupCreator, err := prepared.GroupCreator()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	groupOperations, err := operation.NewGuard(store)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	groupManifest, err := capability.New([]capability.Entry{{Method: groupcreate.Method, Scope: groupcreate.Scope, Status: capability.Available}})
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	groupCreate, err := groupcreate.New(groupManifest, groupOperations, groupCreator)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
 	var runtime *daemon.Runtime
 	profileSource, err := prepared.ProfileSource(func() profileservice.DaemonStatus {
 		state := bridge.StateNew
@@ -436,7 +455,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		Replies:   replies,
 		Runs:      runs,
 		Grants:    grant.NewStore(),
-		Methods:   serviceMethods(services),
+		Methods:   append(serviceMethods(services), groupCreate.ProxyMethod()),
 		Policy: daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
 			return daemon.Decision{Principal: "codex", Methods: []string{"message.history"}, RateBudget: 1}, true, nil
 		}),
