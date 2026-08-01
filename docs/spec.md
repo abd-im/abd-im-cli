@@ -57,7 +57,7 @@ owner 通过 CLI 或完全信任的本地 MCP 查询 profile、会话、消息�
 
 ## 2. 范围、非目标与依赖
 
-`abdim-cli` 为一个 OpenIM profile 提供本地 daemon、CLI、MCP 和入站 bot。SDK 长连接、本地 SQLite、同步和 listener 只由 daemon 持有；CLI、MCP 和 provider 不直接初始化 SDK 或读取 SDK 数据表。
+`abdim-cli` 为一个 OpenIM profile 提供本地 daemon、CLI、MCP 和入站 bot。SDK 长连接、本地 SQLite、同步和 listener 只由 daemon 持有；CLI、MCP 和 provider 不直接初始化 SDK 或读取 SDK 数据表。首版只支持当前用户运行 daemon 并复用该用户已登录的本机 Codex CLI；这是受信任本地进程模型，不提供恶意代码的操作系统级隔离。
 
 P1 交付 US-01、US-02 和 US-03 所需的单 profile 闭环、event-bound reply、受 grant 约束的 typed 读取能力，以及以 `group.create` 验证的通用副作用路径。通用 `message send`、附件和更多写能力从 P2 开始。
 
@@ -112,7 +112,7 @@ OpenIM Server
 ```text
 <config-dir>/abdim/profiles/<profile>.toml
 <data-dir>/abdim/profiles/<profile>/{sdk,control.db,attachments,logs}/
-<runtime-dir>/abdim/<profile>/{daemon.sock,descriptor.json}
+<runtime-dir>/abdim/<profile>/{daemon.sock,descriptor.json,runs/}
 ```
 
 Unix runtime 目录为 `0700`，socket 为 `0600`。daemon 退出时停止新请求和新 run，取消未完成工作后关闭 SDK 资源；重启不得用新消息掩盖未知结果。
@@ -124,7 +124,7 @@ abdim [--profile NAME] [--output json|jsonl|table]
       [--timeout DURATION] [--request-id ID] <resource> <verb> [flags]
 ```
 
-`abdim mcp serve` 是 owner 或完全信任本地 Agent 的 stdio 适配器，调用同一 daemon service interface。provider 的 agent-mode `abdim` 只连接 run tool proxy；其文件系统不得挂载真实 daemon socket、profile、SDK data directory 或 owner 凭据。相同 OS UID 不构成安全沙箱，受限 provider 必须位于独立用户或容器边界。
+`abdim mcp serve` 是 owner 或完全信任本地 Agent 的 stdio 适配器，调用同一 daemon service interface。当前用户模式下，Codex 的 agent-mode 进程只由 daemon 提供每 run 私有的 `CODEX_HOME`、固定 MCP 配置和 run tool proxy；它不继承源 MCP 配置。相同 OS UID 不构成安全沙箱，因此本地部署只适用于信任该用户和其 Codex 的环境；正常 tool 调用仍必须经过 grant、typed proxy 和 event-bound reply。
 
 ```go
 type Provider interface {
@@ -172,7 +172,7 @@ P1 只在同一 daemon 生命周期内复用 provider session；重启中的 tur
 - **SC-003**：普通私聊的 `final_text` 只回复触发会话，provider 没有执行发送命令。
 - **SC-004**：provider 只能调用 manifest 与 grant 共同允许的读取方法，并且结果不超过其会话、目标和消息窗口。
 - **SC-005**：`abdim group create` 只能创建成员 ID allowlist 内的群，并将结果返回同一 turn；任何已验证副作用在崩溃后只为 `confirmed`、`failed` 或 `unknown`，不会自动产生第二次副作用。
-- **SC-006**：受限 provider 不能直连 daemon、调用 controller 命令、读取超出消息窗口的历史，或向第三方会话发送。
+- **SC-006**：正常 provider 集成不能经 run-private MCP bridge 以外的路径直连 daemon、调用 controller 命令、读取超出消息窗口的历史，或向第三方会话发送；当前用户模式不声称能阻止同 UID 恶意进程直接访问本地文件或 socket。
 - **SC-007**：撤回、权限变化、grant 过期或取消会阻止排队 run、副作用和最终回复。
 - **SC-008**：daemon、SDK、HTTP/WebSocket 诊断和审计均不泄露测试 token 或完整消息正文。
 

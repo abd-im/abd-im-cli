@@ -27,7 +27,7 @@
                         |                               |
                Unix socket RPC                  run-private proxy
                         |                               |
-              owner CLI / owner MCP             restricted provider
+              owner CLI / owner MCP             current-user Codex
 ```
 
 ## 信任与所有权边界
@@ -40,7 +40,7 @@
 | provider 工具接口 | 单个 run | 仅暴露静态注册的 typed 方法，逐请求校验 grant、scope、目标和 capability。 |
 | 远端副作用 | reply/action handler | 先记录 operation，再调用 SDK；不确定结果保持 `unknown`，不自动补发或重试。 |
 
-受限 provider 不是 daemon 的同权限客户端。其运行环境不得挂载 daemon socket、profile、SDK 数据目录或 owner 凭据；相同 OS UID 不构成隔离边界。
+当前用户 Codex 不是 daemon 的管理接口客户端：正常 provider 调用只经每 run 私有 MCP bridge 和 grant-bound typed proxy。每个 run 使用新的 `CODEX_HOME`，只复制当前用户的 Codex 登录材料，不继承其 MCP 配置。由于 daemon 与 Codex 使用同一 OS UID，这不是对恶意本地代码的文件系统隔离边界；本产品只适用于信任当前用户本机 Codex 的场景。
 
 ## 运行时闭环
 
@@ -68,8 +68,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 ```text
 <config-dir>/abdim/profiles/<profile>.toml
 <data-dir>/abdim/profiles/<profile>/{sdk,control.db,attachments,logs}/
-<runtime-dir>/abdim/<profile>/{daemon.sock,descriptor.json,daemon.lock}
-<runtime-dir>/abdim-provider/<profile>/
+<runtime-dir>/abdim/<profile>/{daemon.sock,descriptor.json,daemon.lock,runs/}
 ```
 
 目录权限为 `0700`，socket、profile 和显式明文凭据文件为 `0600`。凭据只保存不透明引用；明文文件存储必须显式启用。
@@ -116,14 +115,14 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 
 | 能力族 | 状态 | 实现所有权 | 共享收口 | 验证 |
 | --- | --- | --- | --- | --- |
-| 多 provider | deferred | `internal/agent/provider`、`internal/launcher` | deployment provider registry、run construction | 暂不进入当前交付；保留单 Codex provider |
+| 多 provider | deferred | `internal/agent/provider` | provider registry、run construction | 暂不进入当前交付；保留单 Codex provider |
 | 兼容矩阵 | delivered | `tests/compatibility`、capability evidence contract | daemon manifest construction | fixed SDK/server/provider matrix + controlled OpenIM probe |
 | session migration | deferred | `internal/agent/provider`、`internal/agent/run` | session envelope/version registry | 依赖多 provider，暂不进入当前交付 |
 | run operations | delivered | `internal/agent/run`、`internal/operation`、owner service | local RPC typed dispatcher | owner authorization/cancellation/privacy e2e |
 
 ## 当前实现状态
 
-`daemon serve` 由单一 daemon 持有 SDK、控制库、owner socket、run manager 和固定 Codex App Server adapter。每个 run 都有独立 `CODEX_HOME`、MCP 配置、Unix bridge 和 grant；provider 只能发现 construction snapshot 中 manifest 与 grant 共同允许的 typed tools。`internal/launcher` 以部署指定的独立 UID/GID 运行 provider，拒绝文件和命令审批，并在取消时销毁进程组与 run 目录。
+`daemon serve` 由当前用户运行，持有 SDK、控制库、owner socket、run manager 和固定 Codex App Server adapter。它从当前用户 `PATH` 解析 `codex`，从 `CODEX_HOME`（默认 `~/.codex`）复制登录材料到每个 run 的独立 `CODEX_HOME`；run 只获得固定 MCP 配置、Unix bridge 和 grant，且不继承源 Codex MCP 配置。adapter 拒绝文件和命令审批，并在取消时销毁进程组与 run 目录。
 
 所有 P1 typed read 都经固定 server source 提供，不读取 SDK 本地数据库。写入面已包括群创建、成员关系和群资料/禁言/群主转让、文本/控制/媒体消息、会话设置、好友和黑名单；每项均经 method-scoped target、operation/idempotency guard 和未知结果 fail-closed 保护。媒体内容只在 profile 私有目录和 daemon 内 file handle 中流转，control DB 只保存不透明引用和约束 metadata。群成员和群管理动作以固定 server endpoint 验证角色和成员状态，不调用会同步本地状态的 SDK Group API。默认入站 policy 仍只授予 `message.history`；`conversation.unread` 因服务端未公开该值而保持 `not_validated`。
 
@@ -134,7 +133,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 ## 架构不变量
 
 - 一个 profile 同时只能由一个 daemon 持有 SDK、控制库和运行时目录。
-- provider 不能选择 reply conversation、调用任意 RPC/SDK 方法，或绕过 grant 的 method-scoped typed target 读取或写入数据；target 固定编码为 `conversation:<id>`、`group:<id>`、`message:<id>` 或 `user:<id>`，同一原始 ID 不可跨资源类型使用。
+- 正常 provider MCP 调用不能选择 reply conversation、调用任意 RPC/SDK 方法，或绕过 grant 的 method-scoped typed target 读取或写入数据；target 固定编码为 `conversation:<id>`、`group:<id>`、`message:<id>` 或 `user:<id>`，同一原始 ID 不可跨资源类型使用。当前用户模式不把相同 OS UID 视为对恶意本地代码的安全边界。
 - 同一入站 event 只有一个账本记录和一个 reply slot；同一 conversation 的 provider turn 串行。
 - 所有远端副作用都以 scope 和 idempotency key 绑定 operation；`unknown` 是终态，需要查询而不是新建请求。
 - capability 只有同时被 manifest 和 grant 允许时才可供 provider 使用；owner 也只能经 typed 服务访问公开能力。

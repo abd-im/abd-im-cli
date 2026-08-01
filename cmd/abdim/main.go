@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -34,7 +35,6 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/daemon"
 	"github.com/abd-im/abd-im-cli/internal/events"
 	"github.com/abd-im/abd-im-cli/internal/ipc"
-	"github.com/abd-im/abd-im-cli/internal/launcher"
 	mcpowner "github.com/abd-im/abd-im-cli/internal/mcp/owner"
 	mcpstdio "github.com/abd-im/abd-im-cli/internal/mcp/stdio"
 	"github.com/abd-im/abd-im-cli/internal/operation"
@@ -304,11 +304,10 @@ func runDaemonVerify(ctx context.Context, args []string, output io.Writer, roots
 	return 0
 }
 
-// runDaemonServe composes the fixed daemon path with a separately identified
-// provider process. The launcher configuration is root-controlled so the
-// daemon cannot silently fall back to a same-UID provider.
+// runDaemonServe composes the fixed daemon path with the current user's local
+// Codex CLI. Each run receives a fresh private MCP configuration.
 func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots commandRoots, profileName, requestID string, format cli.Output) int {
-	options, err := parseDaemonServeOptions(args)
+	_, err := parseDaemonServeOptions(args)
 	if err != nil {
 		return writeInvalidArgument(output, requestID, err.Error())
 	}
@@ -326,16 +325,13 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err := item.Deployment.Validate(); err != nil {
 		return writeInvalidArgument(output, requestID, "profile deployment is not configured")
 	}
-	providerLauncher, err := launcher.Load(options.providerConfig)
+	codexExecutable, err := exec.LookPath("codex")
 	if err != nil {
-		return writeInvalidArgument(output, requestID, "provider launcher configuration is invalid")
+		return writeInvalidArgument(output, requestID, "Codex executable is unavailable on PATH")
 	}
-	if err := validateProviderHome(providerLauncher.CodexHome(), paths); err != nil {
-		return writeInvalidArgument(output, requestID, err.Error())
-	}
-	providerWorkingDir, err := providerLauncher.WorkingDir(item.Name)
+	sourceCodexHome, err := currentCodexHome()
 	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
+		return writeInvalidArgument(output, requestID, "current user Codex login is unavailable")
 	}
 
 	credentials, err := profile.NewFileStore(roots.dataDir, true)
@@ -600,11 +596,11 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	codex, err := codexprovider.New(codexprovider.Config{
-		Executable:    providerLauncher.CodexPath(),
-		WorkingDir:    providerWorkingDir,
-		Environment:   codexEnvironment(providerLauncher.CodexHome()),
-		BridgeCommand: executablePath(),
-		Launcher:      providerLauncher,
+		Executable:      codexExecutable,
+		WorkingDir:      paths.RunsDir,
+		SourceCodexHome: sourceCodexHome,
+		Environment:     codexEnvironment(),
+		BridgeCommand:   executablePath(),
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -701,12 +697,9 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	return 0
 }
 
-type daemonServeOptions struct {
-	providerConfig string
-}
+type daemonServeOptions struct{}
 
 func parseDaemonServeOptions(args []string) (daemonServeOptions, error) {
-	var options daemonServeOptions
 	allowPlaintext := false
 	allowInbound := false
 	for len(args) > 0 {
@@ -717,12 +710,6 @@ func parseDaemonServeOptions(args []string) (daemonServeOptions, error) {
 		case "--allow-all-inbound":
 			allowInbound = true
 			args = args[1:]
-		case "--provider-config":
-			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
-				return daemonServeOptions{}, errors.New("--provider-config requires an absolute path")
-			}
-			options.providerConfig = args[1]
-			args = args[2:]
 		default:
 			return daemonServeOptions{}, errors.New("unsupported daemon serve flag")
 		}
@@ -733,31 +720,31 @@ func parseDaemonServeOptions(args []string) (daemonServeOptions, error) {
 	if !allowInbound {
 		return daemonServeOptions{}, errors.New("daemon serve requires --allow-all-inbound")
 	}
-	if strings.TrimSpace(options.providerConfig) == "" {
-		return daemonServeOptions{}, errors.New("daemon serve requires --provider-config")
-	}
-	return options, nil
+	return daemonServeOptions{}, nil
 }
 
-func validateProviderHome(home string, paths profile.Paths) error {
-	for _, privatePath := range []string{paths.DataDir, filepath.Dir(paths.ConfigFile), paths.RuntimeDir} {
-		if pathContains(privatePath, home) || pathContains(home, privatePath) {
-			return errors.New("provider Codex home must not overlap daemon-owned profile paths")
+func currentCodexHome() (string, error) {
+	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if home == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
 		}
+		home = filepath.Join(userHome, ".codex")
 	}
-	return nil
+	if !filepath.IsAbs(home) {
+		return "", errors.New("CODEX_HOME must be absolute")
+	}
+	info, err := os.Stat(filepath.Join(home, "auth.json"))
+	if err != nil || !info.Mode().IsRegular() {
+		return "", errors.New("Codex auth.json is unavailable")
+	}
+	return filepath.Clean(home), nil
 }
 
-func pathContains(parent, child string) bool {
-	relative, err := filepath.Rel(parent, child)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
-}
-
-func codexEnvironment(home string) []string {
+func codexEnvironment() []string {
 	return []string{
 		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + filepath.Dir(home),
-		"CODEX_HOME=" + home,
 		"TERM=dumb",
 	}
 }

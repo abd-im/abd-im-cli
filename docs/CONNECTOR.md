@@ -1,6 +1,6 @@
-# Deployment Connector
+# Local Runtime Connector
 
-`abdim-cli` does not own account login or server deployment. A deployment
+`abdim-cli` does not own account login or server deployment. The local runtime
 connector constructs the daemon-owned `internal/bridge/abdim.Config` and
 injects it into `internal/daemon.Runtime`. The reusable validation and
 credential-resolution boundary is `internal/connector.Prepare`.
@@ -25,8 +25,8 @@ login flow must return an `imToken` and the canonical `userID`; import that
 token through the local credential store and pass only its opaque reference to
 the daemon.
 
-After importing the token, configure the non-secret deployment fields for a
-Linux daemon with the canonical user ID returned by that login flow:
+After importing the token, configure the non-secret deployment fields with the
+canonical user ID returned by that login flow:
 
 ```bash
 go run ./cmd/abdim --profile work profile configure \
@@ -49,41 +49,20 @@ go run ./cmd/abdim --profile work daemon verify --allow-plaintext-credentials
 The command starts the daemon-owned SDK lifecycle, logs in, logs out, and
 returns only whether the profile was verified.
 
-## Isolated Codex Daemon
+## Current-User Codex Daemon
 
 The only configured provider adapter is the local `codex` CLI in App Server
-stdio mode. It is not selected by an arbitrary command or endpoint. Release
-deployment runs the daemon as root and Codex as a separately provisioned,
-non-root OS UID/GID. The provider account owns its home and Codex home; the
-daemon owns the run root and its profile, SDK, credentials, and owner socket.
+stdio mode. Run `abdim` as the same local user that runs `codex`; the daemon
+resolves `codex` from that user's `PATH` and reads its login from
+`$CODEX_HOME/auth.json` (default `~/.codex/auth.json`). Do not start the daemon
+through `sudo`, because that would select root's profile and Codex login.
 
-`daemon serve` requires an absolute `--provider-config` path to a root-owned,
-non-group/other-writable regular file beneath a root-owned traversable
-directory. Its exact fields are `uid`, `gid`,
-`home`, `codex_home`, `codex_path`, and `run_root`: the first two are positive,
-non-root numeric IDs; `home` must be directly under a root-owned traversable
-directory; `codex_home` must be inside `home`; `home` and `codex_home` must be
-owned by that UID/GID and not group/other writable;
-`codex_path` must be an absolute root-owned, provider-executable path beneath
-a root-owned traversable directory and name a
-non-group/other-writable regular file; `run_root` must be root-owned,
-non-writable by group/other, and permit provider traversal. The provider's
-`auth.json` must be a regular file owned by the configured UID/GID.
-
-Before starting the daemon, provision the provider user, create its owner-only
-home and Codex home, authenticate Codex as that user, create the root-owned
-run root with mode `0711`, and install the provider configuration under the
-deployment's root-controlled configuration directory. The run root must not
-be inside a provider-writable path.
-
-Start the isolated daemon with the credential and inbound-policy
-acknowledgements plus the controlled provider configuration:
+Start the daemon with the credential and inbound-policy acknowledgements:
 
 ```bash
-sudo abdim --profile work daemon serve \
+abdim --profile work daemon serve \
   --allow-plaintext-credentials \
-  --allow-all-inbound \
-  --provider-config /etc/abdim/providers/work.toml
+  --allow-all-inbound
 ```
 
 `daemon serve` writes one JSON ready response, then remains in the foreground.
@@ -98,16 +77,20 @@ provider prompt cannot choose another destination.
 users. It is deliberately not the default group policy and remains an explicit
 operator acknowledgement.
 
-Each Codex run now receives a fresh private `CODEX_HOME` containing only a
-fixed `abdim` stdio MCP server configuration. That server's subprocess only
-bridges to one run-private Unix socket; the daemon retains the grant and typed
-tool proxy. Its tool list is fixed before Codex starts to the policy, verified
-capability, and grant intersection. The adapter declines Codex command/file
-approvals. The run's Codex home, working directory, and socket are assigned to
-the provider UID only after the daemon writes their fixed contents; the
-root-owned run parent prevents the provider from preparing paths for later
-runs. Unverified service sources remain `not_validated` and are absent from
-provider MCP discovery.
+Each Codex run receives a fresh private `CODEX_HOME` containing the copied
+current-user login and only a fixed `abdim` stdio MCP server configuration. The
+source user's MCP configuration is not inherited. That server's subprocess
+only bridges to one run-private Unix socket; the daemon retains the grant and
+typed tool proxy. Its tool list is fixed before Codex starts to the policy,
+verified capability, and grant intersection. The adapter declines Codex
+command/file approvals. Unverified service sources remain `not_validated` and
+are absent from provider MCP discovery.
+
+This is intentionally a simple trusted-user deployment, not an operating
+system sandbox. A same-user Codex process may still access files readable by
+that user, including the daemon profile and owner socket. The security boundary
+for normal provider calls is the run-private MCP bridge, typed proxy, grant,
+and event-bound reply path; do not use this mode for hostile local code.
 
 The token must not be placed in argv, profile TOML, environment dumps, logs,
 MCP payloads, or RPC responses. `profile.toml` stores only its opaque
@@ -121,7 +104,8 @@ The connector composition order is:
 2. Call `connector.Prepare` with the deployment settings and credential store;
    it returns an `abdim.Adapter` without initializing the SDK.
 3. Construct all verified typed service sources and `daemon.OwnerMethods`.
-4. Construct the fixed Codex provider, inbound policy/reply/run dependencies,
+4. Resolve the current user's Codex executable and login, then construct the
+   fixed Codex provider, inbound policy/reply/run dependencies,
    and `daemon.Runtime`.
 5. Start `Runtime`; it initializes the SDK and only then serves the owner Unix
    socket.

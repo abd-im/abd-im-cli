@@ -39,33 +39,9 @@ jobs:
         run: test -z "$(gofmt -l $(git ls-files '*.go'))"
       - run: go vet ./...
       - run: go test ./...
-      - name: Cross-compile Linux release targets
+      - name: Cross-compile Unix release targets
         run: |
-          for target in linux/amd64 linux/arm64; do
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             IFS=/ read -r goos goarch <<<"$target"
             GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/abdim-${goos}-${goarch}" ./cmd/abdim
           done
-
-  provider-isolation:
-    needs: quality
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Configure private SDK access
-        env:
-          SDK_READ_TOKEN: ${{ secrets.ABDIM_SDK_READ_TOKEN }}
-        run: |
-          test -n "$SDK_READ_TOKEN"
-          git config --global url."https://x-access-token:${SDK_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
-      - run: go mod download
-      - name: Verify the root-owned provider boundary
-        run: |
-          go test -c -tags=e2e -o "$RUNNER_TEMP/provider-isolation.test" ./tests/e2e
-          sudo env ABDIM_E2E_PROVIDER_UID="$(id -u)" ABDIM_E2E_PROVIDER_GID="$(id -g)" "$RUNNER_TEMP/provider-isolation.test" -test.run '^TestProviderSeparateUIDDeploymentGate$' -test.count=1 -test.v

@@ -5,7 +5,7 @@ package provider
 import "errors"
 
 // Bridge is implemented with an owner-only Unix socket on the current P1
-// target. The release launcher will provide the Windows transport separately.
+// target. Windows provider transport is outside the current release target.
 type Bridge struct{}
 
 func StartBridge(string, *Server) (*Bridge, error) {

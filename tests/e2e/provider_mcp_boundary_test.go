@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,7 +17,6 @@ import (
 	codexprovider "github.com/abd-im/abd-im-cli/internal/agent/provider/codex"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
-	"github.com/abd-im/abd-im-cli/internal/launcher"
 )
 
 const providerMCPHelperEnv = "ABDIM_PROVIDER_MCP_HELPER"
@@ -37,15 +35,18 @@ func TestProviderRunPrivateMCPBoundaryE2E(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sourceHome, "config.toml"), []byte("[mcp_servers.owner]\ncommand = 'must-not-inherit'\n# "+providerSourceTokenMarker+"\n# "+providerSourceMessageMarker+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(sourceHome, "auth.json"), []byte(`{"tokens":{"access_token":"test"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	capture := filepath.Join(root, "helper.json")
 	method := &providerMCPMethod{}
 	tool, credential := providerMCPTool(t, method)
 	adapter, err := codexprovider.New(codexprovider.Config{
 		Executable:        providerMCPHelperCommand(t, root),
 		WorkingDir:        root,
-		Environment:       []string{providerMCPHelperEnv + "=1", "PATH=/usr/bin:/bin", "CODEX_HOME=" + sourceHome, "ABDIM_PROVIDER_CAPTURE=" + capture},
+		SourceCodexHome:   sourceHome,
+		Environment:       []string{providerMCPHelperEnv + "=1", "PATH=/usr/bin:/bin", "ABDIM_PROVIDER_CAPTURE=" + capture},
 		BridgeCommand:     os.Args[0],
-		Launcher:          e2eProviderRunner{},
 		InitializeTimeout: time.Second,
 	})
 	if err != nil {
@@ -71,6 +72,9 @@ func TestProviderRunPrivateMCPBoundaryE2E(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Join(runRoot, "mcp.sock")); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("run-private socket = %v, %v", info, err)
+	}
+	if auth, err := os.ReadFile(filepath.Join(runRoot, "codex", "auth.json")); err != nil || string(auth) != `{"tokens":{"access_token":"test"}}` {
+		t.Fatalf("run-private Codex auth = %q, %v", auth, err)
 	}
 	result, err := session.Turn(context.Background(), contracts.TurnRequest{RunID: request.RunID, EventID: "event-1", GrantCredential: credential, Prompt: "reply"})
 	if err != nil || result.FinalText != "final reply" {
@@ -145,17 +149,6 @@ func (m *providerMCPMethod) Calls() []contracts.Request {
 	return append([]contracts.Request(nil), m.calls...)
 }
 
-type e2eProviderRunner struct{}
-
-func (e2eProviderRunner) CopyCodexAuth(destination string) error {
-	return os.WriteFile(destination, []byte(`{"tokens":{"access_token":"test"}}`), 0o600)
-}
-func (e2eProviderRunner) PrepareRun(string, string, string) error { return nil }
-func (e2eProviderRunner) PrepareSocket(string) error              { return nil }
-func (e2eProviderRunner) Configure(*exec.Cmd) error               { return nil }
-
-var _ launcher.Runner = e2eProviderRunner{}
-
 func providerMCPHelperCommand(t *testing.T, root string) string {
 	t.Helper()
 	path := filepath.Join(root, "fake-codex")
@@ -171,14 +164,10 @@ func quoteProviderMCPHelper(value string) string {
 }
 
 type providerMCPHelperResult struct {
-	UID             int    `json:"uid"`
-	Home            string `json:"home"`
-	CodexHome       string `json:"codex_home"`
-	Socket          string `json:"socket"`
-	DeniedProfile   bool   `json:"denied_profile"`
-	DeniedOwnerSock bool   `json:"denied_owner_socket"`
-	DeniedNextRun   bool   `json:"denied_next_run"`
-	Err             string `json:"err,omitempty"`
+	Home      string `json:"home"`
+	CodexHome string `json:"codex_home"`
+	Socket    string `json:"socket"`
+	Err       string `json:"err,omitempty"`
 }
 
 func readProviderMCPHelper(t *testing.T, path string) providerMCPHelperResult {
@@ -198,23 +187,8 @@ func TestProviderMCPHelper(t *testing.T) {
 	if os.Getenv(providerMCPHelperEnv) != "1" {
 		return
 	}
-	result := providerMCPHelperResult{UID: os.Geteuid(), Home: os.Getenv("HOME"), CodexHome: os.Getenv("CODEX_HOME")}
+	result := providerMCPHelperResult{Home: os.Getenv("HOME"), CodexHome: os.Getenv("CODEX_HOME")}
 	result.Socket = filepath.Join(filepath.Dir(result.CodexHome), "mcp.sock")
-	if path := os.Getenv("ABDIM_PROVIDER_FORBIDDEN_PROFILE"); path != "" {
-		_, err := os.ReadFile(path)
-		result.DeniedProfile = err != nil
-	}
-	if path := os.Getenv("ABDIM_PROVIDER_FORBIDDEN_OWNER_SOCKET"); path != "" {
-		connection, err := net.DialTimeout("unix", path, time.Second)
-		if connection != nil {
-			_ = connection.Close()
-		}
-		result.DeniedOwnerSock = err != nil
-	}
-	if path := os.Getenv("ABDIM_PROVIDER_FORBIDDEN_NEXT_RUN"); path != "" {
-		_, err := os.ReadDir(path)
-		result.DeniedNextRun = err != nil
-	}
 
 	reader := bufio.NewScanner(os.Stdin)
 	for reader.Scan() {

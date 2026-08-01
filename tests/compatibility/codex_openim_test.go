@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,7 +13,6 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/agent/provider/codex"
 	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
-	"github.com/abd-im/abd-im-cli/internal/launcher"
 	"github.com/abd-im/abd-im-cli/internal/mcp/stdio"
 	"github.com/abd-im/abd-im-cli/internal/testkit"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
@@ -100,6 +98,9 @@ func compatibilityAdapter(t *testing.T) *codex.Adapter {
 	t.Helper()
 	root := t.TempDir()
 	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"tokens":{"access_token":"test"}}`), 0o600); err != nil {
+		t.Fatalf("write Codex credentials: %v", err)
+	}
 	script := filepath.Join(root, "fake-codex")
 	contents := "#!/bin/sh\nexec " + shellQuote(os.Args[0]) + " -test.run '^TestCompatibilityCodexProcess$' --\n"
 	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
@@ -112,9 +113,9 @@ func compatibilityAdapter(t *testing.T) *codex.Adapter {
 	adapter, err := codex.New(codex.Config{
 		Executable:        script,
 		WorkingDir:        root,
-		Environment:       []string{"GO_WANT_COMPATIBILITY_CODEX=1", "PATH=/usr/bin:/bin", "CODEX_HOME=" + home},
+		SourceCodexHome:   home,
+		Environment:       []string{"GO_WANT_COMPATIBILITY_CODEX=1", "PATH=/usr/bin:/bin"},
 		BridgeCommand:     bridgeCommand,
-		Launcher:          compatibilityRunner{},
 		InitializeTimeout: time.Second,
 	})
 	if err != nil {
@@ -122,16 +123,6 @@ func compatibilityAdapter(t *testing.T) *codex.Adapter {
 	}
 	return adapter
 }
-
-type compatibilityRunner struct{}
-
-func (compatibilityRunner) CopyCodexAuth(destination string) error {
-	return os.WriteFile(destination, []byte(`{"tokens":{"access_token":"test"}}`), 0o600)
-}
-
-func (compatibilityRunner) PrepareRun(string, string, string) error { return nil }
-func (compatibilityRunner) PrepareSocket(string) error              { return nil }
-func (compatibilityRunner) Configure(*exec.Cmd) error               { return nil }
 
 func TestCompatibilityCodexProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_COMPATIBILITY_CODEX") != "1" {
@@ -175,5 +166,3 @@ func writeCompatibilityNotification(method string, params any) {
 }
 
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
-
-var _ launcher.Runner = compatibilityRunner{}

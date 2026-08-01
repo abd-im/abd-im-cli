@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
-	"github.com/abd-im/abd-im-cli/internal/launcher"
 	mcpprovider "github.com/abd-im/abd-im-cli/internal/mcp/provider"
 )
 
@@ -29,16 +28,16 @@ const defaultInitializeTimeout = 30 * time.Second
 type Config struct {
 	Executable        string
 	WorkingDir        string
+	SourceCodexHome   string
 	Environment       []string
 	BridgeCommand     string
-	Launcher          launcher.Runner
 	InitializeTimeout time.Duration
 }
 
 // Adapter starts one Codex app-server process for every restricted run.
 type Adapter struct {
-	config    Config
-	codexHome string
+	config          Config
+	sourceCodexHome string
 }
 
 func New(config Config) (*Adapter, error) {
@@ -48,26 +47,22 @@ func New(config Config) (*Adapter, error) {
 	if strings.TrimSpace(config.WorkingDir) == "" || !filepath.IsAbs(config.WorkingDir) {
 		return nil, errors.New("absolute Codex working directory is required")
 	}
+	if strings.TrimSpace(config.SourceCodexHome) == "" || !filepath.IsAbs(config.SourceCodexHome) {
+		return nil, errors.New("absolute source CODEX_HOME is required")
+	}
+	if info, err := os.Stat(config.SourceCodexHome); err != nil || !info.IsDir() {
+		return nil, errors.New("source CODEX_HOME must name an existing directory")
+	}
 	if len(config.Environment) == 0 {
 		return nil, errors.New("explicit Codex environment is required")
 	}
 	if strings.TrimSpace(config.BridgeCommand) == "" || !filepath.IsAbs(config.BridgeCommand) {
 		return nil, errors.New("absolute provider MCP bridge command is required")
 	}
-	if config.Launcher == nil {
-		return nil, errors.New("isolated provider launcher is required")
-	}
-	codexHome, ok := environmentValue(config.Environment, "CODEX_HOME")
-	if !ok || !filepath.IsAbs(codexHome) {
-		return nil, errors.New("absolute CODEX_HOME is required")
-	}
-	if info, err := os.Stat(codexHome); err != nil || !info.IsDir() {
-		return nil, errors.New("CODEX_HOME must name an existing directory")
-	}
 	if config.InitializeTimeout <= 0 {
 		config.InitializeTimeout = defaultInitializeTimeout
 	}
-	return &Adapter{config: config, codexHome: codexHome}, nil
+	return &Adapter{config: config, sourceCodexHome: config.SourceCodexHome}, nil
 }
 
 func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (contracts.Session, error) {
@@ -93,11 +88,6 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 		cleanup()
 		return nil, fmt.Errorf("start provider MCP bridge: %w", err)
 	}
-	if err := a.config.Launcher.PrepareSocket(runPaths.socket); err != nil {
-		_ = mcpBridge.Close()
-		cleanup()
-		return nil, fmt.Errorf("prepare provider MCP bridge: %w", err)
-	}
 	executable, err := exec.LookPath(a.config.Executable)
 	if err != nil {
 		_ = mcpBridge.Close()
@@ -109,12 +99,6 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 	command.Dir = runPaths.workDir
 	command.Env = runEnvironment(a.config.Environment, runPaths.home, runPaths.workDir)
 	configureProcessGroup(command)
-	if err := a.config.Launcher.Configure(command); err != nil {
-		cancel()
-		_ = mcpBridge.Close()
-		cleanup()
-		return nil, fmt.Errorf("configure isolated provider process: %w", err)
-	}
 
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -551,16 +535,28 @@ func (a *Adapter) prepareRun(request contracts.StartRequest) (runPathSet, error)
 			return cleanup(fmt.Errorf("secure Codex run directory: %w", err))
 		}
 	}
-	if err := a.config.Launcher.CopyCodexAuth(filepath.Join(paths.home, "auth.json")); err != nil {
+	if err := copyCodexAuth(filepath.Join(a.sourceCodexHome, "auth.json"), filepath.Join(paths.home, "auth.json")); err != nil {
 		return cleanup(fmt.Errorf("copy Codex credentials: %w", err))
 	}
 	if err := writeRunConfig(filepath.Join(paths.home, "config.toml"), a.config.BridgeCommand, paths.socket, mcpprovider.DefaultTools(request.AllowedMethods)); err != nil {
 		return cleanup(fmt.Errorf("write provider MCP configuration: %w", err))
 	}
-	if err := a.config.Launcher.PrepareRun(paths.root, paths.home, paths.workDir); err != nil {
-		return cleanup(fmt.Errorf("prepare isolated Codex run: %w", err))
-	}
 	return paths, nil
+}
+
+func copyCodexAuth(source, destination string) error {
+	info, err := os.Stat(source)
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("current user Codex login is unavailable")
+	}
+	payload, err := os.ReadFile(source)
+	if err != nil || len(payload) == 0 || len(payload) > 1<<20 {
+		return errors.New("read current user Codex login")
+	}
+	if err := os.WriteFile(destination, payload, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(destination, 0o600)
 }
 
 func writeRunConfig(path, command, socket string, tools []mcpprovider.Tool) error {
@@ -598,16 +594,6 @@ func runEnvironment(source []string, home, workDir string) []string {
 		result = append(result, value)
 	}
 	return append(result, "HOME="+workDir, "CODEX_HOME="+home)
-}
-
-func environmentValue(environment []string, name string) (string, bool) {
-	prefix := name + "="
-	for _, value := range environment {
-		if strings.HasPrefix(value, prefix) {
-			return strings.TrimPrefix(value, prefix), true
-		}
-	}
-	return "", false
 }
 
 func validRunID(value string) bool {

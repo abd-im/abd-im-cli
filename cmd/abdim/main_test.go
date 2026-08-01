@@ -144,26 +144,19 @@ func TestDaemonServeRequiresExplicitDeploymentConfiguration(t *testing.T) {
 	}
 
 	output.Reset()
-	args := []string{"daemon", "serve", "--allow-plaintext-credentials", "--allow-all-inbound"}
+	args := []string{"daemon", "serve", "--allow-plaintext-credentials"}
 	if got := runWithIO(args, strings.NewReader(""), &output, roots); got != 2 {
-		t.Fatalf("missing provider configuration exit = %d, want 2", got)
+		t.Fatalf("missing inbound acknowledgement exit = %d, want 2", got)
 	}
-	if !strings.Contains(output.String(), "--provider-config") {
-		t.Fatalf("missing provider configuration response = %s", output.String())
+	if !strings.Contains(output.String(), "--allow-all-inbound") {
+		t.Fatalf("missing inbound acknowledgement response = %s", output.String())
 	}
-}
 
-func TestDaemonServeRejectsProviderHomeInsideProfilePaths(t *testing.T) {
-	roots := testRoots(t)
-	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, "work")
-	if err != nil {
-		t.Fatal(err)
+	if _, err := parseDaemonServeOptions([]string{"--allow-plaintext-credentials", "--allow-all-inbound"}); err != nil {
+		t.Fatalf("parseDaemonServeOptions() error = %v", err)
 	}
-	if err := os.MkdirAll(paths.DataDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateProviderHome(paths.DataDir, paths); err == nil || !strings.Contains(err.Error(), "must not overlap") {
-		t.Fatalf("validateProviderHome() error = %v", err)
+	if _, err := parseDaemonServeOptions([]string{"--allow-plaintext-credentials", "--allow-all-inbound", "--provider-config", "/tmp/provider.toml"}); err == nil {
+		t.Fatal("parseDaemonServeOptions() accepted removed provider configuration")
 	}
 }
 
@@ -175,6 +168,23 @@ func TestDaemonSDKConfigUsesProfilePaths(t *testing.T) {
 	config := daemonSDKConfig(paths, profile.Deployment{UserID: "user-1", APIAddr: "https://2.example.test/api", WSAddr: "wss://2.example.test/msg_gateway", PlatformID: 7})
 	if config.PlatformID != 7 || config.ApiAddr != "https://2.example.test/api" || config.WsAddr != "wss://2.example.test/msg_gateway" || config.DataDir != paths.SDKDir || config.LogFilePath != filepath.Join(paths.LogsDir, "sdk.log") {
 		t.Fatalf("daemonSDKConfig() = %#v", config)
+	}
+}
+
+func TestCurrentCodexHomeUsesCallerConfiguration(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"tokens":{"access_token":"test"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", home)
+	got, err := currentCodexHome()
+	if err != nil || got != home {
+		t.Fatalf("currentCodexHome() = %q, %v", got, err)
+	}
+
+	t.Setenv("CODEX_HOME", "relative")
+	if _, err := currentCodexHome(); err == nil {
+		t.Fatal("currentCodexHome() accepted a relative path")
 	}
 }
 

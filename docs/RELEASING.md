@@ -1,10 +1,10 @@
 # Releasing
 
 `abdim-cli` publishes immutable Git tags as GitHub Release assets. The initial
-release workflow produces Linux amd64/arm64 archives plus `SHA256SUMS`. It
-does not deploy a daemon or receive deployment credentials. macOS and Windows
-are not v0.1.0 release targets: the isolated provider launcher is currently a
-Linux deployment boundary.
+release workflow produces Linux amd64/arm64 and macOS amd64/arm64 archives
+plus `SHA256SUMS`. It does not deploy a daemon or receive deployment
+credentials. Windows is not a v0.1.0 release target because the current
+provider bridge uses Unix stdio/socket behavior.
 
 ## GitHub Setup
 
@@ -23,7 +23,7 @@ environment variables there:
 | `ABDIM_OPENIM_USER_ID` | Controlled sender's canonical OpenIM user ID. |
 | `ABDIM_OPENIM_GROUP_CREATE_MEMBER_ID` | A distinct controlled member ID. |
 | `ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID` | A distinct controlled recipient ID. |
-| `ABDIM_OPENIM_PLATFORM_ID` | The platform that issued the short-lived IM token; current Linux release tests use `7`. |
+| `ABDIM_OPENIM_PLATFORM_ID` | The platform that issued the short-lived IM token; current release tests use `7`. |
 
 Add `ABDIM_OPENIM_TOKEN` as an environment secret. It must be a short-lived
 token for the configured platform, never an account password. Add
@@ -39,9 +39,9 @@ message.
 ## Release Candidate
 
 Before tagging, require a green CI run, manually approve and run the controlled
-OpenIM workflow, and complete the root daemon/Codex inbound-reply canary from
-[`CONNECTOR.md`](CONNECTOR.md). The GitHub release is a software artifact; it
-does not replace that deployment canary.
+OpenIM workflow, and complete the current-user daemon/Codex inbound-reply
+canary from [`CONNECTOR.md`](CONNECTOR.md). The GitHub release is a software
+artifact; it does not replace that deployment canary.
 
 Create and push the release candidate tag from the verified `main` commit:
 
@@ -60,7 +60,8 @@ Verify a downloaded archive before installation:
 sha256sum -c SHA256SUMS
 ```
 
-Use the verified binary with the root-owned provider configuration and
-separate provider UID described in [`CONNECTOR.md`](CONNECTOR.md). Do not run a
-release daemon from the development checkout or with a browser/mobile token
-issued for a different platform.
+Use the verified binary as the same user whose Codex CLI is logged in. Put
+`codex` on that user's `PATH`, then follow [`CONNECTOR.md`](CONNECTOR.md); do
+not use `sudo`, a provider configuration file, or a separate provider UID. Do
+not run a release daemon from the development checkout or with a browser/mobile
+token issued for a different platform.

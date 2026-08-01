@@ -6,14 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
-	"github.com/abd-im/abd-im-cli/internal/launcher"
 	"github.com/abd-im/abd-im-cli/internal/testkit"
 )
 
@@ -68,7 +66,7 @@ func TestAdapterCancellationReapsBlockedServer(t *testing.T) {
 
 func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
 	adapter := newAdapter(t, "", false)
-	if err := os.WriteFile(filepath.Join(adapter.codexHome, "config.toml"), []byte("[mcp_servers.owner]\ncommand = 'must-not-inherit'\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(adapter.sourceCodexHome, "config.toml"), []byte("[mcp_servers.owner]\ncommand = 'must-not-inherit'\n"), 0o600); err != nil {
 		t.Fatalf("write source Codex config: %v", err)
 	}
 	request := startRequest()
@@ -101,31 +99,15 @@ func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
 	}
 }
 
-func TestAdapterDelegatesRestrictedRunAssetsToLauncher(t *testing.T) {
-	runner := &recordingRunner{}
-	adapter := newAdapterWithRunner(t, "", false, runner)
-	request := startRequest()
-	session, err := adapter.Start(context.Background(), request)
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	defer session.Close(context.Background())
-	runRoot := filepath.Join(adapter.config.WorkingDir, request.RunID)
-	if runner.root != runRoot || runner.home != filepath.Join(runRoot, "codex") || runner.workDir != filepath.Join(runRoot, "work") || runner.socket != filepath.Join(runRoot, "mcp.sock") || runner.commandDir != runner.workDir {
-		t.Fatalf("launcher calls = %#v", runner)
-	}
-}
-
-func TestNewRequiresIsolatedCompositionInputs(t *testing.T) {
+func TestNewRequiresCurrentUserCompositionInputs(t *testing.T) {
 	if _, err := New(Config{Environment: []string{"PATH=/bin"}, BridgeCommand: os.Args[0]}); err == nil {
 		t.Fatal("New() accepted an empty working directory")
 	}
-	if _, err := New(Config{WorkingDir: t.TempDir(), BridgeCommand: os.Args[0]}); err == nil {
+	if _, err := New(Config{Executable: "/bin/true", WorkingDir: t.TempDir(), SourceCodexHome: t.TempDir(), BridgeCommand: os.Args[0]}); err == nil {
 		t.Fatal("New() accepted an inherited environment")
 	}
-	home := t.TempDir()
-	if _, err := New(Config{Executable: "/bin/true", WorkingDir: t.TempDir(), Environment: []string{"PATH=/bin", "CODEX_HOME=" + home}, BridgeCommand: os.Args[0]}); err == nil || !strings.Contains(err.Error(), "launcher") {
-		t.Fatalf("New() accepted no isolated launcher: %v", err)
+	if _, err := New(Config{Executable: "/bin/true", WorkingDir: t.TempDir(), Environment: []string{"PATH=/bin"}, BridgeCommand: os.Args[0]}); err == nil || !strings.Contains(err.Error(), "source CODEX_HOME") {
+		t.Fatalf("New() accepted no source CODEX_HOME: %v", err)
 	}
 }
 
@@ -142,10 +124,6 @@ func TestAdapterPreservesAppServerStartError(t *testing.T) {
 }
 
 func newAdapter(t *testing.T, capture string, block bool) *Adapter {
-	return newAdapterWithRunner(t, capture, block, testRunner{})
-}
-
-func newAdapterWithRunner(t *testing.T, capture string, block bool, runner launcher.Runner) *Adapter {
 	t.Helper()
 	root := t.TempDir()
 	home := t.TempDir()
@@ -160,57 +138,17 @@ func newAdapterWithRunner(t *testing.T, capture string, block bool, runner launc
 	environment := []string{
 		"GO_WANT_FAKE_CODEX=1",
 		"PATH=/usr/bin:/bin",
-		"CODEX_HOME=" + home,
 		"FAKE_CODEX_CAPTURE=" + capture,
 		"FAKE_CODEX_STARTED=" + filepath.Join(root, "started"),
 	}
 	if block {
 		environment = append(environment, "FAKE_CODEX_BLOCK=1")
 	}
-	adapter, err := New(Config{Executable: script, WorkingDir: root, Environment: environment, BridgeCommand: os.Args[0], Launcher: runner, InitializeTimeout: time.Second})
+	adapter, err := New(Config{Executable: script, WorkingDir: root, SourceCodexHome: home, Environment: environment, BridgeCommand: os.Args[0], InitializeTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	return adapter
-}
-
-type testRunner struct{}
-
-func (testRunner) CopyCodexAuth(destination string) error {
-	return os.WriteFile(destination, []byte(`{"tokens":{"access_token":"test"}}`), 0o600)
-}
-
-func (testRunner) PrepareRun(string, string, string) error { return nil }
-
-func (testRunner) PrepareSocket(string) error { return nil }
-
-func (testRunner) Configure(*exec.Cmd) error { return nil }
-
-type recordingRunner struct {
-	root       string
-	home       string
-	workDir    string
-	socket     string
-	commandDir string
-}
-
-func (r *recordingRunner) CopyCodexAuth(destination string) error {
-	return os.WriteFile(destination, []byte(`{"tokens":{"access_token":"test"}}`), 0o600)
-}
-
-func (r *recordingRunner) PrepareRun(root, home, workDir string) error {
-	r.root, r.home, r.workDir = root, home, workDir
-	return nil
-}
-
-func (r *recordingRunner) PrepareSocket(socket string) error {
-	r.socket = socket
-	return nil
-}
-
-func (r *recordingRunner) Configure(command *exec.Cmd) error {
-	r.commandDir = command.Dir
-	return nil
 }
 
 func startRequest() contracts.StartRequest {

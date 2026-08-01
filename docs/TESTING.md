@@ -10,8 +10,8 @@ go vet ./...
 ## GitHub Actions
 
 `.github/workflows/ci.yml` runs formatting, `go vet ./...`, `go test ./...`,
-the two Linux release build targets, and the root provider-isolation gate on internal
-pull requests and pushes to `main`. It needs the read-only
+the four Unix release build targets on internal pull requests and pushes to
+`main`. It needs the read-only
 `ABDIM_SDK_READ_TOKEN` secret because the pinned SDK module is private.
 
 `.github/workflows/controlled-integration.yml` is manual-only and uses the
@@ -46,27 +46,18 @@ Run it directly with:
 go test ./tests/e2e -run TestRuntimeInboundReplyE2E
 ```
 
-## Provider Isolation E2E
+## Provider MCP E2E
 
 `tests/e2e/provider_mcp_boundary_test.go` launches the fixed Codex adapter
 against a helper process. It verifies that a run creates a fresh `CODEX_HOME`,
-does not inherit the provider's source MCP configuration, exposes only the
-allowed MCP tool snapshot through one run-private socket, and removes the run
-directory after close.
+copies only the current user's login, does not inherit the source MCP
+configuration, exposes only the allowed MCP tool snapshot through one
+run-private socket, and removes the run directory after close. This validates
+the normal typed provider boundary; same-user execution is intentionally not an
+OS-level sandbox.
 
 ```bash
 go test ./tests/e2e -run TestProviderRunPrivateMCPBoundaryE2E
-```
-
-The release launcher gate is tagged because it requires a root-owned daemon
-process. Supply an existing non-root provider UID/GID in a controlled CI or
-deployment host; the test starts the helper under that identity and verifies
-the run paths and socket ownership.
-
-```bash
-sudo env ABDIM_E2E_PROVIDER_UID="$ABDIM_PROVIDER_UID" \
-  ABDIM_E2E_PROVIDER_GID="$ABDIM_PROVIDER_GID" \
-  go test -tags=e2e ./tests/e2e -run TestProviderSeparateUIDDeploymentGate
 ```
 
 ## Run Cancellation E2E
