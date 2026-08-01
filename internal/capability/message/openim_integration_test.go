@@ -1,6 +1,6 @@
 //go:build integration
 
-package message
+package message_test
 
 import (
 	"bytes"
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/bridge/abdim"
 	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
+	"github.com/abd-im/abd-im-cli/internal/capability/message"
 	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
 	messageservice "github.com/abd-im/abd-im-cli/internal/service/message"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
@@ -30,8 +32,8 @@ func TestOpenIMTextSendIntegration(t *testing.T) {
 
 func TestOpenIMQuoteSendIntegration(t *testing.T) {
 	adapter, ctx, userID, recipientID := startMessageIntegration(t)
-	conversationID := directConversationID(userID, recipientID)
-	source, err := NewOpenIMQuoteSource(messageservice.OpenIMClient{Context: adapter.Context}, adapter, userID)
+	conversationID := testDirectConversationID(userID, recipientID)
+	source, err := message.NewOpenIMQuoteSource(messageservice.OpenIMClient{Context: adapter.Context}, adapter, userID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +53,7 @@ func TestOpenIMQuoteSendIntegration(t *testing.T) {
 	if len(references) == 0 {
 		t.Fatal("server returned no quoteable controlled-conversation message")
 	}
-	input := QuoteInput{
+	input := message.QuoteInput{
 		Text:           fmt.Sprintf("abdim message.send_quote integration %d", time.Now().UnixNano()),
 		RecipientID:    recipientID,
 		ConversationID: conversationID,
@@ -100,7 +102,7 @@ func TestOpenIMRevokeIntegration(t *testing.T) {
 	if err := adapter.SendText(ctx, marker, recipientID, ""); err != nil {
 		t.Fatalf("SendText() error = %v", err)
 	}
-	conversationID := directConversationID(userID, recipientID)
+	conversationID := testDirectConversationID(userID, recipientID)
 	client := messageservice.OpenIMClient{Context: adapter.Context}
 	var messageID string
 	var sequence int64
@@ -127,11 +129,11 @@ func TestOpenIMRevokeIntegration(t *testing.T) {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
-	revoker, err := NewOpenIMRevoke(OpenIMRevoke{Context: adapter.Context, Client: client}, userID)
+	revoker, err := message.NewOpenIMRevoke(message.OpenIMRevoke{Context: adapter.Context, Client: client}, userID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := revoker.Revoke(ctx, RevokeInput{ConversationID: conversationID, MessageID: messageID}); err != nil {
+	if err := revoker.Revoke(ctx, message.RevokeInput{ConversationID: conversationID, MessageID: messageID}); err != nil {
 		t.Fatalf("Revoke() error = %v", err)
 	}
 }
@@ -170,6 +172,12 @@ func integrationGroupID(ctx context.Context, client groupservice.Client, name st
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+func testDirectConversationID(first, second string) string {
+	ids := []string{first, second}
+	sort.Strings(ids)
+	return "si_" + strings.Join(ids, "_")
 }
 
 func startMessageIntegration(t *testing.T) (*abdim.Adapter, context.Context, string, string) {
