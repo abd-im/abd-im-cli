@@ -118,6 +118,22 @@ func (p *Prepared) MessageAtSender() (messagecapability.AtSender, error) {
 	return p.Adapter, nil
 }
 
+// MessageLocationSender exposes only the typed location message action.
+func (p *Prepared) MessageLocationSender() (messagecapability.LocationSender, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return p.Adapter, nil
+}
+
+// MessageCustomSender exposes only the typed custom message action.
+func (p *Prepared) MessageCustomSender() (messagecapability.CustomSender, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return p.Adapter, nil
+}
+
 // MessageQuoteSource exposes the fixed server history and narrow quote sender
 // as one daemon-owned action source. It has no local SDK database API.
 func (p *Prepared) MessageQuoteSource() (*messagecapability.OpenIMQuoteSource, error) {
@@ -125,6 +141,18 @@ func (p *Prepared) MessageQuoteSource() (*messagecapability.OpenIMQuoteSource, e
 		return nil, errors.New("prepared daemon adapter is required")
 	}
 	return messagecapability.NewOpenIMQuoteSource(messageservice.OpenIMClient{Context: p.Adapter.Context}, p.Adapter, p.userID)
+}
+
+// MessageRevokeSource exposes the fixed server history check and revoke
+// action. It does not expose SDK local message mutation APIs.
+func (p *Prepared) MessageRevokeSource() (messagecapability.Revoker, error) {
+	if p == nil || p.Adapter == nil {
+		return nil, errors.New("prepared daemon adapter is required")
+	}
+	return messagecapability.NewOpenIMRevoke(messagecapability.OpenIMRevoke{
+		Context: p.Adapter.Context,
+		Client:  messageservice.OpenIMClient{Context: p.Adapter.Context},
+	}, p.userID)
 }
 
 // ConversationMarkRead exposes the fixed server message-boundary read and

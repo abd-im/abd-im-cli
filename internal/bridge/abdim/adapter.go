@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/url"
 	"strings"
 	"sync"
@@ -47,6 +48,8 @@ type userContext interface {
 	SendTextMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string) error
 	SendAtMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, []string) error
 	SendQuoteMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string, *sdk_struct.MsgStruct) error
+	SendLocationMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, float64, float64, string, string) error
+	SendCustomMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string, string, string) error
 	Logout(context.Context) error
 	UnInitSDK()
 }
@@ -70,6 +73,26 @@ func (u sdkUserContext) SendQuoteMessage(ctx context.Context, callback open_im_s
 		return errors.New("quoted message is required")
 	}
 	message, err := u.Conversation().CreateQuoteMessage(ctx, text, quoted)
+	if err != nil {
+		return err
+	}
+	ctx = ccontext.WithSendMessageCallback(ctx, callback)
+	_, err = u.Conversation().SendMessageNotOss(ctx, message, recipientID, groupID, nil, false)
+	return err
+}
+
+func (u sdkUserContext) SendLocationMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, description string, longitude, latitude float64, recipientID, groupID string) error {
+	message, err := u.Conversation().CreateLocationMessage(ctx, description, longitude, latitude)
+	if err != nil {
+		return err
+	}
+	ctx = ccontext.WithSendMessageCallback(ctx, callback)
+	_, err = u.Conversation().SendMessageNotOss(ctx, message, recipientID, groupID, nil, false)
+	return err
+}
+
+func (u sdkUserContext) SendCustomMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, data, extension, description, recipientID, groupID string) error {
+	message, err := u.Conversation().CreateCustomMessage(ctx, data, extension, description)
 	if err != nil {
 		return err
 	}
@@ -358,6 +381,61 @@ func (a *Adapter) SendQuote(ctx context.Context, text, recipientID, groupID stri
 	sendContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
 	if err := user.SendQuoteMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), callback, text, recipientID, groupID, quoted); err != nil {
 		return errors.New("OpenIM message quote submission failed")
+	}
+	select {
+	case err := <-callback.done:
+		return err
+	case <-ctx.Done():
+		return operation.ErrOutcomeUnknown
+	}
+}
+
+// SendLocation delivers a grant-authorized location message through the
+// daemon-owned SDK context. The message capability validates coordinates and
+// its explicit target before this method is reached.
+func (a *Adapter) SendLocation(ctx context.Context, description string, longitude, latitude float64, recipientID, groupID string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if len(description) > 512 || math.IsNaN(longitude) || math.IsInf(longitude, 0) || math.IsNaN(latitude) || math.IsInf(latitude, 0) || longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90 || (strings.TrimSpace(recipientID) == "" && strings.TrimSpace(groupID) == "") || (strings.TrimSpace(recipientID) != "" && strings.TrimSpace(groupID) != "") {
+		return errors.New("invalid location message delivery")
+	}
+	user, err := a.currentUser()
+	if err != nil {
+		return err
+	}
+	callback := newSendCallback()
+	config := a.config
+	sendContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
+	if err := user.SendLocationMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), callback, description, longitude, latitude, recipientID, groupID); err != nil {
+		return errors.New("OpenIM location message submission failed")
+	}
+	select {
+	case err := <-callback.done:
+		return err
+	case <-ctx.Done():
+		return operation.ErrOutcomeUnknown
+	}
+}
+
+// SendCustom delivers a grant-authorized custom message through the
+// daemon-owned SDK context. Its payload is never persisted or logged here.
+func (a *Adapter) SendCustom(ctx context.Context, data, extension, description, recipientID, groupID string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if len(data) == 0 || len(data) > 4096 || len(extension) > 1024 || len(description) > 512 || (strings.TrimSpace(recipientID) == "" && strings.TrimSpace(groupID) == "") || (strings.TrimSpace(recipientID) != "" && strings.TrimSpace(groupID) != "") {
+		return errors.New("invalid custom message delivery")
+	}
+	user, err := a.currentUser()
+	if err != nil {
+		return err
+	}
+	callback := newSendCallback()
+	config := a.config
+	sendContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
+	if err := user.SendCustomMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), callback, data, extension, description, recipientID, groupID); err != nil {
+		return errors.New("OpenIM custom message submission failed")
 	}
 	select {
 	case err := <-callback.done:

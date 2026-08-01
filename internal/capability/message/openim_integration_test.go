@@ -3,6 +3,7 @@
 package message
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -81,6 +82,75 @@ func TestOpenIMTextAtIntegration(t *testing.T) {
 	if userID == recipientID {
 		t.Fatal("integration accounts must differ")
 	}
+}
+
+func TestOpenIMLocationAndCustomIntegration(t *testing.T) {
+	adapter, ctx, _, recipientID := startMessageIntegration(t)
+	if err := adapter.SendLocation(ctx, "abdim integration location", 120.1, 30.2, recipientID, ""); err != nil {
+		t.Fatalf("SendLocation() error = %v", err)
+	}
+	if err := adapter.SendCustom(ctx, "abdim integration custom", "abdim.v1", "controlled custom payload", "", recipientGroupID(t, adapter, ctx, recipientID)); err != nil {
+		t.Fatalf("SendCustom() error = %v", err)
+	}
+}
+
+func TestOpenIMRevokeIntegration(t *testing.T) {
+	adapter, ctx, userID, recipientID := startMessageIntegration(t)
+	marker := fmt.Sprintf("abdim revoke integration %d", time.Now().UnixNano())
+	if err := adapter.SendText(ctx, marker, recipientID, ""); err != nil {
+		t.Fatalf("SendText() error = %v", err)
+	}
+	conversationID := directConversationID(userID, recipientID)
+	client := messageservice.OpenIMClient{Context: adapter.Context}
+	var messageID string
+	var sequence int64
+	for {
+		items, err := client.Messages(ctx, conversationID, 100)
+		if err != nil {
+			t.Fatalf("Messages() error = %v", err)
+		}
+		for _, item := range items {
+			if item != nil && item.SendID == userID && bytes.Contains(item.Content, []byte(marker)) {
+				messageID = item.ServerMsgID
+				if messageID == "" {
+					messageID = item.ClientMsgID
+				}
+				sequence = item.Seq
+			}
+		}
+		if messageID != "" && sequence > 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("sent revoke message was not returned by server")
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	revoker, err := NewOpenIMRevoke(OpenIMRevoke{Context: adapter.Context, Client: client}, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := revoker.Revoke(ctx, RevokeInput{ConversationID: conversationID, MessageID: messageID}); err != nil {
+		t.Fatalf("Revoke() error = %v", err)
+	}
+}
+
+func recipientGroupID(t *testing.T, adapter *abdim.Adapter, ctx context.Context, recipientID string) string {
+	t.Helper()
+	creator, err := groupcapability.NewOpenIMCreator(groupcapability.OpenIMCreator{Context: adapter.Context})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := fmt.Sprintf("abdim-custom-%d", time.Now().UnixNano())
+	if err := creator.CreateGroup(ctx, groupcapability.Input{Name: name, MemberIDs: []string{recipientID}}); err != nil {
+		t.Fatal(err)
+	}
+	groupID, err := integrationGroupID(ctx, groupservice.OpenIMClient{Context: adapter.Context}, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return groupID
 }
 
 func integrationGroupID(ctx context.Context, client groupservice.Client, name string) (string, error) {

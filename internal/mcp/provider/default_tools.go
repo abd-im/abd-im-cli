@@ -3,7 +3,9 @@ package provider
 import (
 	"encoding/json"
 
+	blacklistcapability "github.com/abd-im/abd-im-cli/internal/capability/blacklist"
 	conversationcapability "github.com/abd-im/abd-im-cli/internal/capability/conversation"
+	friendcapability "github.com/abd-im/abd-im-cli/internal/capability/friend"
 	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
 	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/mcp/owner"
@@ -66,6 +68,24 @@ func DefaultTools(methods []string) []Tool {
 			Visible:     func() bool { return true },
 		})
 	}
+	if _, exists := allowed[messagecapability.LocationMethod]; exists {
+		tools = append(tools, Tool{
+			Name: "abdim." + messagecapability.LocationMethod, Description: "Send a location message to an approved user or group.", Method: messagecapability.LocationMethod,
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"description":{"type":"string","maxLength":512},"longitude":{"type":"number","minimum":-180,"maximum":180},"latitude":{"type":"number","minimum":-90,"maximum":90},"recipient_id":{"type":"string","minLength":1},"group_id":{"type":"string","minLength":1},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["longitude","latitude","idempotency_key"],"oneOf":[{"required":["recipient_id"]},{"required":["group_id"]}]}`), Visible: func() bool { return true },
+		})
+	}
+	if _, exists := allowed[messagecapability.CustomMethod]; exists {
+		tools = append(tools, Tool{
+			Name: "abdim." + messagecapability.CustomMethod, Description: "Send a bounded custom message to an approved user or group.", Method: messagecapability.CustomMethod,
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"data":{"type":"string","minLength":1,"maxLength":4096},"extension":{"type":"string","maxLength":1024},"description":{"type":"string","maxLength":512},"recipient_id":{"type":"string","minLength":1},"group_id":{"type":"string","minLength":1},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["data","idempotency_key"],"oneOf":[{"required":["recipient_id"]},{"required":["group_id"]}]}`), Visible: func() bool { return true },
+		})
+	}
+	if _, exists := allowed[messagecapability.RevokeMethod]; exists {
+		tools = append(tools, Tool{
+			Name: "abdim." + messagecapability.RevokeMethod, Description: "Revoke one approved message sent by the profile owner.", Method: messagecapability.RevokeMethod,
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"conversation_id":{"type":"string","minLength":1,"maxLength":256},"message_id":{"type":"string","minLength":1,"maxLength":256},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["conversation_id","message_id","idempotency_key"]}`), Visible: func() bool { return true },
+		})
+	}
 	if _, exists := allowed[conversationcapability.Method]; exists {
 		tools = append(tools, Tool{
 			Name:        "abdim." + conversationcapability.Method,
@@ -75,5 +95,43 @@ func DefaultTools(methods []string) []Tool {
 			Visible:     func() bool { return true },
 		})
 	}
+	if _, exists := allowed[conversationcapability.SetPinnedMethod]; exists {
+		tools = append(tools, Tool{
+			Name: "abdim." + conversationcapability.SetPinnedMethod, Description: "Set the pinned state for one approved conversation.", Method: conversationcapability.SetPinnedMethod,
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"conversation_id":{"type":"string","minLength":1,"maxLength":256},"pinned":{"type":"boolean"},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["conversation_id","pinned","idempotency_key"]}`), Visible: func() bool { return true },
+		})
+	}
+	if _, exists := allowed[conversationcapability.SetReceiveOptionMethod]; exists {
+		tools = append(tools, Tool{
+			Name: "abdim." + conversationcapability.SetReceiveOptionMethod, Description: "Set one fixed receive option for an approved conversation.", Method: conversationcapability.SetReceiveOptionMethod,
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"conversation_id":{"type":"string","minLength":1,"maxLength":256},"option":{"type":"string","enum":["receive","do_not_receive","receive_no_notify"]},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["conversation_id","option","idempotency_key"]}`), Visible: func() bool { return true },
+		})
+	}
+	for _, method := range []string{friendcapability.RequestMethod, friendcapability.RespondMethod, friendcapability.DeleteMethod, friendcapability.SetRemarkMethod} {
+		if _, exists := allowed[method]; !exists {
+			continue
+		}
+		description, schema := friendTool(method)
+		tools = append(tools, Tool{Name: "abdim." + method, Description: description, Method: method, InputSchema: schema, Visible: func() bool { return true }})
+	}
+	for _, method := range []string{blacklistcapability.AddMethod, blacklistcapability.RemoveMethod} {
+		if _, exists := allowed[method]; !exists {
+			continue
+		}
+		tools = append(tools, Tool{Name: "abdim." + method, Description: "Update one approved blacklist relationship.", Method: method, InputSchema: json.RawMessage(`{"type":"object","properties":{"user_id":{"type":"string","minLength":1,"maxLength":256},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["user_id","idempotency_key"]}`), Visible: func() bool { return true }})
+	}
 	return tools
+}
+
+func friendTool(method string) (string, json.RawMessage) {
+	switch method {
+	case friendcapability.RequestMethod:
+		return "Send a friend request to one approved user.", json.RawMessage(`{"type":"object","properties":{"user_id":{"type":"string","minLength":1,"maxLength":256},"message":{"type":"string","maxLength":512},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["user_id","idempotency_key"]}`)
+	case friendcapability.RespondMethod:
+		return "Accept or reject one pending friend request.", json.RawMessage(`{"type":"object","properties":{"user_id":{"type":"string","minLength":1,"maxLength":256},"response":{"type":"string","enum":["accept","reject"]},"message":{"type":"string","maxLength":512},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["user_id","response","idempotency_key"]}`)
+	case friendcapability.SetRemarkMethod:
+		return "Set one approved friend remark.", json.RawMessage(`{"type":"object","properties":{"user_id":{"type":"string","minLength":1,"maxLength":256},"remark":{"type":"string","maxLength":128},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["user_id","remark","idempotency_key"]}`)
+	default:
+		return "Delete one approved friend relationship.", json.RawMessage(`{"type":"object","properties":{"user_id":{"type":"string","minLength":1,"maxLength":256},"idempotency_key":{"type":"string","minLength":1,"maxLength":128}},"required":["user_id","idempotency_key"]}`)
+	}
 }

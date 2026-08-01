@@ -302,6 +302,39 @@ func TestAdapterSendsVerifiedQuoteToOneExplicitTarget(t *testing.T) {
 	}
 }
 
+func TestAdapterSendsLocationAndCustomMessagesToOneExplicitTarget(t *testing.T) {
+	user := &fakeUserContext{}
+	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
+	if err := adapter.InitSDK(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.InitResources(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.SendLocation(context.Background(), "office", 120.1, 30.2, "user-2", ""); err != nil {
+		t.Fatalf("SendLocation() error = %v", err)
+	}
+	if user.replyRecipient != "user-2" || user.locationDescription != "office" || user.longitude != 120.1 || user.latitude != 30.2 {
+		t.Fatalf("SDK location target = %+v", user)
+	}
+	if err := adapter.SendCustom(context.Background(), "opaque-data", "v1", "description", "", "group-1"); err != nil {
+		t.Fatalf("SendCustom() error = %v", err)
+	}
+	if user.replyGroup != "group-1" || user.customData != "opaque-data" || user.customExtension != "v1" || user.customDescription != "description" {
+		t.Fatalf("SDK custom target = %+v", user)
+	}
+	if err := adapter.SendLocation(context.Background(), "", 181, 0, "user-2", ""); err == nil {
+		t.Fatal("SendLocation() accepted an invalid longitude")
+	}
+	if err := adapter.SendCustom(context.Background(), "", "", "", "user-2", ""); err == nil {
+		t.Fatal("SendCustom() accepted an empty data payload")
+	}
+}
+
 func testConfig(t *testing.T) Config {
 	t.Helper()
 	root := t.TempDir()
@@ -320,23 +353,29 @@ func testConfig(t *testing.T) Config {
 }
 
 type fakeUserContext struct {
-	listener         open_im_sdk_callback.OnConnListener
-	messageListener  open_im_sdk_callback.OnAdvancedMsgListener
-	loginErr         error
-	loginCalled      bool
-	loginTokenSet    bool
-	loginContext     context.Context
-	connectOnLogin   bool
-	logoutCalled     bool
-	uninitialized    bool
-	logoutContext    context.Context
-	replyCallback    open_im_sdk_callback.SendMsgCallBack
-	replyContext     context.Context
-	replyText        string
-	replyRecipient   string
-	replyGroup       string
-	atMentionUserIDs []string
-	quotedMessage    *sdk_struct.MsgStruct
+	listener            open_im_sdk_callback.OnConnListener
+	messageListener     open_im_sdk_callback.OnAdvancedMsgListener
+	loginErr            error
+	loginCalled         bool
+	loginTokenSet       bool
+	loginContext        context.Context
+	connectOnLogin      bool
+	logoutCalled        bool
+	uninitialized       bool
+	logoutContext       context.Context
+	replyCallback       open_im_sdk_callback.SendMsgCallBack
+	replyContext        context.Context
+	replyText           string
+	replyRecipient      string
+	replyGroup          string
+	atMentionUserIDs    []string
+	quotedMessage       *sdk_struct.MsgStruct
+	locationDescription string
+	longitude           float64
+	latitude            float64
+	customData          string
+	customExtension     string
+	customDescription   string
 }
 
 func (f *fakeUserContext) InitSDK(_ *sdk_struct.IMConfig, listener open_im_sdk_callback.OnConnListener) bool {
@@ -388,6 +427,30 @@ func (f *fakeUserContext) SendQuoteMessage(ctx context.Context, callback open_im
 	f.replyRecipient = recipientID
 	f.replyGroup = groupID
 	f.quotedMessage = quoted
+	callback.OnSuccess(`{}`)
+	return nil
+}
+
+func (f *fakeUserContext) SendLocationMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, description string, longitude, latitude float64, recipientID, groupID string) error {
+	f.replyCallback = callback
+	f.replyContext = ctx
+	f.replyRecipient = recipientID
+	f.replyGroup = groupID
+	f.locationDescription = description
+	f.longitude = longitude
+	f.latitude = latitude
+	callback.OnSuccess(`{}`)
+	return nil
+}
+
+func (f *fakeUserContext) SendCustomMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, data, extension, description, recipientID, groupID string) error {
+	f.replyCallback = callback
+	f.replyContext = ctx
+	f.replyRecipient = recipientID
+	f.replyGroup = groupID
+	f.customData = data
+	f.customExtension = extension
+	f.customDescription = description
 	callback.OnSuccess(`{}`)
 	return nil
 }

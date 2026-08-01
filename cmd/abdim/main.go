@@ -22,7 +22,9 @@ import (
 	runmanager "github.com/abd-im/abd-im-cli/internal/agent/run"
 	"github.com/abd-im/abd-im-cli/internal/bridge"
 	"github.com/abd-im/abd-im-cli/internal/capability"
+	blacklistcapability "github.com/abd-im/abd-im-cli/internal/capability/blacklist"
 	conversationcapability "github.com/abd-im/abd-im-cli/internal/capability/conversation"
+	friendcapability "github.com/abd-im/abd-im-cli/internal/capability/friend"
 	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
 	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/cli"
@@ -389,11 +391,35 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
+	messageLocationSender, err := prepared.MessageLocationSender()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	messageCustomSender, err := prepared.MessageCustomSender()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
 	messageQuoteSource, err := prepared.MessageQuoteSource()
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	conversationMarkReadSource, err := prepared.ConversationMarkRead()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	conversationSettingsSource, err := prepared.ConversationSettings()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	friendActions, err := prepared.FriendActions()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	blacklistActions, err := prepared.BlacklistActions()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	messageRevokeSource, err := prepared.MessageRevokeSource()
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -413,6 +439,9 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		{Method: messagecapability.Method, Scope: messagecapability.Scope, Status: capability.Available},
 		{Method: messagecapability.AtMethod, Scope: messagecapability.AtScope, Status: capability.Available},
 		{Method: messagecapability.QuoteMethod, Scope: messagecapability.QuoteScope, Status: capability.Available},
+		{Method: messagecapability.LocationMethod, Scope: messagecapability.LocationScope, Status: capability.Available},
+		{Method: messagecapability.CustomMethod, Scope: messagecapability.CustomScope, Status: capability.Available},
+		{Method: messagecapability.RevokeMethod, Scope: messagecapability.RevokeScope, Status: capability.Available},
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -429,11 +458,59 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	conversationManifest, err := capability.New([]capability.Entry{{Method: conversationcapability.Method, Scope: conversationcapability.Scope, Status: capability.Available}})
+	messageLocation, err := messagecapability.NewLocation(messageManifest, groupOperations, messageLocationSender)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	messageCustom, err := messagecapability.NewCustom(messageManifest, groupOperations, messageCustomSender)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	messageRevoke, err := messagecapability.NewRevoke(messageManifest, groupOperations, messageRevokeSource)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	conversationManifest, err := capability.New([]capability.Entry{
+		{Method: conversationcapability.Method, Scope: conversationcapability.Scope, Status: capability.Available},
+		{Method: conversationcapability.SetPinnedMethod, Scope: conversationcapability.SetPinnedScope, Status: capability.Available},
+		{Method: conversationcapability.SetReceiveOptionMethod, Scope: conversationcapability.SetReceiveOptionScope, Status: capability.Available},
+	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	conversationMarkRead, err := conversationcapability.New(conversationManifest, groupOperations, conversationMarkReadSource, conversationMarkReadSource)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	conversationPinned, err := conversationcapability.NewSetPinned(conversationManifest, groupOperations, conversationSettingsSource)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	conversationReceiveOption, err := conversationcapability.NewSetReceiveOption(conversationManifest, groupOperations, conversationSettingsSource)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	friendManifest, err := capability.New([]capability.Entry{
+		{Method: friendcapability.RequestMethod, Scope: friendcapability.RequestScope, Status: capability.Available},
+		{Method: friendcapability.RespondMethod, Scope: friendcapability.RespondScope, Status: capability.Available},
+		{Method: friendcapability.DeleteMethod, Scope: friendcapability.DeleteScope, Status: capability.Available},
+		{Method: friendcapability.SetRemarkMethod, Scope: friendcapability.SetRemarkScope, Status: capability.Available},
+	})
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	friendHandler, err := friendcapability.New(friendManifest, groupOperations, friendActions)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	blacklistManifest, err := capability.New([]capability.Entry{
+		{Method: blacklistcapability.AddMethod, Scope: blacklistcapability.AddScope, Status: capability.Available},
+		{Method: blacklistcapability.RemoveMethod, Scope: blacklistcapability.RemoveScope, Status: capability.Available},
+	})
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	blacklistHandler, err := blacklistcapability.New(blacklistManifest, groupOperations, blacklistActions)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -501,7 +578,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		Replies:   replies,
 		Runs:      runs,
 		Grants:    grant.NewStore(),
-		Methods:   append(serviceMethods(services), groupCreate.ProxyMethod(), messageSend.ProxyMethod(), messageAt.ProxyMethod(), messageQuote.ProxyMethod(), conversationMarkRead.ProxyMethod()),
+		Methods:   append(append(serviceMethods(services), groupCreate.ProxyMethod(), messageSend.ProxyMethod(), messageAt.ProxyMethod(), messageQuote.ProxyMethod(), messageLocation.ProxyMethod(), messageCustom.ProxyMethod(), messageRevoke.ProxyMethod(), conversationMarkRead.ProxyMethod(), conversationPinned.ProxyMethod(), conversationReceiveOption.ProxyMethod()), append(friendHandler.ProxyMethods(), blacklistHandler.ProxyMethods()...)...),
 		Policy: daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
 			return daemon.Decision{Principal: "codex", Methods: []string{"message.history"}, RateBudget: 1}, true, nil
 		}),
