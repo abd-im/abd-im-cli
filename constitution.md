@@ -53,3 +53,6 @@ Create commits only for a completed, verified task or an independently useful go
 
 ### XII. Capability-Family Issue History
 Use one issue per cohesive capability family so it remains useful as a development record. List its typed methods, verification, material decisions and completion commit in the issue; keep implementation ownership in the architecture overview. Split an issue only when its record would no longer describe one focused delivery.
+
+### XIII. Current Provider Scope
+2026-08-01 user correction: current delivery uses the single Codex provider; multi-provider selection and session migration are deferred until explicitly reactivated.

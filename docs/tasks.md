@@ -64,12 +64,21 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与记录 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | ABD-048 | ready | US-02 | 交付媒体与文件消息能力族：`message.send_image`、`message.send_file`、`message.send_sound` 和 `message.send_video`。详见 [`issues/ABD-048-media-messages.md`](issues/ABD-048-media-messages.md)。 | ABD-046 | 方法只接受同 profile、同 run、未过期且类型匹配的 attachment reference；文件名、大小、时长和目标均受 grant 限制；不向 provider、日志或 control DB 暴露路径或内容；未知上传或发送结果不补发，且 integration gate 通过。 |
+| [ ] | ABD-048 | ready | US-02 | `[P]` 交付媒体与文件消息能力族：`message.send_image`、`message.send_file`、`message.send_sound` 和 `message.send_video`。详见 [`issues/ABD-048-media-messages.md`](issues/ABD-048-media-messages.md)。 | ABD-046 | 方法只接受同 profile、同 run、未过期且类型匹配的 attachment reference；文件名、大小、时长和目标均受 grant 限制；不向 provider、日志或 control DB 暴露路径或内容；未知上传或发送结果不补发，且 integration gate 通过。 |
 | [ ] | ABD-052 | ready | US-02 | `[P]` 交付群成员关系能力族：`group.join`、`group.leave`、`group.invite_members` 和 `group.remove_members`。详见 [`issues/ABD-052-group-membership.md`](issues/ABD-052-group-membership.md)。 | ABD-041 | grant 同时约束 group 和涉及的 user；申请消息与成员数量有受限输入；离开、邀请和移除均由固定 source/action 验证当前成员及操作者权限；每个方法 fail closed 并有 integration gate。 |
 | [ ] | ABD-053 | ready | US-02 | 交付群管理能力族：`group.set_info`、`group.set_mute`、`group.set_member_mute` 和 `group.transfer_owner`。详见 [`issues/ABD-053-group-administration.md`](issues/ABD-053-group-administration.md)。 | ABD-041, ABD-052 | grant 同时约束 group 和成员 target；只公开有限群资料字段、mute boolean 与有上限的 member mute 时长；固定 source/action 验证管理或 owner 权限；每个方法有 operation/idempotency、未知结果 fail closed 与 integration gate。 |
 
-**当前状态**：`ABD-024` 至 `ABD-032`、`ABD-035` 至 `ABD-047`、`ABD-049` 至 `ABD-051` 已完成 daemon、provider deployment boundary、P1 typed server-read/action source、消息控制、会话设置、好友关系和黑名单能力族。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。`ABD-048` 媒体/文件和 `ABD-052`、`ABD-053` 群组写入仍保持 active；它们分别依赖附件引用和群成员 action source。所有 action 只在 manifest、显式 grant 和对应 handler 共同允许时公开；默认入站 policy 仍只授予 `message.history`。
+## Phase 9: P4 Provider and Run Operations
+
+**目标**：在不改变 P1 reply target、调用模型和授权边界的前提下，交付单 Codex provider 的兼容性证据和高级 run 运维。多 provider 与 session migration 暂缓。
+
+| 完成 | ID | 状态 | 场景 | 任务与记录 | 依赖 | 完成条件 |
+| --- | --- | --- | --- | --- | --- | --- |
+| [ ] | ABD-055 | ready | US-01, US-02, US-03 | `[P]` 交付单 Codex provider 的 SDK/server compatibility matrix 与 capability evidence gate。详见 [`issues/ABD-055-compatibility-matrix.md`](issues/ABD-055-compatibility-matrix.md)。 | ABD-048, ABD-052, ABD-053 | 支持组合有自动化 gate 和版本证据；未验证组合保持 `not_validated`，不会因 manifest 静态声明变成 `available`。 |
+| [ ] | ABD-057 | ready | US-01, US-02, US-03 | `[P]` 交付高级 run 运维能力族：run 状态查询、显式取消和 operation 诊断。详见 [`issues/ABD-057-run-operations.md`](issues/ABD-057-run-operations.md)。 | ABD-032, ABD-039 | owner 只能通过 typed local service 查看 run/operation 状态并取消指定 run；取消有终态和审计记录，不发送补偿 reply，不重试 `unknown` operation。 |
+
+**当前状态**：`ABD-024` 至 `ABD-032`、`ABD-035` 至 `ABD-047`、`ABD-049` 至 `ABD-051` 已完成 daemon、provider deployment boundary、P1 typed server-read/action source、消息控制、会话设置、好友关系和黑名单能力族。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。`ABD-048` 媒体/文件和 `ABD-052`、`ABD-053` 群组写入仍保持 active；单 Codex provider 的 `ABD-055` 和 run 运维 `ABD-057` 是后续 P4 backlog。多 provider `ABD-054` 与 session migration `ABD-056` 已 deferred。所有 action 只在 manifest、显式 grant 和对应 handler 共同允许时公开；默认入站 policy 仍只授予 `message.history`。
 
 ## 执行顺序
 
-`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。`ABD-047`、`ABD-049`、`ABD-050`、`ABD-051` 的领域实现已按独立能力族完成，并在共享 daemon/provider registry 收口；它们之间无领域文件依赖，可以并行。`ABD-048` 可在 `ABD-046` 的 attachment reference 上推进；`ABD-052` 与 `ABD-053` 仍需按成员关系到群管理串行。共享注册表的修改不再并行写入。
+`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。`ABD-047`、`ABD-049`、`ABD-050`、`ABD-051` 的领域实现已按独立能力族完成，并在共享 daemon/provider registry 收口；它们之间无领域文件依赖，可以并行。当前 P3 中 `ABD-048` 与 `ABD-052` 可并行，`ABD-053` 必须在 `ABD-052` 后串行。P3 完成后，`ABD-055` 与 `ABD-057` 可并行；`ABD-054`、`ABD-056` 暂缓。共享注册表的修改不再并行写入。
