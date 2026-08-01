@@ -96,6 +96,19 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 | [`internal/mcp`](../internal/mcp) | 基于 MCP `2026-07-28` 的 stdio JSON-RPC、owner daemon adapter 与 run-private provider adapter。 |
 | [`docs/CONNECTOR.md`](CONNECTOR.md) | 外部部署 connector 的配置边界、启动顺序和 capability 验证门禁。 |
 
+### P2/P3 Capability Ownership
+
+下表是尚未交付能力的计划实现映射，不表示 capability 已可用。每个领域仍必须经 manifest、grant 和固定 SDK/server integration gate 后才可公开。
+
+| 能力族 | Capability handler | Daemon-owned source | Tool/CLI registration | 验证 |
+| --- | --- | --- | --- | --- |
+| 附件基础设施 | `internal/capability/message` | `internal/control`、`internal/profile` | 不直接公开 provider 方法 | `tests/e2e` |
+| 消息控制、媒体与文件 | `internal/capability/message` | `internal/bridge/abdim`、`internal/connector` | `internal/mcp/provider`、`cmd/abdim` | `tests/e2e` |
+| 会话设置 | `internal/capability/conversation` | `internal/connector` | `internal/mcp/provider`、`cmd/abdim` | `tests/e2e` |
+| 好友关系 | `internal/capability/friend` | `internal/connector` | `internal/mcp/provider`、`cmd/abdim` | `tests/e2e` |
+| 黑名单管理 | `internal/capability/blacklist` | `internal/connector` | `internal/mcp/provider`、`cmd/abdim` | `tests/e2e` |
+| 群成员关系、群管理 | `internal/capability/group` | `internal/connector` | `internal/mcp/provider`、`cmd/abdim` | `tests/e2e` |
+
 ## 当前实现状态
 
 基础模块和它们的单元测试已在仓库中存在，包括 profile/credential、SDK 生命周期边界、RPC framing、control store、事件账本、reply operation、grant/proxy、run manager、capability、typed service 和 MCP stdio adapter。`internal/daemon` 已组装入站 listener 到 reply 的生产路径；其 `Runtime` 在 SDK ready 后才开放 owner-only socket，并在启动失败和关闭时释放 inbound、SDK 和 profile lock。Dispatcher 的 `OwnerMethods` 逐项绑定 22 个当前 P1 typed-service read，并保留原 service 的 schema、stale 与 capability metadata。`internal/bridge/abdim` 已将 fork 的实例化 `UserContext` 映射为 daemon-owned lifecycle adapter，入站正文只以非序列化字段进入 provider prompt，控制库和 event 仍只保存身份引用；它使用 fork 的 context-bound text API 投递 callback 固化的 reply，并为 `message.send_text`、`message.send_quote` 和 `message.send_at` 提供窄 sender。CLI connector 现可通过 `daemon serve` 组装真实 SDK、owner socket 和固定 Codex App Server adapter。每个 Codex run 都启动新的 App Server session，并获得独立 `CODEX_HOME`、固定 stdio MCP 配置和单连接 Unix bridge；bridge 保留 grant 和 typed proxy，provider 只能发现构造快照中已验证且获授权的工具。`internal/launcher` 只接受 root-controlled 部署配置，并以独立 UID/GID 启动 provider；daemon 写完 run-private 配置后才交给该 UID，run parent 仍由 root 持有，provider 不能准备后续 run 路径。adapter 拒绝文件/命令审批，并在取消后销毁进程组和 run 目录。profile source 以 daemon-owned profile/runtime facts 与受控 `/user/get_users_info` source 提供 profile/self/user/daemon/doctor；group、conversation 的 `list/get/search`、message 的 `history/search/get` 及 social 的 friend/blacklist read 均已由受控 SDK/server integration gate 验证。`group.create` 通过 daemon-owned `/group/create_group` action source 接入 provider static registry，不调用会同步本地状态的 SDK API；`message.send_text`、`message.send_at` 和 `message.send_quote` 经同一 registry 调用 daemon-owned sender，其中引用先从固定 server-read history 重取并验证原消息。`conversation.mark_read` 先从固定 server-read source 解析消息 sequence，再调用固定 `/msg/mark_conversation_as_read` endpoint，不读取 SDK 本地数据库。所有 action 只有在 manifest 和 run grant 同时允许时才会暴露，默认入站 policy 不授予任一写入方法。conversation 未读数属于本地 SDK 状态，继续 `not_validated`；message 只使用经鉴权的 sequence server read，并在固定 100 条窗口内执行搜索、cursor 和 grant window；social 只调用当前 token owner 的 server endpoint，并在认证好友结果中搜索。默认 e2e gate 已验证 runtime lifecycle/profile lock、入站去重、event-bound reply 和 restart reconciliation。`abdim mcp serve` 已将 owner adapter 接至同一固定 registry。当前 CLI 提供 token 导入、profile 配置、daemon 校验和到本地 socket 的固定 owner 查询。`available` capability 的发布依据必须是固定 SDK/server 组合的集成测试，不能由 manifest 声明替代。

@@ -50,3 +50,6 @@ When a task contains multiple independently verifiable outcomes or cannot be com
 
 ### XI. Task-Level History
 Create commits only for a completed, verified task or an independently useful governance change. Include the task's required tests, dependency update, and current-state documentation in that commit; do not commit exploration, interim fixes, or status-only updates separately.
+
+### XII. Capability-Family Issue History
+Use one issue per cohesive capability family so it remains useful as a development record. List its typed methods, verification, material decisions and completion commit in the issue; keep implementation ownership in the architecture overview. Split an issue only when its record would no longer describe one focused delivery.
