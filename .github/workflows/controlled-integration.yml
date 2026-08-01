@@ -1,0 +1,50 @@
+name: Controlled OpenIM Integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOPRIVATE: github.com/abd-im/*
+  GONOSUMDB: github.com/abd-im/*
+
+jobs:
+  openim:
+    runs-on: ubuntu-24.04
+    environment: openim-integration
+    env:
+      ABDIM_OPENIM_API_ADDR: ${{ vars.ABDIM_OPENIM_API_ADDR }}
+      ABDIM_OPENIM_WS_ADDR: ${{ vars.ABDIM_OPENIM_WS_ADDR }}
+      ABDIM_OPENIM_USER_ID: ${{ vars.ABDIM_OPENIM_USER_ID }}
+      ABDIM_OPENIM_GROUP_CREATE_MEMBER_ID: ${{ vars.ABDIM_OPENIM_GROUP_CREATE_MEMBER_ID }}
+      ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID: ${{ vars.ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID }}
+      ABDIM_OPENIM_PLATFORM_ID: ${{ vars.ABDIM_OPENIM_PLATFORM_ID }}
+      ABDIM_OPENIM_TOKEN: ${{ secrets.ABDIM_OPENIM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Configure private SDK access
+        env:
+          SDK_READ_TOKEN: ${{ secrets.ABDIM_SDK_READ_TOKEN }}
+        run: |
+          test -n "$SDK_READ_TOKEN"
+          git config --global url."https://x-access-token:${SDK_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
+      - run: go mod download
+      - name: Validate controlled integration configuration
+        run: |
+          for name in ABDIM_OPENIM_API_ADDR ABDIM_OPENIM_WS_ADDR ABDIM_OPENIM_USER_ID ABDIM_OPENIM_GROUP_CREATE_MEMBER_ID ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID ABDIM_OPENIM_PLATFORM_ID ABDIM_OPENIM_TOKEN; do
+            test -n "${!name:-}" || { printf '%s is required\n' "$name" >&2; exit 2; }
+          done
+      - name: Run controlled OpenIM gates
+        run: |
+          go test -tags=integration ./tests/compatibility -run '^TestOpenIMServerMatchesSingleCodexCompatibilityMatrix$' -count=1
+          go test -tags=integration ./internal/service/profile ./internal/service/conversation -count=1
+          go test -tags=integration ./internal/capability/group -run '^TestOpenIMGroupCreateIntegration$' -count=1
+          go test -tags=integration ./internal/capability/message -run '^TestOpenIMTextSendIntegration$' -count=1

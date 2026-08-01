@@ -72,8 +72,8 @@
 | 完成 | ID | 状态 | 场景 | 任务与记录 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
 
-**当前状态**：`ABD-024` 至 `ABD-057`（不含 deferred 的 `ABD-054`、`ABD-056`）已完成 daemon、provider deployment boundary、P1 typed server-read/action source、消息控制、媒体、会话设置、好友/黑名单、群组管理、compatibility evidence 和 owner run 运维。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。多 provider `ABD-054` 与 session migration `ABD-056` 保持 deferred。所有 action 只在 manifest、显式 grant 和对应 handler 共同允许时公开；默认入站 policy 仍只授予 `message.history`。
+**当前状态**：`ABD-024` 至 `ABD-058`（不含 deferred 的 `ABD-054`、`ABD-056`）已完成 daemon、provider deployment boundary、P1 typed server-read/action source、消息控制、媒体、会话设置、好友/黑名单、群组管理、compatibility evidence、owner run 运维和 Linux GitHub Release 自动化。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。多 provider `ABD-054` 与 session migration `ABD-056` 保持 deferred。所有 action 只在 manifest、显式 grant 和对应 handler 共同允许时公开；默认入站 policy 仍只授予 `message.history`。
 
 ## 执行顺序
 
-`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。`ABD-048` 与 `ABD-052` 在领域实现和验证阶段并行完成，`ABD-053` 在 `ABD-052` 完成后交付；`ABD-055` 与 `ABD-057` 随后并行完成并在共享装配点串行收口。`ABD-054`、`ABD-056` 暂缓。共享注册表的修改不再并行写入。
+`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。`ABD-048` 与 `ABD-052` 在领域实现和验证阶段并行完成，`ABD-053` 在 `ABD-052` 完成后交付；`ABD-055` 与 `ABD-057` 随后并行完成并在共享装配点串行收口，`ABD-058` 在这些发布门禁完成后交付 CI、受控 integration 和 Linux tag release。`ABD-054`、`ABD-056` 暂缓。共享注册表的修改不再并行写入。

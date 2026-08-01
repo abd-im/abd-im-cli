@@ -95,6 +95,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 | [`internal/service`](../internal/service) | owner/provider 共用的 typed read service contract 及各领域实现；group source 使用 daemon SDK context 调用服务端 API，不触及 SDK 本地数据库。 |
 | [`internal/mcp`](../internal/mcp) | 基于 MCP `2026-07-28` 的 stdio JSON-RPC、owner daemon adapter 与 run-private provider adapter。 |
 | [`docs/CONNECTOR.md`](CONNECTOR.md) | 外部部署 connector 的配置边界、启动顺序和 capability 验证门禁。 |
+| [`.github/workflows`](../.github/workflows) 和 [`scripts/build-release.sh`](../scripts/build-release.sh) | PR/main CI、受控 OpenIM integration、tag 制品构建和 GitHub Release；不部署 daemon。 |
 
 ### P2/P3 Capability Ownership
 
@@ -127,6 +128,8 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 所有 P1 typed read 都经固定 server source 提供，不读取 SDK 本地数据库。写入面已包括群创建、成员关系和群资料/禁言/群主转让、文本/控制/媒体消息、会话设置、好友和黑名单；每项均经 method-scoped target、operation/idempotency guard 和未知结果 fail-closed 保护。媒体内容只在 profile 私有目录和 daemon 内 file handle 中流转，control DB 只保存不透明引用和约束 metadata。群成员和群管理动作以固定 server endpoint 验证角色和成员状态，不调用会同步本地状态的 SDK Group API。默认入站 policy 仍只授予 `message.history`；`conversation.unread` 因服务端未公开该值而保持 `not_validated`。
 
 `available` 必须由固定 SDK/server/provider 组合的 integration gate 证明，不能由 manifest 静态声明替代。daemon 启动时将实际 MCP/SDK 组合与固定 evidence 精确匹配；未命中时 action manifest 自动降为 `not_validated`。run/operation 诊断只经 owner local service 暴露，provider tool registry 明确排除这些方法。
+
+交付自动化将普通 CI、会产生 OpenIM 测试数据的受控 integration，以及 tag 制品发布分离。CI 仅使用无凭据测试和 fake provider；受控 integration 只从受保护 GitHub environment 读取短期 OpenIM token；tag workflow 只创建 GitHub Release，不拥有 daemon 主机或 deployment 凭据。具体配置和发布步骤见 [`RELEASING.md`](RELEASING.md)。
 
 ## 架构不变量
 

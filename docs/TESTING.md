@@ -7,6 +7,18 @@ go test ./...
 go vet ./...
 ```
 
+## GitHub Actions
+
+`.github/workflows/ci.yml` runs formatting, `go vet ./...`, `go test ./...`,
+the two Linux release build targets, and the root provider-isolation gate on internal
+pull requests and pushes to `main`. It needs the read-only
+`ABDIM_SDK_READ_TOKEN` secret because the pinned SDK module is private.
+
+`.github/workflows/controlled-integration.yml` is manual-only and uses the
+protected `openim-integration` environment. It runs the non-destructive
+compatibility/profile/conversation checks plus controlled group-create and
+message-send gates; it may create test groups and send a test message.
+
 ## P1 Runtime E2E
 
 `tests/e2e/runtime_inbound_reply_test.go` and
