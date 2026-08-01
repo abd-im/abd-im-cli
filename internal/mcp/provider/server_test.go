@@ -91,6 +91,27 @@ func TestServerSupportsCodexMCPHandshake(t *testing.T) {
 	}
 }
 
+func TestServerNegotiatesCodexMCPHandshakeVersion(t *testing.T) {
+	server, err := New("work", "daemon-grant", &recordingProxy{}, DefaultTools([]string{"message.history"}))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	output, err := serve(server, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-01-01","capabilities":{},"clientInfo":{"name":"codex","version":"0.145.0"}}}`)
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	responses := decodeResponses(t, output)
+	if len(responses) != 1 || responses[0].Error != nil {
+		t.Fatalf("legacy handshake response = %s", output)
+	}
+	var result struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if err := json.Unmarshal(responses[0].Result, &result); err != nil || result.ProtocolVersion != "2026-01-01" {
+		t.Fatalf("negotiated protocol = %+v, %v", result, err)
+	}
+}
+
 func TestServerUsesIdempotencyKeyFromToolArguments(t *testing.T) {
 	proxy := &recordingProxy{}
 	server, err := New("work", "daemon-grant", proxy, DefaultTools([]string{"group.create"}))

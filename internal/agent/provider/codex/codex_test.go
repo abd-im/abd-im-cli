@@ -66,7 +66,7 @@ func TestAdapterCancellationReapsBlockedServer(t *testing.T) {
 
 func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
 	adapter := newAdapter(t, "", false)
-	if err := os.WriteFile(filepath.Join(adapter.sourceCodexHome, "config.toml"), []byte("[mcp_servers.owner]\ncommand = 'must-not-inherit'\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(adapter.sourceCodexHome, "config.toml"), []byte("model = 'gpt-test'\nmodel_provider = 'OpenIM'\n\n[model_providers.OpenIM]\nbase_url = 'https://api.example.test/v1'\nsupports_websockets = true\n\n[mcp_servers.owner]\ncommand = 'must-not-inherit'\n\n[projects.'/workspace']\nhook = 'must-not-inherit'\n"), 0o600); err != nil {
 		t.Fatalf("write source Codex config: %v", err)
 	}
 	request := startRequest()
@@ -81,7 +81,7 @@ func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read run config: %v", err)
 	}
-	if strings.Contains(string(config), "must-not-inherit") || !strings.Contains(string(config), "[mcp_servers.abdim]") || !strings.Contains(string(config), "enabled_tools = [\"abdim.message.history\"]") {
+	if strings.Contains(string(config), "must-not-inherit") || !strings.Contains(string(config), "model_provider = 'OpenIM'") || !strings.Contains(string(config), "base_url = 'https://api.example.test/v1'") || strings.Contains(string(config), "supports_websockets = true") || !strings.Contains(string(config), "supports_websockets = false") || !strings.Contains(string(config), "[mcp_servers.abdim]") || !strings.Contains(string(config), "enabled_tools = [\"abdim.message.history\"]") {
 		t.Fatalf("run MCP config = %s", config)
 	}
 	info, err := os.Stat(configPath)

@@ -40,7 +40,7 @@
 | provider 工具接口 | 单个 run | 仅暴露静态注册的 typed 方法，逐请求校验 grant、scope、目标和 capability。 |
 | 远端副作用 | reply/action handler | 先记录 operation，再调用 SDK；不确定结果保持 `unknown`，不自动补发或重试。 |
 
-当前用户 Codex 不是 daemon 的管理接口客户端：正常 provider 调用只经每 run 私有 MCP bridge 和 grant-bound typed proxy。每个 run 使用新的 `CODEX_HOME`，只复制当前用户的 Codex 登录材料，不继承其 MCP 配置。由于 daemon 与 Codex 使用同一 OS UID，这不是对恶意本地代码的文件系统隔离边界；本产品只适用于信任当前用户本机 Codex 的场景。
+当前用户 Codex 不是 daemon 的管理接口客户端：正常 provider 调用只经每 run 私有 MCP bridge 和 grant-bound typed proxy。每个 run 使用新的 `CODEX_HOME`，复制当前用户的 Codex 登录材料和非 MCP 模型/供应商配置，剔除源 MCP 与 history 表后注入固定 run bridge。由于 daemon 与 Codex 使用同一 OS UID，这不是对恶意本地代码的文件系统隔离边界；本产品只适用于信任当前用户本机 Codex 的场景。
 
 ## 运行时闭环
 
@@ -92,7 +92,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 | [`internal/agent/provider/codex`](../internal/agent/provider/codex) | 固定 `codex app-server --listen stdio://` 的 JSON-RPC session、取消和审批拒绝。 |
 | [`internal/capability`](../internal/capability) | capability manifest；action handler 与 daemon-owned action source 按 IM 领域组织（当前为 [`conversation`](../internal/capability/conversation)、[`friend`](../internal/capability/friend)、[`blacklist`](../internal/capability/blacklist)、[`group`](../internal/capability/group) 和 [`message`](../internal/capability/message)）。 |
 | [`internal/service`](../internal/service) | owner/provider 共用的 typed read service contract 及各领域实现；group source 使用 daemon SDK context 调用服务端 API，不触及 SDK 本地数据库。 |
-| [`internal/mcp`](../internal/mcp) | 基于 MCP `2026-07-28` 的 stdio JSON-RPC、owner daemon adapter 与 run-private provider adapter。 |
+| [`internal/mcp`](../internal/mcp) | owner daemon adapter 使用固定 MCP `2026-07-28` stdio contract；run-private provider adapter 在握手时协商固定 Codex app-server 提供的 MCP 版本。 |
 | [`docs/CONNECTOR.md`](CONNECTOR.md) | 外部部署 connector 的配置边界、启动顺序和 capability 验证门禁。 |
 | [`.github/workflows`](../.github/workflows) 和 [`scripts/build-release.sh`](../scripts/build-release.sh) | PR/main CI、受控 OpenIM integration、tag 制品构建和 GitHub Release；不部署 daemon。 |
 
@@ -122,7 +122,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 
 ## 当前实现状态
 
-`daemon serve` 由当前用户运行，持有 SDK、控制库、owner socket、run manager 和固定 Codex App Server adapter。它从当前用户 `PATH` 解析 `codex`，从 `CODEX_HOME`（默认 `~/.codex`）复制登录材料到每个 run 的独立 `CODEX_HOME`；run 只获得固定 MCP 配置、Unix bridge 和 grant，且不继承源 Codex MCP 配置。adapter 拒绝文件和命令审批，并在取消时销毁进程组与 run 目录。
+`daemon serve` 由当前用户运行，持有 SDK、控制库、owner socket、run manager 和固定 Codex App Server adapter。它从当前用户 `PATH` 解析 `codex`，从 `CODEX_HOME`（默认 `~/.codex`）复制登录材料和非 MCP 模型/供应商配置到每个 run 的独立 `CODEX_HOME`；源 Codex MCP 与 history 表不继承，run 只获得固定 MCP 配置、Unix bridge 和 grant。adapter 拒绝文件和命令审批，并在取消时销毁进程组与 run 目录。
 
 所有 P1 typed read 都经固定 server source 提供，不读取 SDK 本地数据库。写入面已包括群创建、成员关系和群资料/禁言/群主转让、文本/控制/媒体消息、会话设置、好友和黑名单；每项均经 method-scoped target、operation/idempotency guard 和未知结果 fail-closed 保护。媒体内容只在 profile 私有目录和 daemon 内 file handle 中流转，control DB 只保存不透明引用和约束 metadata。群成员和群管理动作以固定 server endpoint 验证角色和成员状态，不调用会同步本地状态的 SDK Group API。默认入站 policy 仍只授予 `message.history`；`conversation.unread` 因服务端未公开该值而保持 `not_validated`。
 

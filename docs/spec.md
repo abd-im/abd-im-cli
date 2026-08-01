@@ -124,7 +124,7 @@ abdim [--profile NAME] [--output json|jsonl|table]
       [--timeout DURATION] [--request-id ID] <resource> <verb> [flags]
 ```
 
-`abdim mcp serve` 是 owner 或完全信任本地 Agent 的 stdio 适配器，调用同一 daemon service interface。当前用户模式下，Codex 的 agent-mode 进程只由 daemon 提供每 run 私有的 `CODEX_HOME`、固定 MCP 配置和 run tool proxy；它不继承源 MCP 配置。相同 OS UID 不构成安全沙箱，因此本地部署只适用于信任该用户和其 Codex 的环境；正常 tool 调用仍必须经过 grant、typed proxy 和 event-bound reply。
+`abdim mcp serve` 是 owner 或完全信任本地 Agent 的 stdio 适配器，调用同一 daemon service interface。当前用户模式下，Codex 的 agent-mode 进程由 daemon 提供每 run 私有的 `CODEX_HOME`、当前用户非 MCP 模型/供应商配置、固定 MCP 配置和 run tool proxy；源 MCP 与 history 表不继承。相同 OS UID 不构成安全沙箱，因此本地部署只适用于信任该用户和其 Codex 的环境；正常 tool 调用仍必须经过 grant、typed proxy 和 event-bound reply。
 
 ```go
 type Provider interface {

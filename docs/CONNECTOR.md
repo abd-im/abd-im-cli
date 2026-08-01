@@ -78,13 +78,17 @@ users. It is deliberately not the default group policy and remains an explicit
 operator acknowledgement.
 
 Each Codex run receives a fresh private `CODEX_HOME` containing the copied
-current-user login and only a fixed `abdim` stdio MCP server configuration. The
-source user's MCP configuration is not inherited. That server's subprocess
-only bridges to one run-private Unix socket; the daemon retains the grant and
-typed tool proxy. Its tool list is fixed before Codex starts to the policy,
-verified capability, and grant intersection. The adapter declines Codex
-command/file approvals. Unverified service sources remain `not_validated` and
-are absent from provider MCP discovery.
+current-user login and the current user's non-MCP model/provider configuration
+(including a configured provider `base_url`). Source MCP and history tables are
+removed, then replaced with one fixed `abdim` stdio MCP server and disabled
+history persistence. That server's subprocess only bridges to one run-private
+Unix socket; the daemon retains the grant and typed tool proxy. Its tool list is
+fixed before Codex starts to the policy, verified capability, and grant
+intersection. The adapter declines Codex command/file approvals. Unverified
+service sources remain `not_validated` and are absent from provider MCP
+discovery. The run-private provider bridge negotiates the MCP initialization
+version offered by the fixed Codex app-server; owner MCP retains its fixed
+local-service protocol contract.
 
 This is intentionally a simple trusted-user deployment, not an operating
 system sandbox. A same-user Codex process may still access files readable by

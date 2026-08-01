@@ -129,7 +129,7 @@ func (s *Server) initialize(raw json.RawMessage) (any, error) {
 	var params struct {
 		ProtocolVersion string `json:"protocolVersion"`
 	}
-	if !stdio.IsJSONObject(raw) || json.Unmarshal(raw, &params) != nil || params.ProtocolVersion != stdio.ProtocolVersion {
+	if !stdio.IsJSONObject(raw) || json.Unmarshal(raw, &params) != nil || strings.TrimSpace(params.ProtocolVersion) == "" {
 		return nil, stdio.RPCError{Code: -32602, Message: "unsupported protocol version"}
 	}
 	return struct {
@@ -137,7 +137,7 @@ func (s *Server) initialize(raw json.RawMessage) (any, error) {
 		Capabilities    map[string]any    `json:"capabilities"`
 		ServerInfo      map[string]string `json:"serverInfo"`
 	}{
-		ProtocolVersion: stdio.ProtocolVersion,
+		ProtocolVersion: params.ProtocolVersion,
 		Capabilities:    map[string]any{"tools": map[string]any{"listChanged": false}},
 		ServerInfo:      map[string]string{"name": "abdim-provider", "version": contracts.APIVersionV1},
 	}, nil

@@ -538,7 +538,7 @@ func (a *Adapter) prepareRun(request contracts.StartRequest) (runPathSet, error)
 	if err := copyCodexAuth(filepath.Join(a.sourceCodexHome, "auth.json"), filepath.Join(paths.home, "auth.json")); err != nil {
 		return cleanup(fmt.Errorf("copy Codex credentials: %w", err))
 	}
-	if err := writeRunConfig(filepath.Join(paths.home, "config.toml"), a.config.BridgeCommand, paths.socket, mcpprovider.DefaultTools(request.AllowedMethods)); err != nil {
+	if err := writeRunConfig(filepath.Join(a.sourceCodexHome, "config.toml"), filepath.Join(paths.home, "config.toml"), a.config.BridgeCommand, paths.socket, mcpprovider.DefaultTools(request.AllowedMethods)); err != nil {
 		return cleanup(fmt.Errorf("write provider MCP configuration: %w", err))
 	}
 	return paths, nil
@@ -559,7 +559,11 @@ func copyCodexAuth(source, destination string) error {
 	return os.Chmod(destination, 0o600)
 }
 
-func writeRunConfig(path, command, socket string, tools []mcpprovider.Tool) error {
+func writeRunConfig(sourcePath, path, command, socket string, tools []mcpprovider.Tool) error {
+	base, err := inheritedConfig(sourcePath)
+	if err != nil {
+		return err
+	}
 	names := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		names = append(names, tool.Name)
@@ -572,7 +576,7 @@ func writeRunConfig(path, command, socket string, tools []mcpprovider.Tool) erro
 	if err != nil {
 		return err
 	}
-	config := "[history]\npersistence = \"none\"\n\n" +
+	config := base + "[history]\npersistence = \"none\"\n\n" +
 		"[mcp_servers.abdim]\n" +
 		"command = " + strconv.Quote(command) + "\n" +
 		"args = " + string(args) + "\n" +
@@ -583,6 +587,59 @@ func writeRunConfig(path, command, socket string, tools []mcpprovider.Tool) erro
 		return err
 	}
 	return os.Chmod(path, 0o600)
+}
+
+// inheritedConfig keeps top-level model settings and model provider tables.
+// Every other source table is excluded so only the run's typed bridge is
+// discoverable and history persistence is controlled by this adapter.
+func inheritedConfig(path string) (string, error) {
+	payload, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read current Codex configuration: %w", err)
+	}
+	if len(payload) > 1<<20 {
+		return "", errors.New("current Codex configuration is too large")
+	}
+	var builder strings.Builder
+	inModelProvider := false
+	seenTable := false
+	for _, line := range strings.Split(string(payload), "\n") {
+		trimmed := strings.TrimSpace(line)
+		isHeader := strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")
+		if isHeader {
+			if inModelProvider {
+				builder.WriteString("supports_websockets = false\n")
+			}
+			seenTable = true
+			inModelProvider = isModelProviderTableHeader(trimmed)
+		}
+		if !seenTable || inModelProvider {
+			if inModelProvider && strings.HasPrefix(trimmed, "supports_websockets") && strings.Contains(trimmed, "=") {
+				continue
+			}
+			builder.WriteString(line)
+			builder.WriteByte('\n')
+		}
+	}
+	if inModelProvider {
+		builder.WriteString("supports_websockets = false\n")
+	}
+	return builder.String(), nil
+}
+
+func isModelProviderTableHeader(line string) bool {
+	name := strings.TrimSpace(line)
+	if strings.HasPrefix(name, "[[") && strings.HasSuffix(name, "]]") {
+		name = strings.TrimSpace(name[2 : len(name)-2])
+	} else if strings.HasPrefix(name, "[") && strings.HasSuffix(name, "]") {
+		name = strings.TrimSpace(name[1 : len(name)-1])
+	} else {
+		return false
+	}
+	return strings.HasPrefix(name, "model_providers.")
 }
 
 func runEnvironment(source []string, home, workDir string) []string {
