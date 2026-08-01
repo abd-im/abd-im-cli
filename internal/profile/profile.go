@@ -14,6 +14,7 @@ import (
 )
 
 var profileNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+var attachmentReferencePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$`)
 
 var (
 	ErrInvalidName       = errors.New("invalid profile name")
@@ -39,6 +40,7 @@ type Deployment struct {
 
 // Paths describes the exclusive on-disk resources of one profile.
 type Paths struct {
+	ProfileID      string
 	ConfigFile     string
 	DataDir        string
 	SDKDir         string
@@ -63,6 +65,7 @@ func NewPaths(configDir, dataDir, runtimeDir, profileName string) (Paths, error)
 	profileDataDir := filepath.Join(dataDir, "abdim", "profiles", profileName)
 	profileRuntimeDir := filepath.Join(runtimeDir, "abdim", profileName)
 	return Paths{
+		ProfileID:      profileName,
 		ConfigFile:     filepath.Join(configDir, "abdim", "profiles", profileName+".toml"),
 		DataDir:        profileDataDir,
 		SDKDir:         filepath.Join(profileDataDir, "sdk"),
@@ -74,6 +77,15 @@ func NewPaths(configDir, dataDir, runtimeDir, profileName string) (Paths, error)
 		Descriptor:     filepath.Join(profileRuntimeDir, "descriptor.json"),
 		LockFile:       filepath.Join(profileRuntimeDir, "daemon.lock"),
 	}, nil
+}
+
+// AttachmentPath resolves an opaque attachment reference within this profile's
+// private attachment directory. It rejects path-like values at the boundary.
+func (p Paths) AttachmentPath(reference string) (string, error) {
+	if !attachmentReferencePattern.MatchString(reference) {
+		return "", errors.New("invalid attachment reference")
+	}
+	return filepath.Join(p.AttachmentsDir, reference), nil
 }
 
 // EnsurePrivate creates the directories owned by this profile with owner-only

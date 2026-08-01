@@ -113,3 +113,25 @@ func TestMessageTargetsCannotBeUsedAsConversationTargets(t *testing.T) {
 		t.Fatalf("quote targets not authorized: %v", err)
 	}
 }
+
+func TestGrantCarriesAttachmentByteLimit(t *testing.T) {
+	store := NewStore()
+	issued, _, err := store.Issue(Policy{
+		RunID: "run-attachment", ProfileID: "work", Principal: "provider",
+		Methods: []string{"message.send_image"}, Scopes: []string{"message.send_image"},
+		ExpiresAt: time.Now().Add(time.Hour), RateBudget: 1, AttachmentByteLimit: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.AttachmentByteLimit != 1024 {
+		t.Fatalf("AttachmentByteLimit = %d, want 1024", issued.AttachmentByteLimit)
+	}
+	if _, _, err := store.Issue(Policy{
+		RunID: "run-invalid", ProfileID: "work", Principal: "provider",
+		Methods: []string{"message.send_image"}, Scopes: []string{"message.send_image"},
+		ExpiresAt: time.Now().Add(time.Hour), RateBudget: 1, AttachmentByteLimit: -1,
+	}); err == nil {
+		t.Fatal("Issue() accepted a negative attachment byte limit")
+	}
+}

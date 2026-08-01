@@ -42,8 +42,8 @@ func TestOpenMigratesIdempotently(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&migrations); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrations != 3 {
-		t.Fatalf("migration count = %d, want 3", migrations)
+	if migrations != 4 {
+		t.Fatalf("migration count = %d, want 4", migrations)
 	}
 }
 
@@ -138,6 +138,7 @@ func TestStorePersistsOnlyControlMetadata(t *testing.T) {
 		"operations":        true,
 		"grants":            true,
 		"reply_slots":       true,
+		"attachments":       true,
 	}
 	for rows.Next() {
 		var name, definition string
@@ -147,7 +148,7 @@ func TestStorePersistsOnlyControlMetadata(t *testing.T) {
 		if !allowedTables[name] {
 			t.Fatalf("control schema has unexpected table %q", name)
 		}
-		for _, forbidden := range []string{"body", "content"} {
+		for _, forbidden := range []string{"body", "content", "path"} {
 			if strings.Contains(strings.ToLower(definition), forbidden) {
 				t.Fatalf("control schema stores message data %q: %s", forbidden, definition)
 			}
@@ -155,6 +156,41 @@ func TestStorePersistsOnlyControlMetadata(t *testing.T) {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate schema: %v", err)
+	}
+}
+
+func TestAttachmentMetadataIsRunScopedAndQuotaBound(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(filepath.Join(t.TempDir(), "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	expiresAt := time.Now().Add(time.Hour)
+	first := Attachment{ID: "attachment-1", ProfileID: "work", RunID: "run-1", GrantID: "grant-1", Kind: "image", SizeBytes: 7, ByteLimit: 10, ExpiresAt: expiresAt}
+	if err := store.PutAttachment(ctx, first); err != nil {
+		t.Fatalf("PutAttachment(first) error = %v", err)
+	}
+	stored, err := store.AttachmentByID(ctx, "work", first.ID)
+	if err != nil {
+		t.Fatalf("AttachmentByID() error = %v", err)
+	}
+	if stored.RunID != "run-1" || stored.GrantID != "grant-1" || stored.Kind != "image" || stored.SizeBytes != 7 || stored.ByteLimit != 10 || stored.CreatedAt.IsZero() {
+		t.Fatalf("stored attachment = %+v", stored)
+	}
+	second := Attachment{ID: "attachment-2", ProfileID: "work", RunID: "run-1", GrantID: "grant-1", Kind: "file", SizeBytes: 4, ByteLimit: 10, ExpiresAt: expiresAt}
+	if err := store.PutAttachment(ctx, second); !errors.Is(err, ErrAttachmentQuota) {
+		t.Fatalf("PutAttachment(over quota) error = %v, want ErrAttachmentQuota", err)
+	}
+	changedLimit := Attachment{ID: "attachment-3", ProfileID: "work", RunID: "run-1", GrantID: "grant-1", Kind: "file", SizeBytes: 1, ByteLimit: 100, ExpiresAt: expiresAt}
+	if err := store.PutAttachment(ctx, changedLimit); !errors.Is(err, ErrConflict) {
+		t.Fatalf("PutAttachment(changed limit) error = %v, want ErrConflict", err)
+	}
+	if _, err := store.AttachmentByID(ctx, "other", first.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("AttachmentByID(other profile) error = %v, want ErrNotFound", err)
+	}
+	if err := store.PutAttachment(ctx, Attachment{ID: "../secret", ProfileID: "work", RunID: "run-2", GrantID: "grant-2", Kind: "file", ByteLimit: 10, ExpiresAt: expiresAt}); err == nil {
+		t.Fatal("PutAttachment() accepted a path-like ID")
 	}
 }
 

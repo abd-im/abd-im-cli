@@ -128,6 +128,33 @@ type Grant struct {
 	CreatedAt           time.Time
 }
 
+// Attachment records a daemon-owned file reference without retaining its
+// contents, original name, or local filesystem path.
+type Attachment struct {
+	ID        string
+	ProfileID string
+	RunID     string
+	GrantID   string
+	Kind      string
+	SizeBytes int64
+	ByteLimit int64
+	ExpiresAt time.Time
+	CreatedAt time.Time
+}
+
+func (attachment Attachment) validate() error {
+	if strings.TrimSpace(attachment.ID) == "" || strings.ContainsAny(attachment.ID, `/\\`) {
+		return errors.New("attachment ID is required and must not be a path")
+	}
+	if strings.TrimSpace(attachment.ProfileID) == "" || strings.TrimSpace(attachment.RunID) == "" || strings.TrimSpace(attachment.GrantID) == "" {
+		return errors.New("attachment profile ID, run ID, and grant ID are required")
+	}
+	if strings.TrimSpace(attachment.Kind) == "" || attachment.SizeBytes < 0 || attachment.ByteLimit <= 0 || attachment.ExpiresAt.IsZero() {
+		return errors.New("attachment kind, non-negative size, positive byte limit, and expiry are required")
+	}
+	return nil
+}
+
 func (grant Grant) validate() error {
 	if strings.TrimSpace(grant.ID) == "" || strings.TrimSpace(grant.ProfileID) == "" || strings.TrimSpace(grant.RunID) == "" {
 		return errors.New("grant ID, profile ID, and run ID are required")

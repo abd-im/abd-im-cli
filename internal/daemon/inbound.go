@@ -37,10 +37,11 @@ func (f PolicyFunc) Decide(ctx context.Context, event contracts.Event) (Decision
 
 // Decision selects a subset of the daemon's fixed typed tool registry.
 type Decision struct {
-	Principal        string
-	Methods          []string
-	TargetAllowlists map[string][]string
-	RateBudget       int
+	Principal           string
+	Methods             []string
+	TargetAllowlists    map[string][]string
+	AttachmentByteLimit int64
+	RateBudget          int
 }
 
 type Config struct {
@@ -192,8 +193,8 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	if err != nil {
 		return outcome, err
 	}
-	if strings.TrimSpace(decision.Principal) == "" || decision.RateBudget <= 0 {
-		return outcome, errors.New("policy must set a principal and positive rate budget")
+	if strings.TrimSpace(decision.Principal) == "" || decision.RateBudget <= 0 || decision.AttachmentByteLimit < 0 {
+		return outcome, errors.New("policy must set a principal, positive rate budget, and non-negative attachment byte limit")
 	}
 
 	runID := newRunID()
@@ -219,8 +220,9 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 			ConversationID: conversation.ConversationID,
 			AfterMessageID: conversation.MessageID,
 		},
-		ExpiresAt:  time.Now().Add(d.grantTTL),
-		RateBudget: decision.RateBudget,
+		AttachmentByteLimit: decision.AttachmentByteLimit,
+		ExpiresAt:           time.Now().Add(d.grantTTL),
+		RateBudget:          decision.RateBudget,
 	})
 	if err != nil {
 		return outcome, err

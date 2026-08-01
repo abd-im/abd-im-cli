@@ -52,26 +52,28 @@ type MessageWindow struct {
 
 // Policy is the complete authorization decision for one run.
 type Policy struct {
-	RunID            string
-	ProfileID        string
-	Principal        string
-	Methods          []string
-	Scopes           []string
-	TargetAllowlists map[string][]string
-	MessageWindow    MessageWindow
-	ExpiresAt        time.Time
-	RateBudget       int
+	RunID               string
+	ProfileID           string
+	Principal           string
+	Methods             []string
+	Scopes              []string
+	TargetAllowlists    map[string][]string
+	MessageWindow       MessageWindow
+	AttachmentByteLimit int64
+	ExpiresAt           time.Time
+	RateBudget          int
 }
 
 // Grant is the credential-free authorization state supplied to a typed handler.
 type Grant struct {
-	ID              string
-	RunID           string
-	ProfileID       string
-	Principal       string
-	MessageWindow   MessageWindow
-	ExpiresAt       time.Time
-	RemainingBudget int
+	ID                  string
+	RunID               string
+	ProfileID           string
+	Principal           string
+	MessageWindow       MessageWindow
+	AttachmentByteLimit int64
+	ExpiresAt           time.Time
+	RemainingBudget     int
 
 	methods map[string]struct{}
 	scopes  map[string]struct{}
@@ -128,16 +130,17 @@ func (s *Store) Issue(policy Policy) (Grant, string, error) {
 		return Grant{}, "", err
 	}
 	item := Grant{
-		ID:              newID(),
-		RunID:           policy.RunID,
-		ProfileID:       policy.ProfileID,
-		Principal:       policy.Principal,
-		MessageWindow:   policy.MessageWindow,
-		ExpiresAt:       policy.ExpiresAt,
-		RemainingBudget: policy.RateBudget,
-		methods:         toSet(policy.Methods),
-		scopes:          toSet(policy.Scopes),
-		targets:         toMethodTargetSets(policy.TargetAllowlists),
+		ID:                  newID(),
+		RunID:               policy.RunID,
+		ProfileID:           policy.ProfileID,
+		Principal:           policy.Principal,
+		MessageWindow:       policy.MessageWindow,
+		AttachmentByteLimit: policy.AttachmentByteLimit,
+		ExpiresAt:           policy.ExpiresAt,
+		RemainingBudget:     policy.RateBudget,
+		methods:             toSet(policy.Methods),
+		scopes:              toSet(policy.Scopes),
+		targets:             toMethodTargetSets(policy.TargetAllowlists),
 	}
 	s.mu.Lock()
 	s.grants[credentialHash(credential)] = &storedGrant{grant: item}
@@ -205,6 +208,9 @@ func validatePolicy(policy Policy) error {
 	}
 	if policy.RateBudget <= 0 {
 		return errors.New("grant rate budget must be positive")
+	}
+	if policy.AttachmentByteLimit < 0 {
+		return errors.New("grant attachment byte limit must not be negative")
 	}
 	methods := toSet(policy.Methods)
 	for _, values := range [][]string{policy.Methods, policy.Scopes} {

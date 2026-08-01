@@ -81,4 +81,21 @@ var migrations = []migration{
 			`ALTER TABLE reply_slots ADD COLUMN group_id TEXT NOT NULL DEFAULT ''`,
 		},
 	},
+	{
+		version: 4,
+		statements: []string{
+			`CREATE TABLE attachments (
+				id TEXT PRIMARY KEY,
+				profile_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				grant_id TEXT NOT NULL,
+				kind TEXT NOT NULL,
+				size_bytes INTEGER NOT NULL,
+				byte_limit INTEGER NOT NULL,
+				expires_at TEXT NOT NULL,
+				created_at TEXT NOT NULL
+			)`,
+			`CREATE INDEX attachments_profile_run ON attachments(profile_id, run_id, grant_id)`,
+		},
+	},
 }

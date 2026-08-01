@@ -37,6 +37,26 @@ func TestPathsCreatePrivateProfileLayout(t *testing.T) {
 	}
 }
 
+func TestAttachmentPathAcceptsOnlyOpaqueReferences(t *testing.T) {
+	root := t.TempDir()
+	paths, err := NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"), filepath.Join(root, "runtime"), "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := paths.AttachmentPath("a1b2c3d4e5f6g7h8")
+	if err != nil {
+		t.Fatalf("AttachmentPath() error = %v", err)
+	}
+	if path != filepath.Join(paths.AttachmentsDir, "a1b2c3d4e5f6g7h8") {
+		t.Fatalf("AttachmentPath() = %q", path)
+	}
+	for _, reference := range []string{"", "short", "../secret", "/tmp/secret", "reference/child", `reference\\child`} {
+		if _, err := paths.AttachmentPath(reference); err == nil {
+			t.Errorf("AttachmentPath(%q) error = nil", reference)
+		}
+	}
+}
+
 func TestImportTokenReadsOnlyInputAndStoresOpaqueReference(t *testing.T) {
 	const token = "test-token-marker-4d2a0d"
 	root := t.TempDir()

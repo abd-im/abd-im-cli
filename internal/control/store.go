@@ -18,6 +18,8 @@ var (
 	ErrNotFound = errors.New("control record not found")
 	// ErrConflict reports a duplicate control-plane identity.
 	ErrConflict = errors.New("control record conflict")
+	// ErrAttachmentQuota reports that a run has exhausted its attachment quota.
+	ErrAttachmentQuota = errors.New("attachment quota exceeded")
 )
 
 // Store owns the SQLite control database for one daemon.
@@ -406,6 +408,95 @@ func (s *Store) Grant(ctx context.Context, id string) (Grant, error) {
 	return grant, nil
 }
 
+// PutAttachment reserves quota and records attachment metadata. It never
+// stores the attachment's contents, original name, or filesystem path.
+func (s *Store) PutAttachment(ctx context.Context, attachment Attachment) (err error) {
+	if err := attachment.validate(); err != nil {
+		return err
+	}
+	if attachment.CreatedAt.IsZero() {
+		attachment.CreatedAt = time.Now()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin attachment reservation: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var used int64
+	if err = tx.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(size_bytes), 0)
+		FROM attachments WHERE profile_id = ? AND run_id = ? AND grant_id = ?`, attachment.ProfileID, attachment.RunID, attachment.GrantID).Scan(&used); err != nil {
+		return fmt.Errorf("read attachment quota: %w", err)
+	}
+	var recordedLimit sql.NullInt64
+	if err = tx.QueryRowContext(ctx, `
+		SELECT byte_limit FROM attachments
+		WHERE profile_id = ? AND run_id = ? AND grant_id = ?
+		LIMIT 1`, attachment.ProfileID, attachment.RunID, attachment.GrantID).Scan(&recordedLimit); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read attachment byte limit: %w", err)
+	}
+	if recordedLimit.Valid && recordedLimit.Int64 != attachment.ByteLimit {
+		return fmt.Errorf("%w: attachment byte limit differs for grant %q", ErrConflict, attachment.GrantID)
+	}
+	if used > attachment.ByteLimit || attachment.SizeBytes > attachment.ByteLimit-used {
+		return ErrAttachmentQuota
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO attachments (id, profile_id, run_id, grant_id, kind, size_bytes, byte_limit, expires_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		attachment.ID, attachment.ProfileID, attachment.RunID, attachment.GrantID, attachment.Kind, attachment.SizeBytes, attachment.ByteLimit,
+		encodeTime(attachment.ExpiresAt), encodeTime(attachment.CreatedAt))
+	if isUniqueViolation(err) {
+		return fmt.Errorf("%w: attachment %q", ErrConflict, attachment.ID)
+	}
+	if err != nil {
+		return fmt.Errorf("put attachment: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit attachment reservation: %w", err)
+	}
+	return nil
+}
+
+// AttachmentByID returns attachment metadata scoped to one profile.
+func (s *Store) AttachmentByID(ctx context.Context, profileID, id string) (Attachment, error) {
+	if strings.TrimSpace(profileID) == "" || strings.TrimSpace(id) == "" {
+		return Attachment{}, errors.New("attachment profile ID and ID are required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, profile_id, run_id, grant_id, kind, size_bytes, byte_limit, expires_at, created_at
+		FROM attachments WHERE profile_id = ? AND id = ?`, profileID, id)
+	attachment, err := scanAttachment(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Attachment{}, fmt.Errorf("%w: attachment %q", ErrNotFound, id)
+	}
+	if err != nil {
+		return Attachment{}, fmt.Errorf("get attachment: %w", err)
+	}
+	return attachment, nil
+}
+
+// DeleteAttachment removes metadata after a filesystem write failure.
+func (s *Store) DeleteAttachment(ctx context.Context, profileID, id string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM attachments WHERE profile_id = ? AND id = ?`, profileID, id)
+	if err != nil {
+		return fmt.Errorf("delete attachment: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check attachment delete: %w", err)
+	}
+	if changed == 0 {
+		return fmt.Errorf("%w: attachment %q", ErrNotFound, id)
+	}
+	return nil
+}
+
 func encodeTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
@@ -527,4 +618,23 @@ func scanGrant(row scanner) (Grant, error) {
 		return Grant{}, err
 	}
 	return grant, nil
+}
+
+func scanAttachment(row scanner) (Attachment, error) {
+	var attachment Attachment
+	var expiresAt, createdAt string
+	if err := row.Scan(
+		&attachment.ID, &attachment.ProfileID, &attachment.RunID, &attachment.GrantID, &attachment.Kind, &attachment.SizeBytes, &attachment.ByteLimit,
+		&expiresAt, &createdAt,
+	); err != nil {
+		return Attachment{}, err
+	}
+	var err error
+	if attachment.ExpiresAt, err = decodeTime(expiresAt); err != nil {
+		return Attachment{}, err
+	}
+	if attachment.CreatedAt, err = decodeTime(createdAt); err != nil {
+		return Attachment{}, err
+	}
+	return attachment, nil
 }
