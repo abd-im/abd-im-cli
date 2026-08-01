@@ -74,8 +74,8 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与记录 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [ ] | ABD-055 | ready | US-01, US-02, US-03 | `[P]` 交付单 Codex provider 的 SDK/server compatibility matrix 与 capability evidence gate。详见 [`issues/ABD-055-compatibility-matrix.md`](issues/ABD-055-compatibility-matrix.md)。 | ABD-048, ABD-052, ABD-053 | 支持组合有自动化 gate 和版本证据；未验证组合保持 `not_validated`，不会因 manifest 静态声明变成 `available`。 |
-| [ ] | ABD-057 | ready | US-01, US-02, US-03 | `[P]` 交付高级 run 运维能力族：run 状态查询、显式取消和 operation 诊断。详见 [`issues/ABD-057-run-operations.md`](issues/ABD-057-run-operations.md)。 | ABD-032, ABD-039 | owner 只能通过 typed local service 查看 run/operation 状态并取消指定 run；取消有终态和审计记录，不发送补偿 reply，不重试 `unknown` operation。 |
+| [ ] | ABD-055 | ready | US-01, US-02, US-03 | `[P]` 交付单 Codex provider 的 SDK/server compatibility matrix 与 capability evidence gate。 | ABD-048, ABD-052, ABD-053 | 支持组合有自动化 gate 和版本证据；未验证组合保持 `not_validated`，不会因 manifest 静态声明变成 `available`。 |
+| [ ] | ABD-057 | ready | US-01, US-02, US-03 | `[P]` 交付高级 run 运维能力族：run 状态查询、显式取消和 operation 诊断。 | ABD-032, ABD-039 | owner 只能通过 typed local service 查看 run/operation 状态并取消指定 run；取消有终态和审计记录，不发送补偿 reply，不重试 `unknown` operation。 |
 
 **当前状态**：`ABD-024` 至 `ABD-032`、`ABD-035` 至 `ABD-047`、`ABD-049` 至 `ABD-051` 已完成 daemon、provider deployment boundary、P1 typed server-read/action source、消息控制、会话设置、好友关系和黑名单能力族。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。`ABD-048` 媒体/文件和 `ABD-052`、`ABD-053` 群组写入仍保持 active；单 Codex provider 的 `ABD-055` 和 run 运维 `ABD-057` 是后续 P4 backlog。多 provider `ABD-054` 与 session migration `ABD-056` 已 deferred。所有 action 只在 manifest、显式 grant 和对应 handler 共同允许时公开；默认入站 policy 仍只授予 `message.history`。
 

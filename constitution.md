@@ -56,3 +56,6 @@ Use one issue per cohesive capability family so it remains useful as a developme
 
 ### XIII. Current Provider Scope
 2026-08-01 user correction: current delivery uses the single Codex provider; multi-provider selection and session migration are deferred until explicitly reactivated.
+
+### XIV. Backlog Record Scope
+2026-08-01 user correction: a not-started task does not need a separate empty issue file. Keep its goal, dependencies and acceptance in `docs/tasks.md`; create an issue record when implementation begins so it can preserve decisions, verification and completion history.
