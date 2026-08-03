@@ -46,8 +46,8 @@ func TestInboundCreatesOneRunAndOnlyRepliesToTriggerConversation(t *testing.T) {
 	if harness.policyCalls() != 1 || harness.provider.startCount() != 1 || harness.session.turnCount() != 1 || harness.sender.calls() != 1 {
 		t.Fatalf("calls policy=%d provider=%d turns=%d replies=%d", harness.policyCalls(), harness.provider.startCount(), harness.session.turnCount(), harness.sender.calls())
 	}
-	if event := harness.decidedEvent(); event.EventID != first.EventID || event.Sequence == 0 {
-		t.Fatalf("policy event = %#v, want persisted event %q", event, first.EventID)
+	if inbound := harness.decidedEvent(); inbound.Event.EventID != first.EventID || inbound.Event.Sequence == 0 || inbound.SenderID != "user-2" || inbound.ConversationID != "conversation-original" || inbound.SessionType != 1 {
+		t.Fatalf("policy inbound context = %#v, want persisted event %q", inbound, first.EventID)
 	}
 	if !harness.session.deniedThirdParty() {
 		t.Fatal("provider was allowed to read a third-party conversation")
@@ -69,6 +69,88 @@ func TestInboundCreatesOneRunAndOnlyRepliesToTriggerConversation(t *testing.T) {
 	payload, _ := json.Marshal(page.Events)
 	if strings.Contains(string(payload), "message body marker") {
 		t.Fatalf("ledger persisted inbound message text: %s", payload)
+	}
+}
+
+func TestInboundReplyOnlyRunExposesNoTypedTools(t *testing.T) {
+	harness := newHarness(t, false)
+	defer harness.close(t)
+	harness.setPolicy(Decision{Principal: "openim:user-2", RateBudget: 1}, true)
+	harness.session.setReplyOnly()
+
+	outcome, err := harness.inbound.Process(context.Background(), inboundEvent("sdk-reply-only", "conversation-original", "message-trigger"))
+	if err != nil || outcome.RunID == "" || outcome.Ignored {
+		t.Fatalf("Process() = %#v, %v", outcome, err)
+	}
+	select {
+	case delivery := <-harness.sender.deliveries:
+		if delivery.ConversationID != "conversation-original" || delivery.RecipientID != "user-2" {
+			t.Fatalf("reply-only delivery = %#v", delivery)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reply-only run did not produce a reply")
+	}
+	if !harness.session.deniedThirdParty() {
+		t.Fatal("reply-only run exposed a typed tool")
+	}
+	if methods := harness.provider.allowedMethods(); len(methods) != 0 {
+		t.Fatalf("reply-only provider methods = %v, want empty", methods)
+	}
+	if strings.Contains(harness.session.prompt(), "Use only the abdim MCP tools") {
+		t.Fatalf("reply-only prompt advertised tools: %q", harness.session.prompt())
+	}
+}
+
+func TestInboundCanBoundHistoryBeforeTrigger(t *testing.T) {
+	harness := newHarness(t, false)
+	defer harness.close(t)
+	harness.setPolicy(Decision{Principal: "openim:user-2", Methods: []string{"message.history"}, HistoryBeforeTrigger: true, RateBudget: 2}, true)
+
+	if _, err := harness.inbound.Process(context.Background(), inboundEvent("sdk-prior-history", "conversation-original", "message-trigger")); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	select {
+	case <-harness.sender.deliveries:
+	case <-time.After(time.Second):
+		t.Fatal("inbound run did not complete")
+	}
+	window := harness.window()
+	if window.ConversationID != "conversation-original" || window.AfterMessageID != "" || window.BeforeMessageID != "message-trigger" {
+		t.Fatalf("grant window = %#v", window)
+	}
+}
+
+func TestInboundShutdownWaitsForReplyPersistence(t *testing.T) {
+	harness := newHarness(t, false)
+	release := make(chan struct{})
+	harness.sender.release = release
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+		harness.close(t)
+	}()
+
+	if _, err := harness.inbound.Process(context.Background(), inboundEvent("sdk-shutdown-reply", "conversation-original", "message-trigger")); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	select {
+	case <-harness.sender.deliveries:
+	case <-time.After(time.Second):
+		t.Fatal("inbound run did not reach reply sender")
+	}
+	done := make(chan error, 1)
+	go func() { done <- harness.inbound.Shutdown(context.Background()) }()
+	select {
+	case err := <-done:
+		t.Fatalf("Shutdown() returned before reply persistence: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	released = true
+	if err := <-done; err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
 	}
 }
 
@@ -159,7 +241,7 @@ type harness struct {
 	decision Decision
 	allowed  bool
 	policies int
-	decided  contracts.Event
+	decided  InboundContext
 	windowed grant.MessageWindow
 }
 
@@ -222,11 +304,11 @@ func newHarness(t *testing.T, blockTurn bool) *harness {
 		Runs:      runs,
 		Grants:    grant.NewStore(),
 		Methods:   []proxy.Method{reader},
-		Policy: PolicyFunc(func(_ context.Context, event contracts.Event) (Decision, bool, error) {
+		Policy: PolicyFunc(func(_ context.Context, inbound InboundContext) (Decision, bool, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			h.policies++
-			h.decided = event
+			h.decided = inbound
 			return h.decision, h.allowed, nil
 		}),
 		GrantTTL: time.Minute,
@@ -256,7 +338,7 @@ func (h *harness) policyCalls() int {
 	return h.policies
 }
 
-func (h *harness) decidedEvent() contracts.Event {
+func (h *harness) decidedEvent() InboundContext {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.decided
@@ -291,6 +373,7 @@ type recordingSender struct {
 	mu         sync.Mutex
 	count      int
 	deliveries chan reply.Delivery
+	release    <-chan struct{}
 }
 
 func (s *recordingSender) Reply(_ context.Context, delivery reply.Delivery) error {
@@ -298,6 +381,9 @@ func (s *recordingSender) Reply(_ context.Context, delivery reply.Delivery) erro
 	s.count++
 	s.mu.Unlock()
 	s.deliveries <- delivery
+	if s.release != nil {
+		<-s.release
+	}
 	return nil
 }
 
@@ -310,15 +396,23 @@ func (s *recordingSender) calls() int {
 type recordingProvider struct {
 	mu      sync.Mutex
 	starts  int
+	methods []string
 	session *recordingSession
 }
 
 func (p *recordingProvider) Start(_ context.Context, request contracts.StartRequest) (contracts.Session, error) {
 	p.mu.Lock()
 	p.starts++
+	p.methods = append([]string(nil), request.AllowedMethods...)
 	p.mu.Unlock()
 	p.session.setProxy(request.Proxy)
 	return p.session, nil
+}
+
+func (p *recordingProvider) allowedMethods() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.methods...)
 }
 
 func (p *recordingProvider) startCount() int {
@@ -333,6 +427,7 @@ type recordingSession struct {
 	turns      int
 	lastPrompt string
 	denied     bool
+	replyOnly  bool
 	block      bool
 	started    chan struct{}
 }
@@ -357,6 +452,7 @@ func (s *recordingSession) Turn(ctx context.Context, turn contracts.TurnRequest)
 		close(s.started)
 	}
 	block := s.block
+	replyOnly := s.replyOnly
 	s.mu.Unlock()
 	if block {
 		<-ctx.Done()
@@ -369,11 +465,20 @@ func (s *recordingSession) Turn(ctx context.Context, turn contracts.TurnRequest)
 		s.denied = true
 		s.mu.Unlock()
 	}
+	if replyOnly {
+		return contracts.TurnResult{FinalText: "final response"}, nil
+	}
 	response, err := s.call(ctx, proxyValue, turn, "conversation-original")
 	if err != nil || !response.OK {
 		return contracts.TurnResult{}, errors.New("trigger conversation was not readable")
 	}
 	return contracts.TurnResult{FinalText: "final response"}, nil
+}
+
+func (s *recordingSession) setReplyOnly() {
+	s.mu.Lock()
+	s.replyOnly = true
+	s.mu.Unlock()
 }
 
 func (s *recordingSession) prompt() string {

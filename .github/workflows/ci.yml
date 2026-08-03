@@ -32,7 +32,10 @@ jobs:
         env:
           SDK_READ_TOKEN: ${{ secrets.ABDIM_SDK_READ_TOKEN }}
         run: |
-          test -n "$SDK_READ_TOKEN"
+          if [[ -z "$SDK_READ_TOKEN" ]]; then
+            echo "::error title=Missing private SDK token::Configure the repository secret ABDIM_SDK_READ_TOKEN with read-only Contents access to abd-im/abd-im-sdk-core."
+            exit 2
+          fi
           git config --global url."https://x-access-token:${SDK_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
       - run: go mod download
       - name: Check formatting

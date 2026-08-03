@@ -64,6 +64,10 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 	if err != nil {
 		return writeTextError(output, err.Error())
 	}
+	inboundToolsEnabled := false
+	if existing, loadErr := profile.Load(paths.ConfigFile); loadErr == nil {
+		inboundToolsEnabled = existing.InboundToolsEnabled
+	}
 	if err := paths.EnsurePrivate(); err != nil {
 		return writeTextError(output, err.Error())
 	}
@@ -77,8 +81,9 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 		return writeTextError(output, err.Error())
 	}
 	item := profile.Profile{
-		Name:          profileName,
-		CredentialRef: credentialRef,
+		Name:                profileName,
+		CredentialRef:       credentialRef,
+		InboundToolsEnabled: inboundToolsEnabled,
 		Deployment: profile.Deployment{
 			UserID:     userID,
 			APIAddr:    connector.ABDAPIAddr,

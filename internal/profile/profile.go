@@ -24,9 +24,10 @@ var (
 // Profile contains public profile metadata. CredentialRef is opaque and never
 // contains a token or an absolute local path.
 type Profile struct {
-	Name          string
-	CredentialRef string
-	Deployment    Deployment
+	Name                string
+	CredentialRef       string
+	InboundToolsEnabled bool
+	Deployment          Deployment
 }
 
 // Deployment is the non-secret server configuration required to start one
@@ -176,6 +177,7 @@ func Save(path string, profile Profile) error {
 		return fmt.Errorf("secure profile file: %w", err)
 	}
 	contents := "name = " + strconv.Quote(profile.Name) + "\ncredential_ref = " + strconv.Quote(profile.CredentialRef) + "\n"
+	contents += "inbound_tools_enabled = " + strconv.FormatBool(profile.InboundToolsEnabled) + "\n"
 	if profile.Deployment.Configured() {
 		contents += "user_id = " + strconv.Quote(profile.Deployment.UserID) + "\n"
 		contents += "api_addr = " + strconv.Quote(profile.Deployment.APIAddr) + "\n"
@@ -202,8 +204,9 @@ func Load(path string) (Profile, error) {
 		return Profile{}, fmt.Errorf("read profile file: %w", err)
 	}
 
-	values := make(map[string]string, 6)
+	values := make(map[string]string, 7)
 	var platformID int32
+	var inboundToolsEnabled bool
 	for _, line := range strings.Split(string(contents), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -217,7 +220,7 @@ func Load(path string) (Profile, error) {
 		if key == "owner_user_id" || key == "pairing_code_hash" || key == "pairing_expires_at" {
 			continue // Compatibility with profiles written by the removed pairing flow.
 		}
-		if key != "name" && key != "credential_ref" && key != "user_id" && key != "api_addr" && key != "ws_addr" && key != "platform_id" {
+		if key != "name" && key != "credential_ref" && key != "inbound_tools_enabled" && key != "user_id" && key != "api_addr" && key != "ws_addr" && key != "platform_id" {
 			return Profile{}, fmt.Errorf("unsupported profile field %q", key)
 		}
 		if _, exists := values[key]; exists {
@@ -232,6 +235,15 @@ func Load(path string) (Profile, error) {
 			values[key] = "configured"
 			continue
 		}
+		if key == "inbound_tools_enabled" {
+			value, err := strconv.ParseBool(strings.TrimSpace(rawValue))
+			if err != nil {
+				return Profile{}, fmt.Errorf("decode profile field %q: %w", key, err)
+			}
+			inboundToolsEnabled = value
+			values[key] = "configured"
+			continue
+		}
 		value, err := strconv.Unquote(strings.TrimSpace(rawValue))
 		if err != nil {
 			return Profile{}, fmt.Errorf("decode profile field %q: %w", key, err)
@@ -240,9 +252,10 @@ func Load(path string) (Profile, error) {
 	}
 
 	profile := Profile{
-		Name:          values["name"],
-		CredentialRef: values["credential_ref"],
-		Deployment:    Deployment{UserID: values["user_id"], APIAddr: values["api_addr"], WSAddr: values["ws_addr"], PlatformID: platformID},
+		Name:                values["name"],
+		CredentialRef:       values["credential_ref"],
+		InboundToolsEnabled: inboundToolsEnabled,
+		Deployment:          Deployment{UserID: values["user_id"], APIAddr: values["api_addr"], WSAddr: values["ws_addr"], PlatformID: platformID},
 	}
 	if err := ValidateName(profile.Name); err != nil {
 		return Profile{}, err

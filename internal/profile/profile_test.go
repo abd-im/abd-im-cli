@@ -75,7 +75,7 @@ func TestFileStoreKeepsTokenOutOfProfile(t *testing.T) {
 	if reference != "file:work" {
 		t.Fatalf("reference = %q, want file:work", reference)
 	}
-	item := Profile{Name: "work", CredentialRef: reference}
+	item := Profile{Name: "work", CredentialRef: reference, InboundToolsEnabled: true}
 	if err := Save(paths.ConfigFile, item); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -117,7 +117,7 @@ func TestLoadIgnoresRemovedPairingFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded, err := Load(path)
-	if err != nil || loaded.Name != "work" || loaded.Deployment.UserID != "bot-user" {
+	if err != nil || loaded.Name != "work" || loaded.Deployment.UserID != "bot-user" || loaded.InboundToolsEnabled {
 		t.Fatalf("Load() = %#v, %v", loaded, err)
 	}
 }

@@ -89,6 +89,25 @@ func TestTargetsAreScopedToMethodAndResource(t *testing.T) {
 	}
 }
 
+func TestAnyTargetRemainsScopedToItsMethod(t *testing.T) {
+	store := NewStore()
+	_, credential, err := store.Issue(Policy{
+		RunID: "run-any", ProfileID: "work", Principal: "provider",
+		Methods: []string{"message.history", "message.send_text"}, Scopes: []string{"message.read", "message.send"},
+		TargetAllowlists: map[string][]string{"message.history": {AnyTarget}},
+		ExpiresAt:        time.Now().Add(time.Hour), RateBudget: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Authorize(credential, "run-any", "work", "message.history", "message.read", []string{ConversationTarget("conversation-2")}); err != nil {
+		t.Fatalf("wildcard target was not authorized: %v", err)
+	}
+	if _, err := store.Authorize(credential, "run-any", "work", "message.send_text", "message.send", []string{UserTarget("user-2")}); !errors.Is(err, ErrTargetDenied) {
+		t.Fatalf("wildcard escaped its method: %v", err)
+	}
+}
+
 func TestMessageTargetsCannotBeUsedAsConversationTargets(t *testing.T) {
 	store := NewStore()
 	_, credential, err := store.Issue(Policy{
@@ -136,21 +155,25 @@ func TestGrantCarriesAttachmentByteLimit(t *testing.T) {
 	}
 }
 
-func TestFullAccessGrantAllowsAnyTypedTarget(t *testing.T) {
+func TestReplyOnlyGrantExposesNoTypedMethods(t *testing.T) {
 	store := NewStore()
-	_, credential, err := store.Issue(Policy{
-		RunID: "run-full", ProfileID: "work", Principal: "owner", FullAccess: true,
-		Methods: []string{"message.send_text"}, Scopes: []string{"message.send"},
+	issued, credential, err := store.Issue(Policy{
+		RunID: "run-reply", ProfileID: "work", Principal: "openim:user-1",
 		ExpiresAt: time.Now().Add(time.Hour), RateBudget: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	item, err := store.Authorize(credential, "run-full", "work", "message.send_text", "message.send", []string{UserTarget("any-user")})
-	if err != nil {
-		t.Fatalf("full access target denied: %v", err)
+	if issued.Principal != "openim:user-1" {
+		t.Fatalf("reply-only grant = %+v", issued)
 	}
-	if !item.FullAccess() {
-		t.Fatal("grant did not retain full access")
+	if _, err := store.Authorize(credential, "run-reply", "work", "message.send_text", "message.send", []string{UserTarget("user-1")}); !errors.Is(err, ErrMethodDenied) {
+		t.Fatalf("reply-only grant authorization = %v, want ErrMethodDenied", err)
+	}
+	if _, _, err := store.Issue(Policy{
+		RunID: "run-invalid", ProfileID: "work", Principal: "provider",
+		Methods: []string{"message.send_text"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 1,
+	}); err == nil {
+		t.Fatal("Issue() accepted methods without scopes")
 	}
 }

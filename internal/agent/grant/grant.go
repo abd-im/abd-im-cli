@@ -23,6 +23,8 @@ var (
 )
 
 const (
+	// AnyTarget grants one method access to every typed resource target.
+	AnyTarget          = "*:*"
 	TargetConversation = "conversation"
 	TargetGroup        = "group"
 	TargetMessage      = "message"
@@ -59,7 +61,6 @@ type Policy struct {
 	Scopes              []string
 	TargetAllowlists    map[string][]string
 	MessageWindow       MessageWindow
-	FullAccess          bool
 	AttachmentByteLimit int64
 	ExpiresAt           time.Time
 	RateBudget          int
@@ -75,7 +76,6 @@ type Grant struct {
 	AttachmentByteLimit int64
 	ExpiresAt           time.Time
 	RemainingBudget     int
-	fullAccess          bool
 
 	methods map[string]struct{}
 	scopes  map[string]struct{}
@@ -102,16 +102,13 @@ func (g Grant) AllowsTarget(method, target string) bool {
 	if target == "" {
 		return true
 	}
-	if g.fullAccess {
+	targets := g.targets[method]
+	if _, allowed := targets[target]; allowed {
 		return true
 	}
-	_, allowed := g.targets[method][target]
+	_, allowed := targets[AnyTarget]
 	return allowed
 }
-
-// FullAccess is an explicit policy property for a trusted owner run. It is
-// never inferred from a method, scope, or target value.
-func (g Grant) FullAccess() bool { return g.fullAccess }
 
 type storedGrant struct {
 	grant   Grant
@@ -147,7 +144,6 @@ func (s *Store) Issue(policy Policy) (Grant, string, error) {
 		AttachmentByteLimit: policy.AttachmentByteLimit,
 		ExpiresAt:           policy.ExpiresAt,
 		RemainingBudget:     policy.RateBudget,
-		fullAccess:          policy.FullAccess,
 		methods:             toSet(policy.Methods),
 		scopes:              toSet(policy.Scopes),
 		targets:             toMethodTargetSets(policy.TargetAllowlists),
@@ -210,8 +206,8 @@ func validatePolicy(policy Policy) error {
 	if strings.TrimSpace(policy.RunID) == "" || strings.TrimSpace(policy.ProfileID) == "" || strings.TrimSpace(policy.Principal) == "" {
 		return errors.New("grant run ID, profile ID, and principal are required")
 	}
-	if len(policy.Methods) == 0 || len(policy.Scopes) == 0 {
-		return errors.New("grant methods and scopes are required")
+	if (len(policy.Methods) == 0) != (len(policy.Scopes) == 0) {
+		return errors.New("grant methods and scopes must both be empty or both be present")
 	}
 	if policy.ExpiresAt.IsZero() || !policy.ExpiresAt.After(time.Now()) {
 		return errors.New("grant expiry must be in the future")

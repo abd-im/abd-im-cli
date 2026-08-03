@@ -162,7 +162,7 @@ func newRuntimeHarness(t *testing.T, databasePath, lockPath, socketPath string) 
 		Runs:      runs,
 		Grants:    grant.NewStore(),
 		Methods:   []proxy.Method{method},
-		Policy: daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
+		Policy: daemon.PolicyFunc(func(context.Context, daemon.InboundContext) (daemon.Decision, bool, error) {
 			return daemon.Decision{Principal: "provider", Methods: []string{method.Name}, RateBudget: 1}, true, nil
 		}),
 		GrantTTL: time.Minute,

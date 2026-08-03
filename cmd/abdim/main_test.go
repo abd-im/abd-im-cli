@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/daemon"
 	"github.com/abd-im/abd-im-cli/internal/ipc"
 	"github.com/abd-im/abd-im-cli/internal/profile"
 )
@@ -37,27 +39,42 @@ func TestLegacyManualSetupCommandsAreRemoved(t *testing.T) {
 	}
 }
 
-func TestInboundPolicyGrantsVerifiedMethods(t *testing.T) {
-	policy := fullInboundPolicy([]proxy.Method{{Name: "group.list", Scope: "group.read", Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
-		return json.RawMessage(`{}`), nil
-	}}})
-	decision, allowed, err := policy.Decide(context.Background(), contracts.Event{})
-	if err != nil || !allowed || !decision.FullAccess || len(decision.Methods) != 1 || decision.Methods[0] != "group.list" || decision.RateBudget != 64 {
-		t.Fatalf("inbound policy = %+v, allowed=%t, err=%v", decision, allowed, err)
+func TestDirectMessagePolicyDefaultsToReplyOnlyAndBindsSender(t *testing.T) {
+	policy := directMessagePolicy("bot-user", false, nil)
+	for _, sender := range []string{"user-1", "user-2"} {
+		decision, allowed, err := policy.Decide(context.Background(), daemon.InboundContext{SenderID: sender, SessionType: 1})
+		if err != nil || !allowed || decision.Principal != "openim:"+sender || len(decision.Methods) != 0 || decision.RateBudget != 1 || decision.AttachmentByteLimit != 0 {
+			t.Fatalf("inbound sender %q policy = %+v, allowed=%t, err=%v", sender, decision, allowed, err)
+		}
+	}
+	for name, inbound := range map[string]daemon.InboundContext{
+		"self":  {SenderID: "bot-user", SessionType: 1},
+		"group": {SenderID: "user-1", GroupID: "group-1", SessionType: 2},
+	} {
+		if _, allowed, err := policy.Decide(context.Background(), inbound); err != nil || allowed {
+			t.Fatalf("%s policy allowed=%t err=%v", name, allowed, err)
+		}
 	}
 }
 
-func TestInboundAcceptanceNeedsNoConfiguredSender(t *testing.T) {
-	accept := acceptAllInbound("bot-user")
-	for _, sender := range []string{"user-1", "user-2"} {
-		event := contracts.SDKEvent{Type: string(contracts.EventMessageReceived), Data: json.RawMessage(`{"sender_id":"` + sender + `","session_type":1}`)}
-		if !accept(event) {
-			t.Fatalf("inbound sender %q was rejected", sender)
-		}
+func TestDirectMessagePolicyExplicitlyEnablesRegisteredTools(t *testing.T) {
+	methods := []proxy.Method{{Name: "message.history"}, {Name: "message.send_text"}}
+	policy := directMessagePolicy("bot-user", true, methods)
+	decision, allowed, err := policy.Decide(context.Background(), daemon.InboundContext{SenderID: "user-1", SessionType: 1})
+	if err != nil || !allowed {
+		t.Fatalf("enabled policy allowed=%t err=%v", allowed, err)
 	}
-	self := contracts.SDKEvent{Type: string(contracts.EventMessageReceived), Data: json.RawMessage(`{"sender_id":"bot-user","session_type":1}`)}
-	if accept(self) {
-		t.Fatal("bot accepted its own message")
+	if decision.Principal != "openim:user-1" || decision.RateBudget != 64 || decision.AttachmentByteLimit != 32*1024*1024 || !decision.HistoryBeforeTrigger {
+		t.Fatalf("enabled policy = %+v", decision)
+	}
+	if len(decision.Methods) != len(methods) {
+		t.Fatalf("enabled methods = %v", decision.Methods)
+	}
+	for _, method := range methods {
+		allowedTargets := decision.TargetAllowlists[method.Name]
+		if len(allowedTargets) != 1 || allowedTargets[0] != grant.AnyTarget {
+			t.Fatalf("targets for %q = %v", method.Name, allowedTargets)
+		}
 	}
 }
 
@@ -67,7 +84,7 @@ func TestDaemonSDKConfigUsesProfilePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := daemonSDKConfig(paths, profile.Deployment{UserID: "user-1", APIAddr: "https://2.example.test/api", WSAddr: "wss://2.example.test/msg_gateway", PlatformID: 7})
-	if config.PlatformID != 7 || config.ApiAddr != "https://2.example.test/api" || config.WsAddr != "wss://2.example.test/msg_gateway" || config.DataDir != paths.SDKDir || config.LogFilePath != filepath.Join(paths.LogsDir, "sdk.log") {
+	if config.SystemType != runtime.GOOS || config.PlatformID != 7 || config.ApiAddr != "https://2.example.test/api" || config.WsAddr != "wss://2.example.test/msg_gateway" || config.DataDir != paths.SDKDir || config.LogFilePath != filepath.Join(paths.LogsDir, "sdk.log") {
 		t.Fatalf("daemonSDKConfig() = %#v", config)
 	}
 }

@@ -9,12 +9,14 @@ go vet ./...
 
 `cmd/abdim` tests cover interactive ABD setup without real credentials,
 current-user-only token persistence, lifecycle status/stop behavior, removal
-of the old manual setup commands, and zero-configuration inbound acceptance.
-The inbound policy test verifies all currently registered methods are granted
-without a second identity configuration. `internal/profile` verifies profiles
-from the removed pairing implementation remain readable. `internal/connector`
-verifies the fixed ABD login request and sanitized failure handling with an
-in-process HTTP server.
+of the old manual setup commands, and zero-configuration direct-message
+acceptance. The inbound policy tests verify the default empty tool set, the
+explicit all-tools setting and daemon restart, profile persistence, method-
+scoped wildcard targets, the prior-message window, ignored self/group events,
+event-bound replies, and shutdown reply persistence.
+`internal/profile` verifies profiles from the removed pairing implementation
+remain readable. `internal/connector` verifies the fixed ABD login request and
+sanitized failure handling with an in-process HTTP server.
 
 ## GitHub Actions
 
@@ -22,11 +24,18 @@ in-process HTTP server.
 the four Unix release build targets on internal pull requests and pushes to
 `main`. It needs the read-only
 `ABDIM_SDK_READ_TOKEN` secret because the pinned SDK module is private.
+The secret belongs in the `abd-im-cli` repository under **Settings -> Secrets
+and variables -> Actions**. A missing secret now fails with an explicit
+`Missing private SDK token` annotation; an empty `SDK_READ_TOKEN` in that step
+is repository configuration, not a Go test failure.
 
 `.github/workflows/controlled-integration.yml` is manual-only and uses the
-protected `openim-integration` environment. It runs the non-destructive
-compatibility/profile/conversation checks plus controlled group-create and
-message-send gates; it may create test groups and send a test message.
+protected `openim-integration` environment. It validates the compatibility
+tuple, every typed read family, and every action currently marked `available`.
+The workflow validates all fixtures before running so tests cannot silently
+skip due to a missing variable. It mutates only disposable controlled accounts:
+it creates retained test groups, sends/revokes messages, changes/restores
+conversation settings, and exercises friend and blacklist lifecycles.
 
 ## P1 Runtime E2E
 

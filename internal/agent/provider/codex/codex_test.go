@@ -99,23 +99,6 @@ func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
 	}
 }
 
-func TestAdapterPreApprovesOwnerFullTools(t *testing.T) {
-	adapter := newAdapter(t, "", false)
-	request := startRequest()
-	request.AutoApproveTools = true
-	session, err := adapter.Start(context.Background(), request)
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	config, err := os.ReadFile(filepath.Join(adapter.config.WorkingDir, request.RunID, "codex", "config.toml"))
-	if err != nil || !strings.Contains(string(config), "default_tools_approval_mode = \"approve\"") {
-		t.Fatalf("full-access MCP config = %s, %v", config, err)
-	}
-	if err := session.Close(context.Background()); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-}
-
 func TestNewRequiresCurrentUserCompositionInputs(t *testing.T) {
 	if _, err := New(Config{Environment: []string{"PATH=/bin"}, BridgeCommand: os.Args[0]}); err == nil {
 		t.Fatal("New() accepted an empty working directory")

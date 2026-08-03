@@ -18,10 +18,30 @@ jobs:
       ABDIM_OPENIM_API_ADDR: ${{ vars.ABDIM_OPENIM_API_ADDR }}
       ABDIM_OPENIM_WS_ADDR: ${{ vars.ABDIM_OPENIM_WS_ADDR }}
       ABDIM_OPENIM_USER_ID: ${{ vars.ABDIM_OPENIM_USER_ID }}
+      ABDIM_OPENIM_GROUP_ID: ${{ vars.ABDIM_OPENIM_GROUP_ID }}
+      ABDIM_OPENIM_MEMBER_QUERY: ${{ vars.ABDIM_OPENIM_MEMBER_QUERY }}
+      ABDIM_OPENIM_CONVERSATION_ID: ${{ vars.ABDIM_OPENIM_CONVERSATION_ID }}
+      ABDIM_OPENIM_MESSAGE_ID: ${{ vars.ABDIM_OPENIM_MESSAGE_ID }}
+      ABDIM_OPENIM_MESSAGE_QUERY: ${{ vars.ABDIM_OPENIM_MESSAGE_QUERY }}
+      ABDIM_OPENIM_AFTER_MESSAGE_ID: ${{ vars.ABDIM_OPENIM_AFTER_MESSAGE_ID }}
+      ABDIM_OPENIM_FRIEND_USER_ID: ${{ vars.ABDIM_OPENIM_FRIEND_USER_ID }}
+      ABDIM_OPENIM_FRIEND_QUERY: ${{ vars.ABDIM_OPENIM_FRIEND_QUERY }}
+      ABDIM_OPENIM_BLACKLIST_USER_ID: ${{ vars.ABDIM_OPENIM_BLACKLIST_USER_ID }}
       ABDIM_OPENIM_GROUP_CREATE_MEMBER_ID: ${{ vars.ABDIM_OPENIM_GROUP_CREATE_MEMBER_ID }}
       ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID: ${{ vars.ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID }}
       ABDIM_OPENIM_PLATFORM_ID: ${{ vars.ABDIM_OPENIM_PLATFORM_ID }}
       ABDIM_OPENIM_TOKEN: ${{ secrets.ABDIM_OPENIM_TOKEN }}
+      ABDIM_OPENIM_GROUP_MEMBERSHIP_OWNER_ID: ${{ vars.ABDIM_OPENIM_USER_ID }}
+      ABDIM_OPENIM_GROUP_MEMBERSHIP_OWNER_TOKEN: ${{ secrets.ABDIM_OPENIM_TOKEN }}
+      ABDIM_OPENIM_GROUP_MEMBERSHIP_MEMBER_ID: ${{ vars.ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID }}
+      ABDIM_OPENIM_GROUP_MEMBERSHIP_MEMBER_TOKEN: ${{ secrets.ABDIM_OPENIM_SECONDARY_TOKEN }}
+      ABDIM_OPENIM_FRIEND_REQUESTER_ID: ${{ vars.ABDIM_OPENIM_USER_ID }}
+      ABDIM_OPENIM_FRIEND_REQUESTER_TOKEN: ${{ secrets.ABDIM_OPENIM_TOKEN }}
+      ABDIM_OPENIM_FRIEND_RESPONDER_ID: ${{ vars.ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID }}
+      ABDIM_OPENIM_FRIEND_RESPONDER_TOKEN: ${{ secrets.ABDIM_OPENIM_SECONDARY_TOKEN }}
+      ABDIM_OPENIM_BLACKLIST_OWNER_ID: ${{ vars.ABDIM_OPENIM_USER_ID }}
+      ABDIM_OPENIM_BLACKLIST_OWNER_TOKEN: ${{ secrets.ABDIM_OPENIM_TOKEN }}
+      ABDIM_OPENIM_BLACKLIST_TARGET_ID: ${{ vars.ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -34,17 +54,38 @@ jobs:
         env:
           SDK_READ_TOKEN: ${{ secrets.ABDIM_SDK_READ_TOKEN }}
         run: |
-          test -n "$SDK_READ_TOKEN"
+          if [[ -z "$SDK_READ_TOKEN" ]]; then
+            echo "::error title=Missing private SDK token::Configure the repository secret ABDIM_SDK_READ_TOKEN with read-only Contents access to abd-im/abd-im-sdk-core."
+            exit 2
+          fi
           git config --global url."https://x-access-token:${SDK_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
       - run: go mod download
       - name: Validate controlled integration configuration
         run: |
-          for name in ABDIM_OPENIM_API_ADDR ABDIM_OPENIM_WS_ADDR ABDIM_OPENIM_USER_ID ABDIM_OPENIM_GROUP_CREATE_MEMBER_ID ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID ABDIM_OPENIM_PLATFORM_ID ABDIM_OPENIM_TOKEN; do
+          required=(
+            ABDIM_OPENIM_API_ADDR ABDIM_OPENIM_WS_ADDR ABDIM_OPENIM_USER_ID ABDIM_OPENIM_TOKEN
+            ABDIM_OPENIM_GROUP_ID ABDIM_OPENIM_MEMBER_QUERY
+            ABDIM_OPENIM_CONVERSATION_ID ABDIM_OPENIM_MESSAGE_ID ABDIM_OPENIM_MESSAGE_QUERY ABDIM_OPENIM_AFTER_MESSAGE_ID
+            ABDIM_OPENIM_FRIEND_USER_ID ABDIM_OPENIM_FRIEND_QUERY ABDIM_OPENIM_BLACKLIST_USER_ID
+            ABDIM_OPENIM_GROUP_CREATE_MEMBER_ID ABDIM_OPENIM_MESSAGE_SEND_RECIPIENT_ID ABDIM_OPENIM_PLATFORM_ID
+            ABDIM_OPENIM_GROUP_MEMBERSHIP_OWNER_ID ABDIM_OPENIM_GROUP_MEMBERSHIP_OWNER_TOKEN
+            ABDIM_OPENIM_GROUP_MEMBERSHIP_MEMBER_ID ABDIM_OPENIM_GROUP_MEMBERSHIP_MEMBER_TOKEN
+            ABDIM_OPENIM_FRIEND_REQUESTER_ID ABDIM_OPENIM_FRIEND_REQUESTER_TOKEN
+            ABDIM_OPENIM_FRIEND_RESPONDER_ID ABDIM_OPENIM_FRIEND_RESPONDER_TOKEN
+            ABDIM_OPENIM_BLACKLIST_OWNER_ID ABDIM_OPENIM_BLACKLIST_OWNER_TOKEN ABDIM_OPENIM_BLACKLIST_TARGET_ID
+          )
+          for name in "${required[@]}"; do
             test -n "${!name:-}" || { printf '%s is required\n' "$name" >&2; exit 2; }
           done
-      - name: Run controlled OpenIM gates
+      - name: Validate compatibility and typed reads
         run: |
           go test -tags=integration ./tests/compatibility -run '^TestOpenIMServerMatchesSingleCodexCompatibilityMatrix$' -count=1
-          go test -tags=integration ./internal/service/profile ./internal/service/conversation -count=1
-          go test -tags=integration ./internal/capability/group -run '^TestOpenIMGroupCreateIntegration$' -count=1
-          go test -tags=integration ./internal/capability/message -run '^TestOpenIMTextSendIntegration$' -count=1
+          go test -tags=integration ./internal/service/profile ./internal/service/conversation ./internal/service/message ./internal/service/group ./internal/service/social -count=1
+      - name: Validate typed actions
+        run: |
+          go test -tags=integration ./internal/capability/group -count=1
+          go test -tags=integration ./internal/capability/message -count=1
+          go test -tags=integration ./internal/bridge/abdim -run '^TestAdapterMediaUploadIntegration$' -count=1
+          go test -tags=integration ./internal/capability/conversation -count=1
+          go test -tags=integration ./internal/capability/friend -count=1
+          go test -tags=integration ./internal/capability/blacklist -count=1

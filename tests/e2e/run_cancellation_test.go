@@ -128,7 +128,7 @@ func newCancellationInbound(t *testing.T, grantTTL time.Duration) *cancellationI
 		Runs:      manager,
 		Grants:    grant.NewStore(),
 		Methods:   []proxy.Method{cancellationMethod()},
-		Policy: daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
+		Policy: daemon.PolicyFunc(func(context.Context, daemon.InboundContext) (daemon.Decision, bool, error) {
 			return daemon.Decision{Principal: "provider", Methods: []string{"message.history"}, RateBudget: 5}, true, nil
 		}),
 		GrantTTL: grantTTL,

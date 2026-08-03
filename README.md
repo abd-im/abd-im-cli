@@ -1,8 +1,20 @@
 # abd-im-cli
 
-安装并登录 Codex CLI 后运行 `abdim setup`；setup 登录 ABD bot 并自动
-启动当前用户后台 daemon，随后直接向 bot 发消息即可。日常只需
-`abdim status`、`abdim start`、`abdim stop` 或 `abdim restart`。完整流程见
+安装并登录 Codex CLI 后，在仓库根目录直接编译和配置：
+
+```bash
+go build -o ./abdim ./cmd/abdim
+./abdim setup
+./abdim inbound tools enable
+./abdim status
+./abdim inbound tools status
+```
+
+`setup` 登录 ABD bot 并自动启动当前用户后台 daemon，随后可通过私聊
+获得回复。入站默认是 reply-only；`inbound tools enable` 显式开放已验证
+的 IM 查询和写入工具。群聊默认忽略；本地 owner 查询通过 CLI 或
+`./abdim mcp serve` 完成。日常生命周期使用 `./abdim status`、
+`./abdim start`、`./abdim stop` 或 `./abdim restart`。完整流程见
 [`docs/CONNECTOR.md`](docs/CONNECTOR.md)。
 
 ## 从这里开始

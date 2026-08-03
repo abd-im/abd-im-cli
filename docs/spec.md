@@ -15,30 +15,16 @@
 
 ### US-01：通过 IM 与 Agent 对话（优先级：关键）
 
-用户在私聊或受支持的群聊中向 bot 发消息。daemon 收到非 bot 自己发送的有效事件后唤起 provider；provider 返回 `final_text`，daemon 只向触发消息所在会话回复。普通对话不要求 provider 执行 `abdim` 命令。
+用户在私聊中向 bot 发消息。daemon 收到非 bot 自己发送的有效私聊事件后唤起 provider；默认 provider 不暴露 IM tool，用户也可通过 profile 级命令显式启用全部已验证 typed tools。无论工具模式如何，daemon 只把 `final_text` 回复到触发消息所在会话。
 
 **独立测试**：向一个允许触发的私聊注入一条消息，验证只创建一个 run、一个 reply slot 和一条原会话回复。
 
 **验收场景**：
 
 1. 给定 daemon 已 `ready`，当私聊消息命中 policy 时，系统创建 run 并回复原私聊。
-2. 给定自己发送、通知、重复或不受支持的消息，系统不创建 run；受支持的群聊消息触发时也只回复该群。
+2. 给定自己发送、群聊、通知、重复或不受支持的消息，系统不创建 run。
 
-### US-02：在受限授权下使用 IM 能力（优先级：关键）
-
-用户可以要求 Agent 查询消息、用户、好友、群组或会话，或执行获准的 IM 副作用。provider 仅能通过 run 私有 tool proxy 调用 manifest 中的 typed `abdim` 方法；方法、读取窗口、目标、数量和批准条件均受 grant 约束。`group.create` 是首个写入示例，不是唯一或特殊的能力类别。
-
-P1 的 Agent 可见读取能力包括 profile/user、conversation、message、friend/blacklist 和 group；每项只有在固定 SDK/server 集成测试将其标为 `available` 后，才可被 manifest 和 grant 发放。P1 以 `group.create` 验证通用远端副作用路径，后续写能力沿用同一规则加入。
-
-**独立测试**：向 provider 发放受限读取和 `group.create` grant，验证允许的方法只返回目标和消息窗口内的数据；越权方法、目标和未知结果均不会造成额外副作用。
-
-**验收场景**：
-
-1. 给定只允许 `message.history` 的 grant，当 provider 查询时，系统只返回触发会话和消息窗口内的结果。
-2. 给定有效成员 ID allowlist，当 provider 调用 `group.create` 时，系统只提交 allowlist 内的成员。
-3. 给定超时或崩溃导致副作用结果未知时，系统只保留和查询原 operation，不用新 key 自动重试。
-
-### US-03：Owner 查询和诊断本地 IM 状态（优先级：高）
+### US-02：Owner 查询和诊断本地 IM 状态（优先级：关键）
 
 运行 daemon 的本机用户通过 CLI 或完全信任的本地 MCP 查询 profile、会话、消息、群、好友、黑名单、事件和 operation，并获取结构化健康与能力状态。代码和协议中的 `owner` 仅指该本机用户，不是需要配置的 IM 身份。
 
@@ -47,7 +33,19 @@ P1 的 Agent 可见读取能力包括 profile/user、conversation、message、fr
 **验收场景**：
 
 1. 给定同步缓存过期，当 owner 读取时，结果显式标记 `stale: true`，不伪造实时数据。
-2. 给定 daemon 未就绪或凭据失效，当 owner 发起写入时，系统拒绝或保留 `pending`，不返回伪成功。
+2. 给定 daemon 未就绪或凭据失效，当 owner 查询时，系统返回稳定错误，不返回伪成功。
+
+### US-03：启用受限 IM capability 执行面（优先级：高）
+
+运行 daemon 的本机用户可以执行 `abdim inbound tools enable`，让后续私聊 provider run 获得所有 capability 验证为 `available` 的 typed tools；也可执行 `disable` 恢复 reply-only。该开关对 profile 全局生效，不提供 sender allowlist 或逐次确认，因此只适用于所有私聊 sender 都可信的部署。grant 仍验证读取窗口、method-scoped target、operation/idempotency 和未知结果 fail-closed。
+
+**独立测试**：向测试 provider 发放受限读取和 action grant，验证允许的方法只返回目标和消息窗口内的数据；越权方法、目标和未知结果均不会造成额外副作用。
+
+**验收场景**：
+
+1. 给定入站 tools 已启用，当 provider 查询 `message.history` 时，系统只返回触发私聊中触发消息之前的结果。
+2. 给定有效成员 ID allowlist，当测试 provider 调用 `group.create` 时，系统只提交 allowlist 内的成员。
+3. 给定超时或崩溃导致副作用结果未知时，系统只保留和查询原 operation，不用新 key 自动重试。
 
 ### 边界场景
 
@@ -59,7 +57,7 @@ P1 的 Agent 可见读取能力包括 profile/user、conversation、message、fr
 
 `abdim-cli` 为一个 OpenIM profile 提供本地 daemon、CLI、MCP 和入站 bot。`abdim setup` 通过固定 ABD 登录服务配置 bot 并启动当前用户后台 daemon，不要求第二个账号或配对步骤。SDK 长连接、本地 SQLite、同步和 listener 只由 daemon 持有；CLI、MCP 和 provider 不直接初始化 SDK 或读取 SDK 数据表。首版只支持当前用户运行 daemon 并复用该用户已登录的本机 Codex CLI；这是受信任本地进程模型，不提供恶意代码的操作系统级隔离。
 
-P1 交付 US-01、US-02 和 US-03 所需的单 profile 闭环、event-bound reply、受 grant 约束的 typed 读取能力，以及以 `group.create` 验证的通用副作用路径。通用 `message send`、附件和更多写能力从 P2 开始。
+P1 的公开产品面是单 profile 私聊闭环、owner typed 读取/诊断，以及默认关闭的入站 tools 开关。开关启用后，所有私聊 sender 均可使用受 grant 约束的已验证 typed 读取与 action handler；群聊 admission、sender allowlist 和逐次写操作审批不属于 v0.1.0。
 
 不提供公网 HTTP 管理面、任意 SDK/RPC/SQLite 后门、其他 IM 部署的通用登录配置、客户端 UI/设备能力、未经集成测试验证的 SDK 能力，或服务端全局 exactly-once 承诺。
 
@@ -78,21 +76,21 @@ P1 交付 US-01、US-02 和 US-03 所需的单 profile 闭环、event-bound repl
 - **FR-006**：本地接口只能使用 Unix socket 或 Windows 受限 ACL named pipe；P1 不监听 loopback TCP。
 - **FR-007**：所有 RPC 必须使用 versioned JSON 信封、稳定错误码、`request_id` 和 `profile_id`；远端副作用还必须带 `idempotency_key`。
 - **FR-008**：CLI 默认输出 JSON，watch 输出 JSONL，日志和进度只写 stderr；消息正文只能经 stdin 或文件传入。
-- **FR-009**：P1 必须提供 profile/user、auth/daemon/doctor、会话、消息、群、好友、黑名单、event 和 operation 的 typed 只读查询，并返回分页/cursor、`stale` 和 capability 状态。owner 可调用其公开读集合；provider 只能调用 manifest 与 grant 共同允许的子集。
+- **FR-009**：P1 必须提供 profile/user、auth/daemon/doctor、会话、消息、群、好友、黑名单、event 和 operation 的 typed 只读查询，并返回分页/cursor、`stale` 和 capability 状态。owner 可调用其公开读集合；入站 provider 只在 profile 显式启用 tools 后获得 provider registry 中已验证的方法，且不包含 owner-only run/operation 诊断。
 
 ### 入站 bot 与 provider
 
-- **FR-010**：setup 完成后，所有非 bot 自己发送的受支持私聊和群聊消息都可触发 run；自己发送的消息、通知、重复事件和不受支持的 session 不得创建 run。不配置第二个 IM 身份或配对状态。
+- **FR-010**：setup 完成后，非 bot 自己发送的有效私聊消息可触发 run；默认 reply-only，`abdim inbound tools enable|disable|status` 管理 profile 级工具开关并重启正在运行的 daemon。自己发送的消息、群聊、通知、重复事件和其他 session 不得创建 run。不配置第二个 IM 身份或配对状态。
 - **FR-011**：provider 之前必须持久化 reply slot；它绑定 event、profile、来源 conversation、触发消息、run 和 operation。provider 或 prompt 不得指定 reply `conversation_id`。
-- **FR-012**：P1 的 provider 通过一个已配置 adapter 运行；provider 自行完成同步 tool loop，`TurnResult` 只返回 `final_text`、脱敏 tool 摘要、session reference 或诊断错误。
+- **FR-012**：P1 的 provider 通过一个已配置 adapter 运行；默认入站 run 的 `enabled_tools` 为空，显式启用后只包含 capability 为 `available` 的固定 typed 方法。`TurnResult` 只返回 `final_text`、session reference 或诊断错误。
 - **FR-013**：同一 conversation 的 run 必须串行；policy 必须定义每会话最大队列、turn deadline 和溢出行为。撤回、访问丢失、policy 失效、grant 过期或 owner 取消时，必须取消 run、关闭 proxy 并撤销 grant。
 
 ### 授权、写入与审计
 
-- **FR-014**：grant 必须绑定 run、profile、principal、scope、按 typed method 隔离且带资源类型命名的目标 allowlist、消息窗口、附件额度、到期时间、速率预算和 approval policy。自动入站 run 可获得全部当前 `available` 方法和宽目标，但仍必须使用具有效期、调用预算和附件额度的独立 grant。
+- **FR-014**：grant 必须绑定 run、profile、真实 sender principal、消息窗口、到期时间和速率预算；有 tool 时还必须绑定 scope、typed method、方法级资源类型 target allowlist 和附件额度。profile tools 开关是 v0.1.0 的粗粒度批准策略；空方法 grant 是合法的 reply-only grant。不得存在绕过 target 或消息窗口的 full-access 标志。
 - **FR-015**：受限 provider 只能连接每 run 私有的 tool proxy；proxy 必须逐请求验证一次性 credential、run、grant、到期时间、capability manifest、method allowlist、method-scoped target 和读取窗口，拒绝 controller 命令、endpoint 覆盖和未授权方法。
 - **FR-016**：event-bound reply 由 daemon 执行而非通用 `message.send`；它以 `profile + event_id + reply_slot` 幂等。确认前中断为 `unknown`，不得创建新消息补发。
-- **FR-017**：每个远端副作用都必须具有独立 scope、输入/目标 allowlist、数量上限、批准策略和 operation/idempotency。P1 以 `group.create` 作为首个经过验证的 handler：相同 key 返回原 operation，参数摘要不同返回 `IDEMPOTENCY_CONFLICT`，未知结果不得自动重建群。新 handler 只有在 manifest、授权规则和集成测试齐备后才能公开。
+- **FR-017**：每个远端副作用都必须具有独立 scope、输入/方法级目标 allowlist、数量上限和 operation/idempotency。相同 key 返回原 operation，参数摘要不同返回 `IDEMPOTENCY_CONFLICT`，未知结果不得自动重试。handler 只有在 manifest、授权规则和受控集成测试齐备后才可标为 `available`；action method 默认不进入入站 run，只能由本机用户通过 profile tools 开关整体启用，且界面必须明确该开关不提供 sender allowlist 或逐次审批。
 - **FR-018**：listener 回调只校验、复制和入队。事件账本使用 daemon `event_id`、profile sequence 和独立 SDK dedup key；SDK 重启不得伪造停机期间的 `message.received`。
 - **FR-019**：每次 tool 调用和 reply 投递前都必须重验 event/reply slot、会话访问、grant、policy 和 allowlist；确认的 reply 永不重发。
 - **FR-020**：审计只记录 actor、profile、grant、request/operation/event、方法、目标摘要、结果、耗时和重试次数。`abdim capabilities` 必须说明每项能力的状态、SDK/server 版本和原因。
@@ -138,7 +136,7 @@ type Session interface {
 }
 ```
 
-P1 只在同一 daemon 生命周期内复用 provider session；重启中的 turn 标记 `interrupted`，不自动恢复或重跑。公开生命周期命令只有 `setup`、`start`、`stop`、`restart` 和 `status`；后台装配入口不属于用户接口。
+P1 只在同一 daemon 生命周期内复用 provider session；重启中的 turn 标记 `interrupted`，不自动恢复或重跑。公开生命周期命令为 `setup`、`start`、`stop`、`restart` 和 `status`，入站工具配置命令为 `inbound tools enable|disable|status`；后台装配入口不属于用户接口。
 
 ## 5. 关键实体与状态
 
@@ -160,22 +158,22 @@ P1 只在同一 daemon 生命周期内复用 provider session；重启中的 tur
 | 阶段 | 交付 | 退出条件 |
 | --- | --- | --- |
 | P0 | SDK 日志脱敏、v1 IPC/error/event schema、fake SDK/provider/proxy、生命周期 contract test | 测试日志无真实 token；无凭据环境可覆盖协议和生命周期。 |
-| P1 | 一 profile daemon、event ledger、reply slot、单 provider bot、run proxy、profile/user/conversation/message/friend/blacklist/group typed 读取能力、capability manifest、首个 `group.create` handler、最小 operation/idempotency | 私聊仅向原会话回复一次；Agent 只可使用 grant 允许的能力；副作用未知结果 fail closed。 |
-| P2 | `message.send_text`、`message.send_quote`、`message.send_at`、`conversation.mark_read`、受控附件基础设施和更多 verified action handler | 同幂等键只创建一个消息；超时或崩溃不静默产生第二条。 |
-| P3 | 媒体/文件、会话设置、好友/黑名单和群组写入 | 每项公开能力都有 schema、scope、approval、integration test 和 capability 状态。 |
+| P1 | 一 profile daemon、event ledger、reply slot、单 provider bot、owner typed 读取/诊断、显式入站 tools 开关 | 私聊仅向原会话回复一次；默认工具集合为空，启用后仅发现全部已验证方法；群聊不创建 run。 |
+| P2 | 可信 sender admission、按 sender/会话细化 grant | 只有显式信任的 sender 可获得更窄的方法和目标集合；结果不超出授权消息窗口。 |
+| P3 | 逐次写操作审批 | 每次写入可在 profile 全局开关之外要求独立确认，同时保留 schema、scope、target、integration evidence 和可查询 operation。 |
 | P4 | 多 provider、兼容矩阵、session migration 和高级 run 运维 | 不改变 P1 的 reply target、调用模型或授权边界。 |
 
 ## 7. 成功标准
 
 - **SC-001**：独立 `NewLoginMgr` worker 到达 `ready`，第二个同 profile daemon 因 lock 被拒绝。
 - **SC-002**：同一入站事件只生成一个 ledger record 和一个 reply slot；重启差异只产生 `state.reconciled`。
-- **SC-003**：普通私聊的 `final_text` 只回复触发会话，provider 没有执行发送命令。
-- **SC-004**：provider 只能调用 manifest 与 grant 共同允许的读取方法，并且结果不超过其会话、目标和消息窗口。
-- **SC-005**：`abdim group create` 只能创建成员 ID allowlist 内的群，并将结果返回同一 turn；任何已验证副作用在崩溃后只为 `confirmed`、`failed` 或 `unknown`，不会自动产生第二次副作用。
-- **SC-006**：正常 provider 集成不能经 run-private MCP bridge 以外的路径直连 daemon、调用 controller 命令、读取超出消息窗口的历史，或向第三方会话发送；当前用户模式不声称能阻止同 UID 恶意进程直接访问本地文件或 socket。
+- **SC-003**：普通私聊的 `final_text` 只回复触发会话；默认模式下 provider 没有可执行的 IM tool。
+- **SC-004**：默认入站 provider 的 MCP discovery 为空；显式启用后 discovery 只包含 capability 与 grant 共同允许的方法，调用仍受方法级 target、消息窗口、预算和 operation guard 约束。
+- **SC-005**：受控 `group.create` 测试只能创建成员 ID allowlist 内的群；任何已验证副作用在崩溃后只为 `confirmed`、`failed` 或 `unknown`，不会自动产生第二次副作用。
+- **SC-006**：正常 provider 集成不能经 run-private MCP bridge 以外的路径直连 daemon、调用 controller 命令、读取超出触发私聊消息窗口的历史，或调用未选择的 typed method/target；当前用户模式不声称能阻止同 UID 恶意进程直接访问本地文件或 socket。
 - **SC-007**：撤回、权限变化、grant 过期或取消会阻止排队 run、副作用和最终回复。
 - **SC-008**：daemon、SDK、HTTP/WebSocket 诊断和审计均不泄露测试 token 或完整消息正文。
-- **SC-009**：一次 `abdim setup` 可完成 ABD 登录、私有配置和后台启动，不要求第二个账号或配对；随后受支持的入站消息可立即触发具有全部已验证能力的 provider run。
+- **SC-009**：一次 `abdim setup` 可完成 ABD 登录、私有配置和后台启动，不要求第二个账号或配对；随后有效私聊可立即触发默认 reply-only provider run，`inbound tools` 命令可持久化切换工具模式并重启运行中的 daemon，群聊默认忽略。
 
 ## 8. 假设
 

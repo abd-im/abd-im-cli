@@ -50,6 +50,7 @@
 
 | 完成 | ID | 状态 | 场景 | 任务与记录 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
+| [ ] | ABD-063 | ready | Release | 选择项目许可证并加入根目录 `LICENSE`。 | ABD-062 | 项目所有者确认许可证；release archive 包含许可证；`docs/RELEASING.md` 不再将缺少许可证列为公开发布 blocker。 |
 
 ## Phase 7: P2 受限写入能力
 
@@ -72,8 +73,8 @@
 | 完成 | ID | 状态 | 场景 | 任务与记录 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
 
-**当前状态**：`ABD-024` 至 `ABD-061`（不含 deferred 的 `ABD-054`、`ABD-056`）已完成 daemon、P1 typed server-read/action source、消息控制、媒体、会话设置、好友/黑名单、群组管理、compatibility evidence、owner run 运维、GitHub Release 自动化、当前用户 Codex runtime 和单命令首次设置。首版唯一支持模式是 `abdim setup` 登录固定 ABD 部署并自动启动当前用户 daemon，不配置第二个 IM 身份或配对步骤；日常只保留 `start`、`stop`、`restart`、`status`。每个 run 仍有独立 `CODEX_HOME`、固定 MCP 配置、grant 和 event-bound reply，但同 UID 不被描述为 OS 级隔离。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。多 provider `ABD-054` 与 session migration `ABD-056` 保持 deferred。所有 action 只在 manifest、run grant 和对应 handler 共同允许时公开；任何能发送受支持消息的账号都可触发包含全部当前 `available` 方法的 run。
+**当前状态**：`ABD-024` 至 `ABD-062`（不含 deferred 的 `ABD-054`、`ABD-056`）已完成 daemon、typed server-read/action source、消息控制、媒体、会话设置、好友/黑名单、群组管理、compatibility evidence、owner run 运维、GitHub Release 自动化、当前用户 Codex runtime、单命令首次设置和可配置入站工具边界。`abdim setup` 登录固定 ABD 部署并自动启动当前用户 daemon，不配置第二个 IM 身份或配对步骤；日常生命周期为 `start`、`stop`、`restart`、`status`。公开 policy 只接受非 self 的有效私聊；默认发放空 methods/scopes 和单次预算，`inbound tools enable` 后发放全部已验证 typed tools、方法级 target 通配、触发私聊历史窗口和受限预算，群聊默认忽略。该开关对全部私聊 sender 生效，不提供逐次审批。每个 run 仍有独立 `CODEX_HOME`、固定 MCP 配置、grant 和 event-bound reply，但同 UID 不被描述为 OS 级隔离。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。多 provider `ABD-054` 与 session migration `ABD-056` 保持 deferred。`ABD-063` 是公开发布前仍需项目所有者决定的许可证任务。
 
 ## 执行顺序
 
-`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。`ABD-048` 与 `ABD-052` 在领域实现和验证阶段并行完成，`ABD-053` 在 `ABD-052` 完成后交付；`ABD-055` 与 `ABD-057` 随后并行完成并在共享装配点串行收口，`ABD-058` 交付 CI、受控 integration 和 Unix tag release，`ABD-059` 完成当前用户 runtime 收口，`ABD-060` 收敛单命令设置，`ABD-061` 删除未要求的配对门槛并恢复 setup 后立即对话。`ABD-054`、`ABD-056` 暂缓。共享注册表的修改不再并行写入。
+`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。`ABD-048` 与 `ABD-052` 在领域实现和验证阶段并行完成，`ABD-053` 在 `ABD-052` 完成后交付；`ABD-055` 与 `ABD-057` 随后并行完成并在共享装配点串行收口，`ABD-058` 交付 CI、受控 integration 和 Unix tag release，`ABD-059` 完成当前用户 runtime 收口，`ABD-060` 收敛单命令设置，`ABD-061` 删除未要求的配对门槛，`ABD-062` 交付默认 reply-only、显式全工具开关和完整受控证据门禁。`ABD-063` 在项目所有者选择许可证后执行；`ABD-054`、`ABD-056` 暂缓。共享注册表的修改不再并行写入。

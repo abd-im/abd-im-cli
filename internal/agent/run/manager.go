@@ -31,16 +31,15 @@ const (
 
 // Request binds one provider turn to its triggering event and private proxy.
 type Request struct {
-	ID               string
-	ProfileID        string
-	ConversationID   string
-	EventID          string
-	GrantCredential  string
-	GrantExpiresAt   time.Time
-	AllowedMethods   []string
-	AutoApproveTools bool
-	Proxy            contracts.ToolProxy
-	Prompt           string
+	ID              string
+	ProfileID       string
+	ConversationID  string
+	EventID         string
+	GrantCredential string
+	GrantExpiresAt  time.Time
+	AllowedMethods  []string
+	Proxy           contracts.ToolProxy
+	Prompt          string
 }
 
 // Result is delivered exactly once for every accepted or rejected run.
@@ -262,12 +261,11 @@ func (m *Manager) execute(item *job) {
 	turnContext, turnCancel := withTurnDeadline(item.context, m.deadline, item.request.GrantExpiresAt)
 	defer turnCancel()
 	session, err := m.provider.Start(turnContext, contracts.StartRequest{
-		ProfileID:        item.request.ProfileID,
-		RunID:            item.request.ID,
-		GrantCredential:  item.request.GrantCredential,
-		AllowedMethods:   append([]string(nil), item.request.AllowedMethods...),
-		AutoApproveTools: item.request.AutoApproveTools,
-		Proxy:            item.request.Proxy,
+		ProfileID:       item.request.ProfileID,
+		RunID:           item.request.ID,
+		GrantCredential: item.request.GrantCredential,
+		AllowedMethods:  append([]string(nil), item.request.AllowedMethods...),
+		Proxy:           item.request.Proxy,
 	})
 	if err != nil {
 		m.complete(item, Result{RunID: item.request.ID, Status: StatusFailed, Err: err})

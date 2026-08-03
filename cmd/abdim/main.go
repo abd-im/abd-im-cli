@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -134,6 +135,12 @@ func runWithIOStreams(args []string, input io.Reader, output, prompt io.Writer, 
 	}
 	if len(args) >= 1 && args[0] == "status" {
 		return runStatus(ctx, args[1:], output, roots, profileName)
+	}
+	if len(args) >= 1 && args[0] == "inbound" {
+		if len(args) < 2 || args[1] != "tools" {
+			return writeInvalidArgument(output, requestID, "unsupported inbound command")
+		}
+		return runInboundTools(ctx, args[2:], output, roots, profileName)
 	}
 	if len(args) == 1 && args[0] == "__serve" {
 		return runDaemonServe(ctx, output, roots, profileName, requestID, format)
@@ -518,9 +525,8 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 		Runs:      runs,
 		Grants:    grant.NewStore(),
 		Methods:   methods,
-		Policy:    fullInboundPolicy(methods),
+		Policy:    directMessagePolicy(item.Deployment.UserID, item.InboundToolsEnabled, methods),
 		GrantTTL:  2 * time.Minute,
-		Accept:    acceptAllInbound(item.Deployment.UserID),
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -559,19 +565,29 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	return 0
 }
 
-func fullInboundPolicy(methods []proxy.Method) daemon.Policy {
+func directMessagePolicy(userID string, toolsEnabled bool, methods []proxy.Method) daemon.Policy {
 	methodNames := make([]string, 0, len(methods))
-	for _, method := range methods {
-		methodNames = append(methodNames, method.Name)
+	targets := make(map[string][]string, len(methods))
+	if toolsEnabled {
+		for _, method := range methods {
+			methodNames = append(methodNames, method.Name)
+			targets[method.Name] = []string{grant.AnyTarget}
+		}
 	}
-	return daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
-		return daemon.Decision{
-			Principal:           "inbound",
-			Methods:             methodNames,
-			FullAccess:          true,
-			AttachmentByteLimit: 32 * 1024 * 1024,
-			RateBudget:          64,
-		}, true, nil
+	return daemon.PolicyFunc(func(_ context.Context, inbound daemon.InboundContext) (daemon.Decision, bool, error) {
+		senderID := strings.TrimSpace(inbound.SenderID)
+		if senderID == "" || senderID == userID || inbound.SessionType != 1 {
+			return daemon.Decision{}, false, nil
+		}
+		decision := daemon.Decision{Principal: "openim:" + senderID, RateBudget: 1}
+		if toolsEnabled {
+			decision.Methods = methodNames
+			decision.TargetAllowlists = targets
+			decision.HistoryBeforeTrigger = true
+			decision.AttachmentByteLimit = 32 * 1024 * 1024
+			decision.RateBudget = 64
+		}
+		return decision, true, nil
 	})
 }
 
@@ -611,33 +627,9 @@ func serviceMethods(services daemon.OwnerServices) []proxy.Method {
 	return methods
 }
 
-func acceptAllInbound(userID string) func(contracts.SDKEvent) bool {
-	return func(event contracts.SDKEvent) bool {
-		if event.Type != string(contracts.EventMessageReceived) {
-			return false
-		}
-		reference := struct {
-			SenderID    string `json:"sender_id"`
-			GroupID     string `json:"group_id"`
-			SessionType int32  `json:"session_type"`
-		}{}
-		if json.Unmarshal(event.Data, &reference) != nil || strings.TrimSpace(reference.SenderID) == "" || reference.SenderID == userID {
-			return false
-		}
-		switch reference.SessionType {
-		case 1:
-			return true
-		case 2, 3:
-			return strings.TrimSpace(reference.GroupID) != ""
-		default:
-			return false
-		}
-	}
-}
-
 func daemonSDKConfig(paths profile.Paths, deployment profile.Deployment) sdk_struct.IMConfig {
 	return sdk_struct.IMConfig{
-		SystemType:  "linux",
+		SystemType:  runtime.GOOS,
 		PlatformID:  deployment.PlatformID,
 		ApiAddr:     deployment.APIAddr,
 		WsAddr:      deployment.WSAddr,

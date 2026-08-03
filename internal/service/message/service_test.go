@@ -67,27 +67,30 @@ func TestMessageReadsAreBoundToGrantConversationAndWindow(t *testing.T) {
 	}
 }
 
-func TestFullAccessMessageReadsAreNotBoundToInboundWindow(t *testing.T) {
+func TestProviderMessageReadsRequireInboundWindow(t *testing.T) {
 	reader, err := New(fakeSource{}, Options{ProfileID: "work", Capabilities: available(HistoryMethod, GetMethod)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	grants := grant.NewStore()
 	item, _, err := grants.Issue(grant.Policy{
-		RunID: "run-full", ProfileID: "work", Principal: "owner", FullAccess: true,
+		RunID: "run-provider", ProfileID: "work", Principal: "provider",
 		Methods: []string{HistoryMethod, GetMethod}, Scopes: []string{ReadScope},
+		TargetAllowlists: map[string][]string{
+			HistoryMethod: {grant.ConversationTarget("conversation-1")},
+			GetMethod:     {grant.ConversationTarget("conversation-1")},
+		},
 		ExpiresAt: time.Now().Add(time.Hour), RateBudget: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	history, err := reader.History(context.Background(), service.ProviderAccess(item, reader.capability(HistoryMethod)), HistoryInput{ConversationID: "conversation-1", Limit: 10})
-	if err != nil || len(history.Data.Items) != 4 {
-		t.Fatalf("full access History() = %+v, %v", history, err)
+	if !errors.Is(err, service.ErrTargetDenied) {
+		t.Fatalf("unwindowed provider History() = %+v, %v", history, err)
 	}
-	message, err := reader.Get(context.Background(), service.ProviderAccess(item, reader.capability(GetMethod)), GetInput{ConversationID: "conversation-1", MessageID: "message-4"})
-	if err != nil || message.Data.ID != "message-4" {
-		t.Fatalf("full access Get() = %+v, %v", message, err)
+	if _, err := reader.Get(context.Background(), service.ProviderAccess(item, reader.capability(GetMethod)), GetInput{ConversationID: "conversation-1", MessageID: "message-4"}); !errors.Is(err, service.ErrTargetDenied) {
+		t.Fatalf("unwindowed provider Get() error = %v", err)
 	}
 }
 

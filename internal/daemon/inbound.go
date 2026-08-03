@@ -26,23 +26,34 @@ var ErrStopped = errors.New("daemon inbound path is stopped")
 // provider run. The daemon derives the conversation target and message window;
 // policy cannot replace either value.
 type Policy interface {
-	Decide(context.Context, contracts.Event) (Decision, bool, error)
+	Decide(context.Context, InboundContext) (Decision, bool, error)
 }
 
-type PolicyFunc func(context.Context, contracts.Event) (Decision, bool, error)
+type PolicyFunc func(context.Context, InboundContext) (Decision, bool, error)
 
-func (f PolicyFunc) Decide(ctx context.Context, event contracts.Event) (Decision, bool, error) {
-	return f(ctx, event)
+func (f PolicyFunc) Decide(ctx context.Context, inbound InboundContext) (Decision, bool, error) {
+	return f(ctx, inbound)
+}
+
+// InboundContext contains the authenticated SDK event identity used by policy.
+// Message text is intentionally excluded so authorization never depends on the
+// prompt body.
+type InboundContext struct {
+	Event          contracts.Event
+	SenderID       string
+	ConversationID string
+	GroupID        string
+	SessionType    int32
 }
 
 // Decision selects a subset of the daemon's fixed typed tool registry.
 type Decision struct {
-	Principal           string
-	Methods             []string
-	TargetAllowlists    map[string][]string
-	FullAccess          bool
-	AttachmentByteLimit int64
-	RateBudget          int
+	Principal            string
+	Methods              []string
+	TargetAllowlists     map[string][]string
+	HistoryBeforeTrigger bool
+	AttachmentByteLimit  int64
+	RateBudget           int
 }
 
 type Config struct {
@@ -56,7 +67,6 @@ type Config struct {
 
 	GrantTTL time.Duration
 	OnError  func(error)
-	Accept   func(contracts.SDKEvent) bool
 }
 
 // Inbound accepts normalized SDK events and owns their progression from the
@@ -71,11 +81,11 @@ type Inbound struct {
 	policy    Policy
 	grantTTL  time.Duration
 	onError   func(error)
-	accept    func(contracts.SDKEvent) bool
 
 	mu          sync.Mutex
 	stopped     bool
 	runsByEvent map[string]string
+	finishers   sync.WaitGroup
 }
 
 // Outcome reports whether an event was ignored, deduplicated, or accepted as
@@ -114,7 +124,6 @@ func New(config Config) (*Inbound, error) {
 		policy:      config.Policy,
 		grantTTL:    config.GrantTTL,
 		onError:     config.OnError,
-		accept:      config.Accept,
 		runsByEvent: make(map[string]string),
 	}, nil
 }
@@ -165,21 +174,22 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		outcome.Ignored = true
 		return outcome, nil
 	}
-	if d.accept != nil && !d.accept(event) {
-		outcome.Ignored = true
-		return outcome, nil
+	if err := reference.validate(); err != nil {
+		return outcome, err
 	}
-
-	decision, allowed, err := d.policy.Decide(ctx, recorded.Event)
+	decision, allowed, err := d.policy.Decide(ctx, InboundContext{
+		Event:          recorded.Event,
+		SenderID:       reference.SenderID,
+		ConversationID: reference.ConversationID,
+		GroupID:        reference.GroupID,
+		SessionType:    reference.SessionType,
+	})
 	if err != nil {
 		return outcome, err
 	}
 	if !allowed {
 		outcome.Ignored = true
 		return outcome, nil
-	}
-	if err := reference.validate(); err != nil {
-		return outcome, err
 	}
 	conversation := reference
 	target, err := conversation.replyTarget()
@@ -214,8 +224,9 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		ConversationID: conversation.ConversationID,
 		AfterMessageID: conversation.MessageID,
 	}
-	if decision.FullAccess {
-		messageWindow = grant.MessageWindow{}
+	if decision.HistoryBeforeTrigger {
+		messageWindow.AfterMessageID = ""
+		messageWindow.BeforeMessageID = conversation.MessageID
 	}
 	issued, credential, err := d.grants.Issue(grant.Policy{
 		RunID:               runID,
@@ -225,7 +236,6 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		Scopes:              scopes,
 		TargetAllowlists:    targetAllowlists,
 		MessageWindow:       messageWindow,
-		FullAccess:          decision.FullAccess,
 		AttachmentByteLimit: decision.AttachmentByteLimit,
 		ExpiresAt:           time.Now().Add(d.grantTTL),
 		RateBudget:          decision.RateBudget,
@@ -239,16 +249,15 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		return outcome, err
 	}
 	handle, err := d.runs.Submit(run.Request{
-		ID:               runID,
-		ProfileID:        d.profileID,
-		ConversationID:   conversation.ConversationID,
-		EventID:          recorded.Event.EventID,
-		GrantCredential:  credential,
-		GrantExpiresAt:   issued.ExpiresAt,
-		AllowedMethods:   providerVisibleMethods(selected),
-		AutoApproveTools: decision.FullAccess,
-		Proxy:            toolProxy,
-		Prompt:           inboundPrompt(event.MessageText, decision.FullAccess),
+		ID:              runID,
+		ProfileID:       d.profileID,
+		ConversationID:  conversation.ConversationID,
+		EventID:         recorded.Event.EventID,
+		GrantCredential: credential,
+		GrantExpiresAt:  issued.ExpiresAt,
+		AllowedMethods:  providerVisibleMethods(selected),
+		Proxy:           toolProxy,
+		Prompt:          inboundPrompt(event.MessageText, len(selected) > 0),
 	})
 	if err != nil {
 		return outcome, err
@@ -260,9 +269,13 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		return outcome, ErrStopped
 	}
 	d.runsByEvent[recorded.Event.EventID] = runID
+	d.finishers.Add(1)
 	d.mu.Unlock()
 	outcome.RunID = runID
-	go d.finish(recorded.Event.EventID, handle)
+	go func() {
+		defer d.finishers.Done()
+		d.finish(recorded.Event.EventID, handle)
+	}()
 	return outcome, nil
 }
 
@@ -301,7 +314,11 @@ func (d *Inbound) Shutdown(ctx context.Context) error {
 	d.mu.Lock()
 	d.stopped = true
 	d.mu.Unlock()
-	return d.runs.Shutdown(ctx)
+	if err := d.runs.Shutdown(ctx); err != nil {
+		return err
+	}
+	d.finishers.Wait()
+	return nil
 }
 
 func (d *Inbound) finish(eventID string, handle *run.Handle) {
@@ -319,9 +336,6 @@ func (d *Inbound) finish(eventID string, handle *run.Handle) {
 }
 
 func (d *Inbound) selectMethods(names []string) ([]proxy.Method, []string, error) {
-	if len(names) == 0 {
-		return nil, nil, errors.New("policy must select at least one typed method")
-	}
 	selected := make([]proxy.Method, 0, len(names))
 	methodSeen := make(map[string]struct{}, len(names))
 	scopeSeen := make(map[string]struct{}, len(names))
@@ -359,8 +373,8 @@ func eventReference(raw json.RawMessage) eventRef {
 }
 
 func (reference eventRef) validate() error {
-	if strings.TrimSpace(reference.ConversationID) == "" || strings.TrimSpace(reference.MessageID) == "" {
-		return errors.New("message event requires conversation and message references")
+	if strings.TrimSpace(reference.ConversationID) == "" || strings.TrimSpace(reference.MessageID) == "" || strings.TrimSpace(reference.SenderID) == "" {
+		return errors.New("message event requires sender, conversation, and message references")
 	}
 	return nil
 }
@@ -384,14 +398,14 @@ func (reference eventRef) replyTarget() (replyTarget, error) {
 	return replyTarget{}, errors.New("message event has no safe reply target")
 }
 
-func inboundPrompt(text string, preApprovedTools bool) string {
+func inboundPrompt(text string, hasTools bool) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "An inbound non-text message was received. Reply briefly that only text messages are supported."
 	}
-	prefix := "Reply concisely and helpfully to this inbound message. Use the abdim MCP tools for factual claims about IM data or actions. If a required tool is unavailable, say that it is unavailable rather than guessing. Do not claim to have performed actions you did not perform. Never disclose local paths, configuration, credentials, grants, or other runtime details."
-	if preApprovedTools {
-		prefix += " Every abdim MCP tool listed for this run is already approved; call the appropriate tool directly without requesting additional approval."
+	prefix := "Reply concisely and helpfully to this inbound message. Do not claim to have accessed IM data or performed actions you did not perform. Never disclose local paths, configuration, credentials, grants, or other runtime details."
+	if hasTools {
+		prefix += " Use only the abdim MCP tools listed for this run for factual claims about IM data or actions. If a required tool is unavailable, say that it is unavailable rather than guessing."
 	}
 	return prefix + "\n\nInbound message:\n" + text
 }

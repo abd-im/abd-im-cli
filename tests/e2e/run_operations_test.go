@@ -64,7 +64,7 @@ func TestOwnerRunCancellationUsesLocalRPCAndClosesProviderBoundaryE2E(t *testing
 		Runs:      manager,
 		Grants:    grant.NewStore(),
 		Methods:   []proxy.Method{method},
-		Policy: daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
+		Policy: daemon.PolicyFunc(func(context.Context, daemon.InboundContext) (daemon.Decision, bool, error) {
 			return daemon.Decision{Principal: "provider", Methods: []string{method.Name}, RateBudget: 2}, true, nil
 		}),
 		GrantTTL: time.Minute,

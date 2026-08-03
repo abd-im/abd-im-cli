@@ -36,6 +36,16 @@ func TestRunSetupPersistsTokenFreeProfileAndStartsDaemon(t *testing.T) {
 	}
 
 	roots := testRoots(t)
+	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.Save(paths.ConfigFile, profile.Profile{
+		Name: "default", CredentialRef: "file:default", InboundToolsEnabled: true,
+		Deployment: profile.Deployment{UserID: "old-bot", APIAddr: "https://example.test/api", WSAddr: "wss://example.test/ws", PlatformID: 7},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	const token = "token-marker-must-not-leak"
 	started := false
 	dependencies := setupDependencies{
@@ -58,9 +68,8 @@ func TestRunSetupPersistsTokenFreeProfileAndStartsDaemon(t *testing.T) {
 	if !started || output.String() != "Setup complete. abdim is running (pid 42).\n" || strings.Contains(output.String(), token) || strings.Contains(output.String(), "password") {
 		t.Fatalf("setup output = %q, started=%t", output.String(), started)
 	}
-	paths, _ := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, "default")
 	item, err := profile.Load(paths.ConfigFile)
-	if err != nil || item.Deployment.UserID != "bot-user" {
+	if err != nil || item.Deployment.UserID != "bot-user" || !item.InboundToolsEnabled {
 		t.Fatalf("profile = %#v, %v", item, err)
 	}
 	profileContents, _ := os.ReadFile(paths.ConfigFile)
