@@ -109,7 +109,7 @@ func TestAdapterPreApprovesOwnerFullTools(t *testing.T) {
 	}
 	config, err := os.ReadFile(filepath.Join(adapter.config.WorkingDir, request.RunID, "codex", "config.toml"))
 	if err != nil || !strings.Contains(string(config), "default_tools_approval_mode = \"approve\"") {
-		t.Fatalf("owner-full MCP config = %s, %v", config, err)
+		t.Fatalf("full-access MCP config = %s, %v", config, err)
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)

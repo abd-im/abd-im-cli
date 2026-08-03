@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPathsCreatePrivateProfileLayout(t *testing.T) {
@@ -57,25 +58,26 @@ func TestAttachmentPathAcceptsOnlyOpaqueReferences(t *testing.T) {
 	}
 }
 
-func TestImportTokenReadsOnlyInputAndStoresOpaqueReference(t *testing.T) {
+func TestFileStoreKeepsTokenOutOfProfile(t *testing.T) {
 	const token = "test-token-marker-4d2a0d"
 	root := t.TempDir()
 	paths, err := NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"), filepath.Join(root, "runtime"), "work")
 	if err != nil {
 		t.Fatalf("NewPaths() error = %v", err)
 	}
-	store, err := NewFileStore(filepath.Join(root, "data"), true)
+	store, err := NewFileStore(filepath.Join(root, "data"))
 	if err != nil {
 		t.Fatalf("NewFileStore() error = %v", err)
 	}
-	profile, err := ImportToken(context.Background(), strings.NewReader(token+"\n"), store, Profile{Name: "work"})
+	reference, err := store.Put(context.Background(), "work", []byte(token))
 	if err != nil {
-		t.Fatalf("ImportToken() error = %v", err)
+		t.Fatalf("Put() error = %v", err)
 	}
-	if profile.CredentialRef != "file:work" {
-		t.Fatalf("CredentialRef = %q, want file:work", profile.CredentialRef)
+	if reference != "file:work" {
+		t.Fatalf("reference = %q, want file:work", reference)
 	}
-	if err := Save(paths.ConfigFile, profile); err != nil {
+	item := Profile{Name: "work", CredentialRef: reference}
+	if err := Save(paths.ConfigFile, item); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	contents, err := os.ReadFile(paths.ConfigFile)
@@ -89,8 +91,8 @@ func TestImportTokenReadsOnlyInputAndStoresOpaqueReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if loaded != profile {
-		t.Fatalf("Load() = %#v, want %#v", loaded, profile)
+	if loaded != item {
+		t.Fatalf("Load() = %#v, want %#v", loaded, item)
 	}
 	restored, err := store.Get(context.Background(), loaded.CredentialRef)
 	if err != nil {
@@ -98,14 +100,6 @@ func TestImportTokenReadsOnlyInputAndStoresOpaqueReference(t *testing.T) {
 	}
 	if string(restored) != token {
 		t.Fatalf("Get() token = %q, want marker", restored)
-	}
-
-	disabled, err := NewFileStore(filepath.Join(root, "other-data"), false)
-	if err != nil {
-		t.Fatalf("NewFileStore(disabled) error = %v", err)
-	}
-	if _, err := ImportToken(context.Background(), strings.NewReader(token), disabled, Profile{Name: "work"}); !errors.Is(err, ErrPlaintextDisabled) {
-		t.Fatalf("disabled ImportToken() error = %v, want ErrPlaintextDisabled", err)
 	}
 
 	info, err := os.Stat(filepath.Join(root, "data", "abdim", "credentials", "work.token"))
@@ -117,49 +111,37 @@ func TestImportTokenReadsOnlyInputAndStoresOpaqueReference(t *testing.T) {
 	}
 }
 
-func TestImportTokenReadsOneLine(t *testing.T) {
+func TestPendingPairingPersistsOnlyDigestAndBindsOwner(t *testing.T) {
+	const code = "A1B2C3D4"
 	root := t.TempDir()
-	store, err := NewFileStore(filepath.Join(root, "data"), true)
+	path := filepath.Join(root, "work.toml")
+	item := Profile{
+		Name:          "work",
+		CredentialRef: "file:work",
+		Deployment:    Deployment{UserID: "bot-user", APIAddr: "https://example.test/api", WSAddr: "wss://example.test/ws", PlatformID: 7},
+		Pairing:       Pairing{CodeHash: PairingCodeHash(code), ExpiresAt: time.Now().Add(time.Hour).UTC().Truncate(time.Second)},
+	}
+	if err := Save(path, item); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("NewFileStore() error = %v", err)
+		t.Fatal(err)
 	}
-	item, err := ImportToken(context.Background(), strings.NewReader("first-token\nignored-input"), store, Profile{Name: "work"})
-	if err != nil {
-		t.Fatalf("ImportToken() error = %v", err)
-	}
-	token, err := store.Get(context.Background(), item.CredentialRef)
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if string(token) != "first-token" {
-		t.Fatalf("stored token = %q, want first line", token)
-	}
-}
-
-func TestConfigurePersistsNonSecretDeployment(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "work.toml")
-	if err := Save(path, Profile{Name: "work", CredentialRef: "file:work"}); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-	deployment := Deployment{
-		UserID:     "user-1",
-		APIAddr:    "https://2.example.test/api",
-		WSAddr:     "wss://2.example.test/msg_gateway",
-		PlatformID: 7,
-	}
-	configured, err := Configure(path, deployment)
-	if err != nil {
-		t.Fatalf("Configure() error = %v", err)
-	}
-	if configured.Deployment != deployment || configured.CredentialRef != "file:work" {
-		t.Fatalf("Configure() = %#v", configured)
+	if strings.Contains(string(contents), code) || !strings.Contains(string(contents), PairingCodeHash(code)) {
+		t.Fatalf("pairing persistence failed: %s", contents)
 	}
 	loaded, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+	if err != nil || !loaded.Pairing.Pending(time.Now()) {
+		t.Fatalf("Load() pairing = %#v, %v", loaded.Pairing, err)
 	}
-	if loaded != configured {
-		t.Fatalf("Load() = %#v, want %#v", loaded, configured)
+	bound, err := BindOwner(path, "owner-user")
+	if err != nil || bound.Pairing.OwnerUserID != "owner-user" || bound.Pairing.CodeHash != "" || !bound.Pairing.ExpiresAt.IsZero() {
+		t.Fatalf("BindOwner() = %#v, %v", bound.Pairing, err)
+	}
+	restored, err := Load(path)
+	if err != nil || restored.Pairing.OwnerUserID != "owner-user" {
+		t.Fatalf("bound profile = %#v, %v", restored, err)
 	}
 }
 

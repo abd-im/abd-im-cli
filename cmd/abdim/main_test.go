@@ -20,177 +20,30 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/profile"
 )
 
-func TestAuthImportUsesStdinAndEmitsTokenFreeJSON(t *testing.T) {
-	const token = "test-token-marker-4d2a0d"
-	root := t.TempDir()
-	var output bytes.Buffer
-	args := []string{"--profile", "work", "auth", "import", "--token-stdin", "--allow-plaintext-credentials"}
-	if got := runWithIO(args, strings.NewReader(token+"\n"), &output, commandRoots{configDir: filepath.Join(root, "config"), dataDir: filepath.Join(root, "data"), runtimeDir: filepath.Join(root, "runtime")}); got != 0 {
-		t.Fatalf("runWithIO() = %d, want 0; output = %s", got, output.String())
-	}
-	if strings.Contains(output.String(), token) {
-		t.Fatalf("CLI output leaked token marker: %q", output.String())
-	}
-	var response contracts.Response
-	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
-		t.Fatalf("CLI output is not JSON: %v", err)
-	}
-	if !response.OK || response.Meta == nil || response.Meta.ProfileID != "work" {
-		t.Fatalf("CLI response = %+v", response)
-	}
-	profileFile := filepath.Join(root, "config", "abdim", "profiles", "work.toml")
-	contents, err := os.ReadFile(profileFile)
-	if err != nil {
-		t.Fatalf("read profile file: %v", err)
-	}
-	if strings.Contains(string(contents), token) {
-		t.Fatalf("profile file leaked token marker: %q", contents)
+func TestLegacyManualSetupCommandsAreRemoved(t *testing.T) {
+	for _, args := range [][]string{
+		{"auth", "import", "--token-stdin"},
+		{"profile", "configure"},
+		{"daemon", "verify"},
+		{"daemon", "serve"},
+	} {
+		var output bytes.Buffer
+		if got := runWithIO(args, strings.NewReader("secret-marker"), &output, testRoots(t)); got != 2 {
+			t.Fatalf("runWithIO(%v) = %d, want 2", args, got)
+		}
+		if strings.Contains(output.String(), "secret-marker") {
+			t.Fatalf("legacy command leaked input: %s", output.String())
+		}
 	}
 }
 
-func TestRunRejectsTokenFlagsAndRequiresExplicitFallback(t *testing.T) {
-	var output bytes.Buffer
-	if got := runWithIO([]string{"auth", "import", "--token=secret"}, strings.NewReader("token"), &output, commandRoots{configDir: t.TempDir(), dataDir: t.TempDir(), runtimeDir: t.TempDir()}); got != 2 {
-		t.Fatalf("token flag exit code = %d, want 2", got)
-	}
-	if strings.Contains(output.String(), "secret") {
-		t.Fatalf("CLI output leaked argv token: %q", output.String())
-	}
-	output.Reset()
-	if got := runWithIO([]string{"auth", "import", "--token-stdin"}, strings.NewReader("token"), &output, commandRoots{configDir: t.TempDir(), dataDir: t.TempDir(), runtimeDir: t.TempDir()}); got != 2 {
-		t.Fatalf("missing fallback opt-in exit code = %d, want 2", got)
-	}
-	output.Reset()
-	if got := runWithIO([]string{"auth", "import", "--token-stdin", "--allow-plaintext-credentials"}, strings.NewReader(""), &output, commandRoots{configDir: t.TempDir(), dataDir: t.TempDir(), runtimeDir: t.TempDir()}); got != 2 {
-		t.Fatalf("empty stdin exit code = %d, want 2", got)
-	}
-}
-
-func TestAuthImportRejectsTokenArgument(t *testing.T) {
-	var output bytes.Buffer
-	if got := runWithIO([]string{"auth", "import", "--token-stdin", "token-as-argument"}, strings.NewReader(""), &output, commandRoots{configDir: t.TempDir(), dataDir: t.TempDir(), runtimeDir: t.TempDir()}); got != 2 {
-		t.Fatalf("token argument exit code = %d, want 2", got)
-	}
-	if strings.Contains(output.String(), "token-as-argument") || !strings.Contains(output.String(), "only from stdin") {
-		t.Fatalf("unexpected response = %s", output.String())
-	}
-}
-
-func TestProfileConfigurePersistsDeploymentWithoutExposingCredentials(t *testing.T) {
-	roots := testRoots(t)
-	var output bytes.Buffer
-	if got := runWithIO([]string{"--profile", "work", "auth", "import", "--token-stdin", "--allow-plaintext-credentials"}, strings.NewReader("test-token\n"), &output, roots); got != 0 {
-		t.Fatalf("auth import exit = %d: %s", got, output.String())
-	}
-	output.Reset()
-	args := []string{"--profile", "work", "profile", "configure", "--user-id", "user-1", "--api-addr", "https://2.example.test/api", "--ws-addr", "wss://2.example.test/msg_gateway", "--platform-id", "7"}
-	if got := runWithIO(args, strings.NewReader(""), &output, roots); got != 0 {
-		t.Fatalf("profile configure exit = %d: %s", got, output.String())
-	}
-	if strings.Contains(output.String(), "user-1") || strings.Contains(output.String(), "test-token") {
-		t.Fatalf("profile configure output leaked deployment or token: %s", output.String())
-	}
-	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, "work")
-	if err != nil {
-		t.Fatal(err)
-	}
-	item, err := profile.Load(paths.ConfigFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if item.Deployment.UserID != "user-1" || item.Deployment.PlatformID != 7 || item.Deployment.APIAddr != "https://2.example.test/api" || item.Deployment.WSAddr != "wss://2.example.test/msg_gateway" {
-		t.Fatalf("profile deployment = %#v", item.Deployment)
-	}
-}
-
-func TestProfileConfigureRequiresImportedProfile(t *testing.T) {
-	roots := testRoots(t)
-	var output bytes.Buffer
-	args := []string{"--profile", "newwork", "profile", "configure", "--user-id", "user-2", "--api-addr", "https://2.example.test/api", "--ws-addr", "wss://2.example.test/msg_gateway", "--platform-id", "7"}
-	if got := runWithIO(args, strings.NewReader(""), &output, roots); got != 2 {
-		t.Fatalf("profile configure exit = %d, want 2; output = %s", got, output.String())
-	}
-	var response contracts.Response
-	if err := json.Unmarshal(output.Bytes(), &response); err != nil || response.Error == nil || response.Error.Code != contracts.CodeInvalidArgument || !strings.Contains(response.Error.Message, "import a token first") {
-		t.Fatalf("profile configure response = %s, %v", output.String(), err)
-	}
-}
-
-func TestDaemonVerifyRequiresConfiguredProfile(t *testing.T) {
-	roots := testRoots(t)
-	var output bytes.Buffer
-	if got := runWithIO([]string{"daemon", "verify"}, strings.NewReader(""), &output, roots); got != 2 {
-		t.Fatalf("missing fallback exit = %d, want 2", got)
-	}
-	output.Reset()
-	if got := runWithIO([]string{"--profile", "work", "auth", "import", "--token-stdin", "--allow-plaintext-credentials"}, strings.NewReader("test-token\n"), &output, roots); got != 0 {
-		t.Fatalf("auth import exit = %d: %s", got, output.String())
-	}
-	output.Reset()
-	if got := runWithIO([]string{"--profile", "work", "daemon", "verify", "--allow-plaintext-credentials"}, strings.NewReader(""), &output, roots); got != 2 {
-		t.Fatalf("unconfigured profile exit = %d, want 2", got)
-	}
-	if !strings.Contains(output.String(), "deployment is not configured") {
-		t.Fatalf("unconfigured profile response = %s", output.String())
-	}
-}
-
-func TestDaemonServeRequiresExplicitDeploymentConfiguration(t *testing.T) {
-	roots := testRoots(t)
-	var output bytes.Buffer
-	if got := runWithIO([]string{"daemon", "serve"}, strings.NewReader(""), &output, roots); got != 2 {
-		t.Fatalf("missing daemon serve flags exit = %d, want 2", got)
-	}
-	if !strings.Contains(output.String(), "--allow-plaintext-credentials") {
-		t.Fatalf("missing credential acknowledgement response = %s", output.String())
-	}
-
-	output.Reset()
-	args := []string{"daemon", "serve", "--allow-plaintext-credentials"}
-	if got := runWithIO(args, strings.NewReader(""), &output, roots); got != 2 {
-		t.Fatalf("missing inbound acknowledgement exit = %d, want 2", got)
-	}
-	if !strings.Contains(output.String(), "--allow-all-inbound") {
-		t.Fatalf("missing inbound acknowledgement response = %s", output.String())
-	}
-
-	if _, err := parseDaemonServeOptions([]string{"--allow-plaintext-credentials", "--allow-all-inbound"}); err != nil {
-		t.Fatalf("parseDaemonServeOptions() error = %v", err)
-	}
-	if _, err := parseDaemonServeOptions([]string{"--allow-plaintext-credentials", "--allow-all-inbound", "--provider-config", "/tmp/provider.toml"}); err == nil {
-		t.Fatal("parseDaemonServeOptions() accepted removed provider configuration")
-	}
-	options, err := parseDaemonServeOptions([]string{"--allow-plaintext-credentials", "--inbound-policy", "owner-full", "--owner-user-id", "test-owner"})
-	if err != nil {
-		t.Fatalf("parseDaemonServeOptions(owner-full) error = %v", err)
-	}
-	if options.inboundPolicy != daemonInboundPolicyOwnerFull || options.ownerUserID != "test-owner" {
-		t.Fatalf("owner-full options = %#v", options)
-	}
-	if _, err := parseDaemonServeOptions([]string{"--allow-plaintext-credentials", "--inbound-policy", "owner-full"}); err == nil {
-		t.Fatal("parseDaemonServeOptions() accepted owner-full without an owner")
-	}
-	if _, err := parseDaemonServeOptions([]string{"--allow-plaintext-credentials", "--allow-all-inbound", "--inbound-policy", "owner-full", "--owner-user-id", "test-owner"}); err == nil {
-		t.Fatal("parseDaemonServeOptions() combined owner-full with allow-all-inbound")
-	}
-}
-
-func TestOwnerFullInboundPolicyAndAcceptanceAreExplicit(t *testing.T) {
-	policy := ownerFullInboundPolicy([]proxy.Method{{Name: "group.list", Scope: "group.read", Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
+func TestOwnerInboundPolicyGrantsVerifiedMethods(t *testing.T) {
+	policy := pairedOwnerPolicy([]proxy.Method{{Name: "group.list", Scope: "group.read", Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
 		return json.RawMessage(`{}`), nil
 	}}})
 	decision, allowed, err := policy.Decide(context.Background(), contracts.Event{})
 	if err != nil || !allowed || !decision.FullAccess || len(decision.Methods) != 1 || decision.Methods[0] != "group.list" || decision.RateBudget != 64 {
-		t.Fatalf("owner-full decision = %+v, allowed=%t, err=%v", decision, allowed, err)
-	}
-	accept := acceptInboundFrom("profile-user", "test-owner")
-	ownerEvent := contracts.SDKEvent{Type: string(contracts.EventMessageReceived), Data: json.RawMessage(`{"sender_id":"test-owner","session_type":1}`)}
-	if !accept(ownerEvent) {
-		t.Fatal("owner inbound event was rejected")
-	}
-	otherEvent := contracts.SDKEvent{Type: string(contracts.EventMessageReceived), Data: json.RawMessage(`{"sender_id":"other-user","session_type":1}`)}
-	if accept(otherEvent) {
-		t.Fatal("non-owner inbound event was accepted")
+		t.Fatalf("owner policy = %+v, allowed=%t, err=%v", decision, allowed, err)
 	}
 }
 

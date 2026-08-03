@@ -1,5 +1,11 @@
 # abd-im-cli
 
+安装并登录 Codex CLI 后，运行 `abdim setup`，再从 owner ABD 账号向 bot
+私聊发送命令输出的一次性 `pair CODE`。setup 会自动启动当前用户后台
+daemon；日常只需 `abdim status`、`abdim start`、`abdim stop` 或
+`abdim restart`。完整流程见
+[`docs/CONNECTOR.md`](docs/CONNECTOR.md)。
+
 ## 从这里开始
 
 1. [`constitution.md`](constitution.md)：通用工作原则。

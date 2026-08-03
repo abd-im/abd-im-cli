@@ -1,41 +1,37 @@
 package profile
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 var (
-	ErrPlaintextDisabled = errors.New("plaintext credential fallback is not enabled")
-	ErrInvalidToken      = errors.New("invalid token input")
+	ErrInvalidToken = errors.New("invalid token input")
 )
 
-// CredentialStore resolves an opaque credential reference. Implementations of
-// system keyrings and the explicit file fallback satisfy this boundary.
+// CredentialStore resolves an opaque credential reference without exposing it
+// through profile configuration.
 type CredentialStore interface {
 	Put(context.Context, string, []byte) (string, error)
 	Get(context.Context, string) ([]byte, error)
 }
 
-// FileStore is an explicit owner-only plaintext fallback for environments
-// without a system credential store. It is never enabled implicitly.
+// FileStore keeps the IM token in the current user's private data directory.
 type FileStore struct {
-	dir     string
-	enabled bool
+	dir string
 }
 
-// NewFileStore returns a disabled store unless allowPlaintext is explicit.
-func NewFileStore(dataDir string, allowPlaintext bool) (*FileStore, error) {
+// NewFileStore stores the short-lived IM token in an owner-only file for the
+// single supported local deployment model.
+func NewFileStore(dataDir string) (*FileStore, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil, errors.New("data directory is required")
 	}
-	return &FileStore{dir: filepath.Join(dataDir, "abdim", "credentials"), enabled: allowPlaintext}, nil
+	return &FileStore{dir: filepath.Join(dataDir, "abdim", "credentials")}, nil
 }
 
 func (s *FileStore) Put(_ context.Context, profileName string, token []byte) (string, error) {
@@ -71,9 +67,6 @@ func (s *FileStore) Put(_ context.Context, profileName string, token []byte) (st
 }
 
 func (s *FileStore) Get(_ context.Context, reference string) ([]byte, error) {
-	if !s.enabled {
-		return nil, ErrPlaintextDisabled
-	}
 	profileName, found := strings.CutPrefix(reference, "file:")
 	if !found {
 		return nil, errors.New("unsupported credential reference")
@@ -89,46 +82,9 @@ func (s *FileStore) Get(_ context.Context, reference string) ([]byte, error) {
 }
 
 func (s *FileStore) allowed(profileName string) error {
-	if !s.enabled {
-		return ErrPlaintextDisabled
-	}
 	return ValidateName(profileName)
 }
 
 func (s *FileStore) path(profileName string) string {
 	return filepath.Join(s.dir, profileName+".token")
-}
-
-// ImportToken reads a token from stdin-like input and persists only through the
-// configured credential store. The token is never placed in a command argument
-// or returned to the caller.
-func ImportToken(ctx context.Context, input io.Reader, store CredentialStore, profile Profile) (Profile, error) {
-	if input == nil || store == nil {
-		return Profile{}, errors.New("token input and credential store are required")
-	}
-	if err := ValidateName(profile.Name); err != nil {
-		return Profile{}, err
-	}
-	const maxTokenBytes = 64 * 1024
-	scanner := bufio.NewScanner(io.LimitReader(input, maxTokenBytes+1))
-	scanner.Buffer(make([]byte, 1024), maxTokenBytes+1)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return Profile{}, fmt.Errorf("read token input: %w", err)
-		}
-		return Profile{}, fmt.Errorf("%w: token is required", ErrInvalidToken)
-	}
-	if len(scanner.Bytes()) > maxTokenBytes {
-		return Profile{}, fmt.Errorf("%w: token input is too large", ErrInvalidToken)
-	}
-	token := []byte(strings.TrimSpace(scanner.Text()))
-	if len(token) == 0 {
-		return Profile{}, fmt.Errorf("%w: token is required", ErrInvalidToken)
-	}
-	reference, err := store.Put(ctx, profile.Name, token)
-	if err != nil {
-		return Profile{}, fmt.Errorf("store token: %w", err)
-	}
-	profile.CredentialRef = reference
-	return profile, nil
 }

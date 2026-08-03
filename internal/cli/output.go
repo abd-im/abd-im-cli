@@ -3,12 +3,10 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/profile"
@@ -62,57 +60,6 @@ func ExitCode(response contracts.Response) int {
 	}
 }
 
-// AuthImportOptions carries only paths and explicit fallback authorization.
-// It deliberately has no token field.
-type AuthImportOptions struct {
-	ProfileName    string
-	ConfigDir      string
-	DataDir        string
-	RuntimeDir     string
-	AllowPlaintext bool
-	RequestID      string
-}
-
-// ImportToken imports a token from stdin-like input, writes only its opaque
-// credential reference to the profile, and returns a token-free response.
-func ImportToken(ctx context.Context, input io.Reader, options AuthImportOptions) (contracts.Response, error) {
-	paths, err := profile.NewPaths(options.ConfigDir, options.DataDir, options.RuntimeDir, options.ProfileName)
-	if err != nil {
-		return contracts.Response{}, err
-	}
-	store, err := profile.NewFileStore(options.DataDir, options.AllowPlaintext)
-	if err != nil {
-		return contracts.Response{}, err
-	}
-	item := profile.Profile{Name: options.ProfileName}
-	if existing, err := profile.Load(paths.ConfigFile); err == nil {
-		item = existing
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return contracts.Response{}, err
-	}
-	item, err = profile.ImportToken(ctx, input, store, item)
-	if err != nil {
-		return contracts.Response{}, err
-	}
-	if err := profile.Save(paths.ConfigFile, item); err != nil {
-		return contracts.Response{}, err
-	}
-	payload, err := json.Marshal(struct {
-		ProfileID          string `json:"profile_id"`
-		CredentialImported bool   `json:"credential_imported"`
-	}{ProfileID: options.ProfileName, CredentialImported: true})
-	if err != nil {
-		return contracts.Response{}, err
-	}
-	return contracts.Response{
-		APIVersion: contracts.APIVersionV1,
-		RequestID:  options.RequestID,
-		OK:         true,
-		Data:       payload,
-		Meta:       &contracts.Meta{ProfileID: options.ProfileName},
-	}, nil
-}
-
 // ErrorResponse converts local command errors into the shared protocol shape.
 func ErrorResponse(requestID string, code contracts.ErrorCode, err error) contracts.Response {
 	message := "command failed"
@@ -124,5 +71,5 @@ func ErrorResponse(requestID string, code contracts.ErrorCode, err error) contra
 
 // IsInvalidArgument identifies local argument and input failures.
 func IsInvalidArgument(err error) bool {
-	return errors.Is(err, profile.ErrInvalidName) || errors.Is(err, profile.ErrInvalidDeployment) || errors.Is(err, profile.ErrPlaintextDisabled) || errors.Is(err, profile.ErrInvalidToken)
+	return errors.Is(err, profile.ErrInvalidName) || errors.Is(err, profile.ErrInvalidDeployment) || errors.Is(err, profile.ErrInvalidToken)
 }

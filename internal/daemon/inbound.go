@@ -57,6 +57,7 @@ type Config struct {
 	GrantTTL time.Duration
 	OnError  func(error)
 	Accept   func(contracts.SDKEvent) bool
+	Pairing  *Pairing
 }
 
 // Inbound accepts normalized SDK events and owns their progression from the
@@ -72,6 +73,7 @@ type Inbound struct {
 	grantTTL  time.Duration
 	onError   func(error)
 	accept    func(contracts.SDKEvent) bool
+	pairing   *Pairing
 
 	mu          sync.Mutex
 	stopped     bool
@@ -115,6 +117,7 @@ func New(config Config) (*Inbound, error) {
 		grantTTL:    config.GrantTTL,
 		onError:     config.OnError,
 		accept:      config.Accept,
+		pairing:     config.Pairing,
 		runsByEvent: make(map[string]string),
 	}, nil
 }
@@ -164,6 +167,16 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	if !recorded.Created || event.Type != string(contracts.EventMessageReceived) {
 		outcome.Ignored = true
 		return outcome, nil
+	}
+	if d.pairing != nil {
+		handled, err := d.pairing.Handle(ctx, event)
+		if err != nil {
+			return outcome, err
+		}
+		if handled {
+			outcome.Ignored = true
+			return outcome, nil
+		}
 	}
 	if d.accept != nil && !d.accept(event) {
 		outcome.Ignored = true

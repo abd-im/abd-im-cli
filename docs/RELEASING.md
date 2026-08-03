@@ -61,7 +61,8 @@ sha256sum -c SHA256SUMS
 ```
 
 Use the verified binary as the same user whose Codex CLI is logged in. Put
-`codex` on that user's `PATH`, then follow [`CONNECTOR.md`](CONNECTOR.md); do
-not use `sudo`, a provider configuration file, or a separate provider UID. Do
-not run a release daemon from the development checkout or with a browser/mobile
-token issued for a different platform.
+`codex` on that user's `PATH`, run `abdim setup`, and complete the one-time
+owner pairing described in [`CONNECTOR.md`](CONNECTOR.md). Do not use `sudo`,
+a provider configuration file, a separate provider UID, or a manually copied
+browser/mobile token. Do not run a release daemon from the development
+checkout.

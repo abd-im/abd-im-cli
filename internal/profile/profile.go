@@ -3,6 +3,8 @@
 package profile
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -11,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var profileNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
@@ -27,6 +30,28 @@ type Profile struct {
 	Name          string
 	CredentialRef string
 	Deployment    Deployment
+	Pairing       Pairing
+}
+
+// Pairing binds one human owner to the bot account. A pending setup stores
+// only the digest and expiry of its one-time code.
+type Pairing struct {
+	OwnerUserID string
+	CodeHash    string
+	ExpiresAt   time.Time
+}
+
+func (p Pairing) Configured() bool {
+	return strings.TrimSpace(p.OwnerUserID) != "" || strings.TrimSpace(p.CodeHash) != "" || !p.ExpiresAt.IsZero()
+}
+
+func (p Pairing) Pending(now time.Time) bool {
+	return strings.TrimSpace(p.OwnerUserID) == "" && validPairingHash(p.CodeHash) && now.Before(p.ExpiresAt)
+}
+
+func PairingCodeHash(code string) string {
+	digest := sha256.Sum256([]byte(strings.ToUpper(strings.TrimSpace(code))))
+	return hex.EncodeToString(digest[:])
 }
 
 // Deployment is the non-secret server configuration required to start one
@@ -50,7 +75,6 @@ type Paths struct {
 	RuntimeDir     string
 	RunsDir        string
 	Socket         string
-	Descriptor     string
 	LockFile       string
 }
 
@@ -76,7 +100,6 @@ func NewPaths(configDir, dataDir, runtimeDir, profileName string) (Paths, error)
 		RuntimeDir:     profileRuntimeDir,
 		RunsDir:        filepath.Join(profileRuntimeDir, "runs"),
 		Socket:         filepath.Join(profileRuntimeDir, "daemon.sock"),
-		Descriptor:     filepath.Join(profileRuntimeDir, "descriptor.json"),
 		LockFile:       filepath.Join(profileRuntimeDir, "daemon.lock"),
 	}, nil
 }
@@ -160,6 +183,9 @@ func Save(path string, profile Profile) error {
 			return err
 		}
 	}
+	if err := profile.Pairing.validate(); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create profile directory: %w", err)
 	}
@@ -184,6 +210,12 @@ func Save(path string, profile Profile) error {
 		contents += "ws_addr = " + strconv.Quote(profile.Deployment.WSAddr) + "\n"
 		contents += "platform_id = " + strconv.FormatInt(int64(profile.Deployment.PlatformID), 10) + "\n"
 	}
+	if profile.Pairing.OwnerUserID != "" {
+		contents += "owner_user_id = " + strconv.Quote(profile.Pairing.OwnerUserID) + "\n"
+	} else if profile.Pairing.CodeHash != "" {
+		contents += "pairing_code_hash = " + strconv.Quote(profile.Pairing.CodeHash) + "\n"
+		contents += "pairing_expires_at = " + strconv.FormatInt(profile.Pairing.ExpiresAt.Unix(), 10) + "\n"
+	}
 	if _, err := file.WriteString(contents); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("write profile file: %w", err)
@@ -204,8 +236,9 @@ func Load(path string) (Profile, error) {
 		return Profile{}, fmt.Errorf("read profile file: %w", err)
 	}
 
-	values := make(map[string]string, 6)
+	values := make(map[string]string, 9)
 	var platformID int32
+	var pairingExpiresAt time.Time
 	for _, line := range strings.Split(string(contents), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -216,7 +249,7 @@ func Load(path string) (Profile, error) {
 			return Profile{}, errors.New("invalid profile TOML")
 		}
 		key = strings.TrimSpace(key)
-		if key != "name" && key != "credential_ref" && key != "user_id" && key != "api_addr" && key != "ws_addr" && key != "platform_id" {
+		if key != "name" && key != "credential_ref" && key != "user_id" && key != "api_addr" && key != "ws_addr" && key != "platform_id" && key != "owner_user_id" && key != "pairing_code_hash" && key != "pairing_expires_at" {
 			return Profile{}, fmt.Errorf("unsupported profile field %q", key)
 		}
 		if _, exists := values[key]; exists {
@@ -231,6 +264,15 @@ func Load(path string) (Profile, error) {
 			values[key] = "configured"
 			continue
 		}
+		if key == "pairing_expires_at" {
+			value, err := strconv.ParseInt(strings.TrimSpace(rawValue), 10, 64)
+			if err != nil || value <= 0 {
+				return Profile{}, fmt.Errorf("decode profile field %q", key)
+			}
+			pairingExpiresAt = time.Unix(value, 0).UTC()
+			values[key] = "configured"
+			continue
+		}
 		value, err := strconv.Unquote(strings.TrimSpace(rawValue))
 		if err != nil {
 			return Profile{}, fmt.Errorf("decode profile field %q: %w", key, err)
@@ -238,7 +280,12 @@ func Load(path string) (Profile, error) {
 		values[key] = value
 	}
 
-	profile := Profile{Name: values["name"], CredentialRef: values["credential_ref"], Deployment: Deployment{UserID: values["user_id"], APIAddr: values["api_addr"], WSAddr: values["ws_addr"], PlatformID: platformID}}
+	profile := Profile{
+		Name:          values["name"],
+		CredentialRef: values["credential_ref"],
+		Deployment:    Deployment{UserID: values["user_id"], APIAddr: values["api_addr"], WSAddr: values["ws_addr"], PlatformID: platformID},
+		Pairing:       Pairing{OwnerUserID: values["owner_user_id"], CodeHash: values["pairing_code_hash"], ExpiresAt: pairingExpiresAt},
+	}
 	if err := ValidateName(profile.Name); err != nil {
 		return Profile{}, err
 	}
@@ -250,22 +297,50 @@ func Load(path string) (Profile, error) {
 			return Profile{}, err
 		}
 	}
+	if err := profile.Pairing.validate(); err != nil {
+		return Profile{}, err
+	}
 	return profile, nil
 }
 
-// Configure loads an existing credential-bearing profile and atomically saves
-// the supplied non-secret daemon deployment configuration.
-func Configure(path string, deployment Deployment) (Profile, error) {
-	if err := deployment.Validate(); err != nil {
-		return Profile{}, err
+func (p Pairing) validate() error {
+	owner := strings.TrimSpace(p.OwnerUserID)
+	hash := strings.TrimSpace(p.CodeHash)
+	if owner != "" {
+		if hash != "" || !p.ExpiresAt.IsZero() {
+			return errors.New("owner binding and pending pairing cannot coexist")
+		}
+		return nil
 	}
-	profile, err := Load(path)
+	if hash == "" && p.ExpiresAt.IsZero() {
+		return nil
+	}
+	if !validPairingHash(hash) || p.ExpiresAt.IsZero() {
+		return errors.New("invalid pending owner pairing")
+	}
+	return nil
+}
+
+func validPairingHash(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size
+}
+
+// BindOwner atomically replaces a pending pairing with its canonical sender.
+func BindOwner(path, ownerUserID string) (Profile, error) {
+	if strings.TrimSpace(ownerUserID) == "" {
+		return Profile{}, errors.New("owner user ID is required")
+	}
+	item, err := Load(path)
 	if err != nil {
 		return Profile{}, err
 	}
-	profile.Deployment = deployment
-	if err := Save(path, profile); err != nil {
+	if item.Pairing.OwnerUserID != "" {
+		return Profile{}, errors.New("owner is already paired")
+	}
+	item.Pairing = Pairing{OwnerUserID: ownerUserID}
+	if err := Save(path, item); err != nil {
 		return Profile{}, err
 	}
-	return profile, nil
+	return item, nil
 }

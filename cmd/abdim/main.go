@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -63,7 +62,7 @@ func run(args []string) int {
 	if err != nil {
 		return writeLocalError(os.Stdout, "cli", fmt.Errorf("resolve data directory: %w", err))
 	}
-	return runWithIO(args, os.Stdin, os.Stdout, commandRoots{configDir: configDir, dataDir: dataDir, runtimeDir: os.TempDir()})
+	return runWithIOStreams(args, os.Stdin, os.Stdout, os.Stderr, commandRoots{configDir: configDir, dataDir: dataDir, runtimeDir: os.TempDir()})
 }
 
 type commandRoots struct {
@@ -73,6 +72,10 @@ type commandRoots struct {
 }
 
 func runWithIO(args []string, input io.Reader, output io.Writer, roots commandRoots) int {
+	return runWithIOStreams(args, input, output, io.Discard, roots)
+}
+
+func runWithIOStreams(args []string, input io.Reader, output, prompt io.Writer, roots commandRoots) int {
 	profileName := "default"
 	requestID := "cli"
 	format := cli.OutputJSON
@@ -117,17 +120,23 @@ func runWithIO(args []string, input io.Reader, output io.Writer, roots commandRo
 		defer cancel()
 	}
 
-	if len(args) >= 2 && args[0] == "auth" && args[1] == "import" {
-		return runAuthImport(ctx, args[2:], input, output, roots, profileName, requestID, format)
+	if len(args) >= 1 && args[0] == "setup" {
+		return runSetup(ctx, args[1:], input, output, prompt, roots, profileName)
 	}
-	if len(args) >= 2 && args[0] == "profile" && args[1] == "configure" {
-		return runProfileConfigure(args[2:], output, roots, profileName, requestID, format)
+	if len(args) >= 1 && args[0] == "start" {
+		return runStart(ctx, args[1:], output, roots, profileName)
 	}
-	if len(args) >= 2 && args[0] == "daemon" && args[1] == "verify" {
-		return runDaemonVerify(ctx, args[2:], output, roots, profileName, requestID, format)
+	if len(args) >= 1 && args[0] == "stop" {
+		return runStop(ctx, args[1:], output, roots, profileName)
 	}
-	if len(args) >= 2 && args[0] == "daemon" && args[1] == "serve" {
-		return runDaemonServe(ctx, args[2:], output, roots, profileName, requestID, format)
+	if len(args) >= 1 && args[0] == "restart" {
+		return runRestart(ctx, args[1:], output, roots, profileName)
+	}
+	if len(args) >= 1 && args[0] == "status" {
+		return runStatus(ctx, args[1:], output, roots, profileName)
+	}
+	if len(args) == 1 && args[0] == "__serve" {
+		return runDaemonServe(ctx, output, roots, profileName, requestID, format)
 	}
 	if len(args) == 2 && args[0] == "mcp" && args[1] == "serve" {
 		return runOwnerMCP(ctx, input, output, roots, profileName, requestID)
@@ -163,154 +172,9 @@ func runWithIO(args []string, input io.Reader, output io.Writer, roots commandRo
 	return cli.ExitCode(response)
 }
 
-func runAuthImport(ctx context.Context, args []string, input io.Reader, output io.Writer, roots commandRoots, profileName, requestID string, format cli.Output) int {
-	tokenFromStdin := false
-	allowPlaintext := false
-	for _, argument := range args {
-		switch argument {
-		case "--token-stdin":
-			tokenFromStdin = true
-		case "--allow-plaintext-credentials":
-			allowPlaintext = true
-		default:
-			return writeInvalidArgument(output, requestID, "auth import accepts the token only from stdin")
-		}
-	}
-	if !tokenFromStdin {
-		return writeInvalidArgument(output, requestID, "auth import requires --token-stdin")
-	}
-
-	response, err := cli.ImportToken(ctx, input, cli.AuthImportOptions{
-		ProfileName:    profileName,
-		ConfigDir:      roots.configDir,
-		DataDir:        roots.dataDir,
-		RuntimeDir:     roots.runtimeDir,
-		AllowPlaintext: allowPlaintext,
-		RequestID:      requestID,
-	})
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	if err := cli.WriteResponse(output, format, response); err != nil {
-		return 1
-	}
-	return cli.ExitCode(response)
-}
-
-func runProfileConfigure(args []string, output io.Writer, roots commandRoots, profileName, requestID string, format cli.Output) int {
-	var deployment profile.Deployment
-	for len(args) > 0 {
-		if len(args) < 2 {
-			return writeInvalidArgument(output, requestID, "profile configure flags require values")
-		}
-		flag, value := args[0], args[1]
-		switch flag {
-		case "--user-id":
-			deployment.UserID = value
-		case "--api-addr":
-			deployment.APIAddr = value
-		case "--ws-addr":
-			deployment.WSAddr = value
-		case "--platform-id":
-			parsed, err := strconv.ParseInt(value, 10, 32)
-			if err != nil || parsed <= 0 {
-				return writeInvalidArgument(output, requestID, "--platform-id must be a positive integer")
-			}
-			deployment.PlatformID = int32(parsed)
-		default:
-			return writeInvalidArgument(output, requestID, "unsupported profile configure flag")
-		}
-		args = args[2:]
-	}
-	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, profileName)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	item, err := profile.Configure(paths.ConfigFile, deployment)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return writeInvalidArgument(output, requestID, "profile does not exist; import a token first")
-		}
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	payload, err := json.Marshal(struct {
-		ProfileID  string `json:"profile_id"`
-		Configured bool   `json:"configured"`
-	}{ProfileID: item.Name, Configured: true})
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	response := contracts.Response{APIVersion: contracts.APIVersionV1, RequestID: requestID, OK: true, Data: payload, Meta: &contracts.Meta{ProfileID: item.Name}}
-	if err := cli.WriteResponse(output, format, response); err != nil {
-		return 1
-	}
-	return 0
-}
-
-func runDaemonVerify(ctx context.Context, args []string, output io.Writer, roots commandRoots, profileName, requestID string, format cli.Output) int {
-	if len(args) != 1 || args[0] != "--allow-plaintext-credentials" {
-		return writeInvalidArgument(output, requestID, "daemon verify requires --allow-plaintext-credentials")
-	}
-	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, profileName)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	if err := paths.EnsurePrivate(); err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	item, err := profile.Load(paths.ConfigFile)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	if !item.Deployment.Configured() {
-		return writeInvalidArgument(output, requestID, "profile deployment is not configured")
-	}
-	credentials, err := profile.NewFileStore(roots.dataDir, true)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	prepared, err := connector.Prepare(ctx, connector.Config{
-		ProfileID:     item.Name,
-		UserID:        item.Deployment.UserID,
-		CredentialRef: item.CredentialRef,
-		Credentials:   credentials,
-		SDKConfig:     daemonSDKConfig(paths, item.Deployment),
-	})
-	if err != nil {
-		return writeDaemonVerifyFailure(output, format, requestID)
-	}
-	manager, err := bridge.NewLoginMgr(prepared.SDKFactory(), paths.LockFile, nil)
-	if err != nil {
-		return writeDaemonVerifyFailure(output, format, requestID)
-	}
-	if err := manager.Start(ctx); err != nil {
-		_ = manager.Shutdown(context.Background())
-		return writeDaemonVerifyFailure(output, format, requestID)
-	}
-	if err := manager.Shutdown(context.Background()); err != nil {
-		return writeDaemonVerifyFailure(output, format, requestID)
-	}
-	payload, err := json.Marshal(struct {
-		ProfileID string `json:"profile_id"`
-		Verified  bool   `json:"verified"`
-	}{ProfileID: item.Name, Verified: true})
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	response := contracts.Response{APIVersion: contracts.APIVersionV1, RequestID: requestID, OK: true, Data: payload, Meta: &contracts.Meta{ProfileID: item.Name}}
-	if err := cli.WriteResponse(output, format, response); err != nil {
-		return 1
-	}
-	return 0
-}
-
 // runDaemonServe composes the fixed daemon path with the current user's local
 // Codex CLI. Each run receives a fresh private MCP configuration.
-func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots commandRoots, profileName, requestID string, format cli.Output) int {
-	serveOptions, err := parseDaemonServeOptions(args)
-	if err != nil {
-		return writeInvalidArgument(output, requestID, err.Error())
-	}
+func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, profileName, requestID string, format cli.Output) int {
 	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, profileName)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -334,7 +198,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		return writeInvalidArgument(output, requestID, "current user Codex login is unavailable")
 	}
 
-	credentials, err := profile.NewFileStore(roots.dataDir, true)
+	credentials, err := profile.NewFileStore(roots.dataDir)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -647,12 +511,23 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	methods = append(methods, conversationMarkRead.ProxyMethod(), conversationPinned.ProxyMethod(), conversationReceiveOption.ProxyMethod())
 	methods = append(methods, friendHandler.ProxyMethods()...)
 	methods = append(methods, blacklistHandler.ProxyMethods()...)
-	policy := defaultInboundPolicy()
-	accept := acceptAllInbound(item.Deployment.UserID)
-	if serveOptions.inboundPolicy == daemonInboundPolicyOwnerFull {
-		policy = ownerFullInboundPolicy(methods)
-		accept = acceptInboundFrom(item.Deployment.UserID, serveOptions.ownerUserID)
+	pairing, err := daemon.NewPairing(daemon.PairingConfig{
+		BotUserID:   item.Deployment.UserID,
+		OwnerUserID: item.Pairing.OwnerUserID,
+		CodeHash:    item.Pairing.CodeHash,
+		ExpiresAt:   item.Pairing.ExpiresAt,
+		BindOwner: func(ownerUserID string) error {
+			_, bindErr := profile.BindOwner(paths.ConfigFile, ownerUserID)
+			return bindErr
+		},
+		Send: func(sendContext context.Context, text, recipientID string) error {
+			return prepared.Adapter.SendText(sendContext, text, recipientID, "")
+		},
+	})
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
+	acceptInbound := acceptAllInbound(item.Deployment.UserID)
 	inbound, err := daemon.New(daemon.Config{
 		ProfileID: item.Name,
 		Ledger:    ledger,
@@ -660,9 +535,12 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		Runs:      runs,
 		Grants:    grant.NewStore(),
 		Methods:   methods,
-		Policy:    policy,
+		Policy:    pairedOwnerPolicy(methods),
 		GrantTTL:  2 * time.Minute,
-		Accept:    accept,
+		Accept: func(event contracts.SDKEvent) bool {
+			return acceptInbound(event) && pairing.Accept(event)
+		},
+		Pairing: pairing,
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -701,77 +579,7 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	return 0
 }
 
-type daemonInboundPolicy string
-
-const (
-	daemonInboundPolicyDefault   daemonInboundPolicy = "default"
-	daemonInboundPolicyOwnerFull daemonInboundPolicy = "owner-full"
-)
-
-type daemonServeOptions struct {
-	inboundPolicy daemonInboundPolicy
-	ownerUserID   string
-}
-
-func parseDaemonServeOptions(args []string) (daemonServeOptions, error) {
-	allowPlaintext := false
-	allowInbound := false
-	options := daemonServeOptions{inboundPolicy: daemonInboundPolicyDefault}
-	for len(args) > 0 {
-		switch args[0] {
-		case "--allow-plaintext-credentials":
-			allowPlaintext = true
-			args = args[1:]
-		case "--allow-all-inbound":
-			allowInbound = true
-			args = args[1:]
-		case "--inbound-policy":
-			if len(args) < 2 {
-				return daemonServeOptions{}, errors.New("--inbound-policy requires a value")
-			}
-			options.inboundPolicy = daemonInboundPolicy(args[1])
-			if options.inboundPolicy != daemonInboundPolicyOwnerFull {
-				return daemonServeOptions{}, errors.New("--inbound-policy must be owner-full")
-			}
-			args = args[2:]
-		case "--owner-user-id":
-			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
-				return daemonServeOptions{}, errors.New("--owner-user-id requires a value")
-			}
-			options.ownerUserID = strings.TrimSpace(args[1])
-			args = args[2:]
-		default:
-			return daemonServeOptions{}, errors.New("unsupported daemon serve flag")
-		}
-	}
-	if !allowPlaintext {
-		return daemonServeOptions{}, errors.New("daemon serve requires --allow-plaintext-credentials")
-	}
-	if options.inboundPolicy == daemonInboundPolicyOwnerFull {
-		if allowInbound {
-			return daemonServeOptions{}, errors.New("owner-full cannot be combined with --allow-all-inbound")
-		}
-		if options.ownerUserID == "" {
-			return daemonServeOptions{}, errors.New("owner-full requires --owner-user-id")
-		}
-		return options, nil
-	}
-	if options.ownerUserID != "" {
-		return daemonServeOptions{}, errors.New("--owner-user-id requires --inbound-policy owner-full")
-	}
-	if !allowInbound {
-		return daemonServeOptions{}, errors.New("daemon serve requires --allow-all-inbound")
-	}
-	return options, nil
-}
-
-func defaultInboundPolicy() daemon.Policy {
-	return daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
-		return daemon.Decision{Principal: "codex", Methods: []string{"message.history"}, RateBudget: 1}, true, nil
-	})
-}
-
-func ownerFullInboundPolicy(methods []proxy.Method) daemon.Policy {
+func pairedOwnerPolicy(methods []proxy.Method) daemon.Policy {
 	methodNames := make([]string, 0, len(methods))
 	for _, method := range methods {
 		methodNames = append(methodNames, method.Name)
@@ -847,19 +655,6 @@ func acceptAllInbound(userID string) func(contracts.SDKEvent) bool {
 	}
 }
 
-func acceptInboundFrom(userID, ownerUserID string) func(contracts.SDKEvent) bool {
-	accept := acceptAllInbound(userID)
-	return func(event contracts.SDKEvent) bool {
-		if !accept(event) {
-			return false
-		}
-		var reference struct {
-			SenderID string `json:"sender_id"`
-		}
-		return json.Unmarshal(event.Data, &reference) == nil && reference.SenderID == ownerUserID
-	}
-}
-
 func daemonSDKConfig(paths profile.Paths, deployment profile.Deployment) sdk_struct.IMConfig {
 	return sdk_struct.IMConfig{
 		SystemType:  "linux",
@@ -870,14 +665,6 @@ func daemonSDKConfig(paths profile.Paths, deployment profile.Deployment) sdk_str
 		LogLevel:    4,
 		LogFilePath: filepath.Join(paths.LogsDir, "sdk.log"),
 	}
-}
-
-func writeDaemonVerifyFailure(output io.Writer, format cli.Output, requestID string) int {
-	response := cli.ErrorResponse(requestID, contracts.CodeConnectionUnavailable, errors.New("daemon verification failed"))
-	if err := cli.WriteResponse(output, format, response); err != nil {
-		return 1
-	}
-	return cli.ExitCode(response)
 }
 
 func writeDaemonServeFailure(output io.Writer, format cli.Output, requestID string) int {
@@ -983,7 +770,7 @@ func ownerParams(args []string, input io.Reader) (json.RawMessage, error) {
 }
 
 func writeInvalidArgument(output io.Writer, requestID, message string) int {
-	response := cli.ErrorResponse(requestID, contracts.CodeInvalidArgument, errorsNew(message))
+	response := cli.ErrorResponse(requestID, contracts.CodeInvalidArgument, errors.New(message))
 	_ = cli.WriteResponse(output, cli.OutputJSON, response)
 	return cli.ExitCode(response)
 }
@@ -1001,5 +788,3 @@ func writeLocalErrorForFormat(output io.Writer, format cli.Output, requestID str
 	_ = cli.WriteResponse(output, format, response)
 	return cli.ExitCode(response)
 }
-
-func errorsNew(message string) error { return fmt.Errorf("%s", message) }

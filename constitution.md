@@ -52,7 +52,7 @@ When a task contains multiple independently verifiable outcomes or cannot be com
 Create commits only for a completed, verified task or an independently useful governance change. Include the task's required tests, dependency update, and current-state documentation in that commit; do not commit exploration, interim fixes, or status-only updates separately.
 
 ### XII. One Supported Path
-Prefer one simple, supported path for each product capability. Do not retain alternative modes or operational variants unless a demonstrated requirement justifies their user, maintenance, and verification cost.
+Prefer one simple, supported path for each product capability. User-facing setup and lifecycle commands must hide stable integration plumbing behind safe defaults. Do not retain alternative modes or operational variants unless a demonstrated requirement justifies their user, maintenance, and verification cost.
 
 ### XIII. Cohesive Work History
 Use one issue per cohesive delivery so it remains useful as a development record. Record its scope, verification, material decisions, and completion reference; keep implementation ownership in an architecture overview when one exists. Split an issue only when its record would no longer describe one focused delivery.

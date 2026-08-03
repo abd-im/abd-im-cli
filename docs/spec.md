@@ -15,14 +15,14 @@
 
 ### US-01：通过 IM 与 Agent 对话（优先级：关键）
 
-用户在受 policy 允许的私聊或群聊中发消息。daemon 收到事件后唤起 provider；provider 返回 `final_text`，daemon 只向触发消息所在会话回复。普通对话不要求 provider 执行 `abdim` 命令。
+用户完成一次 owner 配对后，在私聊或受支持的群聊中发消息。daemon 收到该 owner 的事件后唤起 provider；provider 返回 `final_text`，daemon 只向触发消息所在会话回复。普通对话不要求 provider 执行 `abdim` 命令。
 
 **独立测试**：向一个允许触发的私聊注入一条消息，验证只创建一个 run、一个 reply slot 和一条原会话回复。
 
 **验收场景**：
 
 1. 给定 daemon 已 `ready`，当私聊消息命中 policy 时，系统创建 run 并回复原私聊。
-2. 给定群聊未 @ 提及或未使用前缀时，系统不创建 run；命中规则时也只回复该群。
+2. 给定未配对或 sender 不是 owner，系统不创建 run；owner 在受支持的群聊中触发时也只回复该群。
 
 ### US-02：在受限授权下使用 IM 能力（优先级：关键）
 
@@ -57,11 +57,11 @@ owner 通过 CLI 或完全信任的本地 MCP 查询 profile、会话、消息�
 
 ## 2. 范围、非目标与依赖
 
-`abdim-cli` 为一个 OpenIM profile 提供本地 daemon、CLI、MCP 和入站 bot。SDK 长连接、本地 SQLite、同步和 listener 只由 daemon 持有；CLI、MCP 和 provider 不直接初始化 SDK 或读取 SDK 数据表。首版只支持当前用户运行 daemon 并复用该用户已登录的本机 Codex CLI；这是受信任本地进程模型，不提供恶意代码的操作系统级隔离。
+`abdim-cli` 为一个 OpenIM profile 提供本地 daemon、CLI、MCP 和入站 bot。`abdim setup` 通过固定 ABD 登录服务配置 bot、启动当前用户后台 daemon，并用一次性私聊消息绑定 owner。SDK 长连接、本地 SQLite、同步和 listener 只由 daemon 持有；CLI、MCP 和 provider 不直接初始化 SDK 或读取 SDK 数据表。首版只支持当前用户运行 daemon 并复用该用户已登录的本机 Codex CLI；这是受信任本地进程模型，不提供恶意代码的操作系统级隔离。
 
 P1 交付 US-01、US-02 和 US-03 所需的单 profile 闭环、event-bound reply、受 grant 约束的 typed 读取能力，以及以 `group.create` 验证的通用副作用路径。通用 `message send`、附件和更多写能力从 P2 开始。
 
-不提供公网 HTTP 管理面、任意 SDK/RPC/SQLite 后门、通用业务登录流程、客户端 UI/设备能力、未经集成测试验证的 SDK 能力，或服务端全局 exactly-once 承诺。IM token 的获取、账号身份和服务端部署策略由部署 connector 决定，不属于本地 CLI 协议。
+不提供公网 HTTP 管理面、任意 SDK/RPC/SQLite 后门、其他 IM 部署的通用登录配置、客户端 UI/设备能力、未经集成测试验证的 SDK 能力，或服务端全局 exactly-once 承诺。
 
 ## 3. 功能需求
 
@@ -70,7 +70,7 @@ P1 交付 US-01、US-02 和 US-03 所需的单 profile 闭环、event-bound repl
 - **FR-001**：daemon 每进程只服务一个 profile，并独占 SDK data directory、token、日志和资源配额。
 - **FR-002**：daemon 必须经 `NewLoginMgr` 创建 `UserContext`，严格按 `InitSDK -> InitResources -> 注册 listener -> Login` 初始化；包级 facade 不是公开路径。
 - **FR-003**：`ready` 要求 IPC、连接和选定同步策略完成；连接或同步异常为 `degraded`，凭据失效为 `locked`。
-- **FR-004**：token 只能经 `abdim auth import --token-stdin` 导入，优先使用系统 credential store；明文 fallback 必须显式启用、owner-only 且 `0600`。token 不得出现在 argv、默认日志、审计或健康响应。
+- **FR-004**：`abdim setup` 必须以交互方式将 ABD bot 账号密码换取 canonical user ID 和 IM token；密码不得回显或持久化，token 只能存入 owner-only `0600` 文件，不得出现在 argv、profile TOML、默认日志、审计或健康响应。
 - **FR-005**：控制库只保存 profile、事件/cursor、run/reply slot、operation/idempotency、grant、policy、审计和附件元数据；不得复制完整聊天库或消息正文。
 
 ### 本地接口与读取能力
@@ -82,14 +82,14 @@ P1 交付 US-01、US-02 和 US-03 所需的单 profile 闭环、event-bound repl
 
 ### 入站 bot 与 provider
 
-- **FR-010**：policy 决定触发规则：私聊可直接触发，群聊默认需要 @ 提及或前缀；自己发送的消息、通知、重复事件和未命中规则的消息不得创建 run。
+- **FR-010**：首次启动必须生成 15 分钟有效的一次性 owner 配对码；只接受私聊中的精确配对消息并持久化 canonical sender ID。配对前的消息、非 owner 消息、自己发送的消息、通知和重复事件不得创建 run。
 - **FR-011**：provider 之前必须持久化 reply slot；它绑定 event、profile、来源 conversation、触发消息、run 和 operation。provider 或 prompt 不得指定 reply `conversation_id`。
 - **FR-012**：P1 的 provider 通过一个已配置 adapter 运行；provider 自行完成同步 tool loop，`TurnResult` 只返回 `final_text`、脱敏 tool 摘要、session reference 或诊断错误。
 - **FR-013**：同一 conversation 的 run 必须串行；policy 必须定义每会话最大队列、turn deadline 和溢出行为。撤回、访问丢失、policy 失效、grant 过期或 owner 取消时，必须取消 run、关闭 proxy 并撤销 grant。
 
 ### 授权、写入与审计
 
-- **FR-014**：grant 必须绑定 run、profile、principal、scope、按 typed method 隔离且带资源类型命名的目标 allowlist、消息窗口、附件额度、到期时间、速率预算和 approval policy。自动 run 默认只有触发会话的受限读取权限。
+- **FR-014**：grant 必须绑定 run、profile、principal、scope、按 typed method 隔离且带资源类型命名的目标 allowlist、消息窗口、附件额度、到期时间、速率预算和 approval policy。配对 owner 的自动 run 可获得全部当前 `available` 方法和宽目标，但仍必须使用具有效期、调用预算和附件额度的独立 grant。
 - **FR-015**：受限 provider 只能连接每 run 私有的 tool proxy；proxy 必须逐请求验证一次性 credential、run、grant、到期时间、capability manifest、method allowlist、method-scoped target 和读取窗口，拒绝 controller 命令、endpoint 覆盖和未授权方法。
 - **FR-016**：event-bound reply 由 daemon 执行而非通用 `message.send`；它以 `profile + event_id + reply_slot` 幂等。确认前中断为 `unknown`，不得创建新消息补发。
 - **FR-017**：每个远端副作用都必须具有独立 scope、输入/目标 allowlist、数量上限、批准策略和 operation/idempotency。P1 以 `group.create` 作为首个经过验证的 handler：相同 key 返回原 operation，参数摘要不同返回 `IDEMPOTENCY_CONFLICT`，未知结果不得自动重建群。新 handler 只有在 manifest、授权规则和集成测试齐备后才能公开。
@@ -112,7 +112,7 @@ OpenIM Server
 ```text
 <config-dir>/abdim/profiles/<profile>.toml
 <data-dir>/abdim/profiles/<profile>/{sdk,control.db,attachments,logs}/
-<runtime-dir>/abdim/<profile>/{daemon.sock,descriptor.json,runs/}
+<runtime-dir>/abdim/<profile>/{daemon.sock,daemon.lock,runs/}
 ```
 
 Unix runtime 目录为 `0700`，socket 为 `0600`。daemon 退出时停止新请求和新 run，取消未完成工作后关闭 SDK 资源；重启不得用新消息掩盖未知结果。
@@ -138,7 +138,7 @@ type Session interface {
 }
 ```
 
-P1 只在同一 daemon 生命周期内复用 provider session；重启中的 turn 标记 `interrupted`，不自动恢复或重跑。
+P1 只在同一 daemon 生命周期内复用 provider session；重启中的 turn 标记 `interrupted`，不自动恢复或重跑。公开生命周期命令只有 `setup`、`start`、`stop`、`restart` 和 `status`；后台装配入口不属于用户接口。
 
 ## 5. 关键实体与状态
 
@@ -175,9 +175,10 @@ P1 只在同一 daemon 生命周期内复用 provider session；重启中的 tur
 - **SC-006**：正常 provider 集成不能经 run-private MCP bridge 以外的路径直连 daemon、调用 controller 命令、读取超出消息窗口的历史，或向第三方会话发送；当前用户模式不声称能阻止同 UID 恶意进程直接访问本地文件或 socket。
 - **SC-007**：撤回、权限变化、grant 过期或取消会阻止排队 run、副作用和最终回复。
 - **SC-008**：daemon、SDK、HTTP/WebSocket 诊断和审计均不泄露测试 token 或完整消息正文。
+- **SC-009**：一次 `abdim setup` 可完成 ABD 登录、私有配置和后台启动；配对前不创建 provider run，配对后只有持久化 owner 能触发全部已验证能力。
 
 ## 8. 假设
 
-- 部署 connector 已向本地 owner 提供有效的 IM token；其账号登录和服务端部署策略在本项目之外。
+- 当前产品只连接固定 ABD 部署；用户拥有一个 bot 账号、一个独立 owner 账号，以及已登录的本机 Codex CLI。
 - P1 固定一个经集成测试验证的 SDK/server 组合和一个 provider adapter。
 - 需要额外能力或兼容组合时，先新增活跃 task，再改变 capability 状态或交付范围。
