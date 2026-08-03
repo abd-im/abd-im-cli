@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abd-im/abd-im-cli/internal/agent/grant"
+	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/ipc"
 	"github.com/abd-im/abd-im-cli/internal/profile"
@@ -157,6 +159,38 @@ func TestDaemonServeRequiresExplicitDeploymentConfiguration(t *testing.T) {
 	}
 	if _, err := parseDaemonServeOptions([]string{"--allow-plaintext-credentials", "--allow-all-inbound", "--provider-config", "/tmp/provider.toml"}); err == nil {
 		t.Fatal("parseDaemonServeOptions() accepted removed provider configuration")
+	}
+	options, err := parseDaemonServeOptions([]string{"--allow-plaintext-credentials", "--inbound-policy", "owner-full", "--owner-user-id", "test-owner"})
+	if err != nil {
+		t.Fatalf("parseDaemonServeOptions(owner-full) error = %v", err)
+	}
+	if options.inboundPolicy != daemonInboundPolicyOwnerFull || options.ownerUserID != "test-owner" {
+		t.Fatalf("owner-full options = %#v", options)
+	}
+	if _, err := parseDaemonServeOptions([]string{"--allow-plaintext-credentials", "--inbound-policy", "owner-full"}); err == nil {
+		t.Fatal("parseDaemonServeOptions() accepted owner-full without an owner")
+	}
+	if _, err := parseDaemonServeOptions([]string{"--allow-plaintext-credentials", "--allow-all-inbound", "--inbound-policy", "owner-full", "--owner-user-id", "test-owner"}); err == nil {
+		t.Fatal("parseDaemonServeOptions() combined owner-full with allow-all-inbound")
+	}
+}
+
+func TestOwnerFullInboundPolicyAndAcceptanceAreExplicit(t *testing.T) {
+	policy := ownerFullInboundPolicy([]proxy.Method{{Name: "group.list", Scope: "group.read", Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
+		return json.RawMessage(`{}`), nil
+	}}})
+	decision, allowed, err := policy.Decide(context.Background(), contracts.Event{})
+	if err != nil || !allowed || !decision.FullAccess || len(decision.Methods) != 1 || decision.Methods[0] != "group.list" || decision.RateBudget != 64 {
+		t.Fatalf("owner-full decision = %+v, allowed=%t, err=%v", decision, allowed, err)
+	}
+	accept := acceptInboundFrom("profile-user", "test-owner")
+	ownerEvent := contracts.SDKEvent{Type: string(contracts.EventMessageReceived), Data: json.RawMessage(`{"sender_id":"test-owner","session_type":1}`)}
+	if !accept(ownerEvent) {
+		t.Fatal("owner inbound event was rejected")
+	}
+	otherEvent := contracts.SDKEvent{Type: string(contracts.EventMessageReceived), Data: json.RawMessage(`{"sender_id":"other-user","session_type":1}`)}
+	if accept(otherEvent) {
+		t.Fatal("non-owner inbound event was accepted")
 	}
 }
 

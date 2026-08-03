@@ -60,6 +60,22 @@ func TestMarkReadRequiresManifestGrantAndWindowBoundaries(t *testing.T) {
 	if response := call("inside", "conversation-1", "inside"); !response.OK || sender.calls != 1 || sender.request != (MarkReadRequest{ConversationID: "conversation-1", HasReadSeq: 11}) {
 		t.Fatalf("inside window = %+v, sender=%+v", response, sender)
 	}
+	_, fullCredential, err := grants.Issue(grant.Policy{
+		RunID: "run-full", ProfileID: "work", Principal: "owner", FullAccess: true,
+		Methods: []string{Method}, Scopes: []string{Scope},
+		ExpiresAt: time.Now().Add(time.Hour), RateBudget: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullTool, err := proxy.New(grants, "run-full", "work", []proxy.Method{handler.ProxyMethod()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, credential = fullTool, fullCredential
+	if response := call("full-access", "conversation-1", "outside"); !response.OK || sender.calls != 2 || sender.request != (MarkReadRequest{ConversationID: "conversation-1", HasReadSeq: 13}) {
+		t.Fatalf("full access mark read = %+v, sender=%+v", response, sender)
+	}
 }
 
 func TestMarkReadRequiresFiniteWindowAndTrustedBoundary(t *testing.T) {

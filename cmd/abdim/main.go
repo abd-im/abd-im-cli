@@ -307,7 +307,7 @@ func runDaemonVerify(ctx context.Context, args []string, output io.Writer, roots
 // runDaemonServe composes the fixed daemon path with the current user's local
 // Codex CLI. Each run receives a fresh private MCP configuration.
 func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots commandRoots, profileName, requestID string, format cli.Output) int {
-	_, err := parseDaemonServeOptions(args)
+	serveOptions, err := parseDaemonServeOptions(args)
 	if err != nil {
 		return writeInvalidArgument(output, requestID, err.Error())
 	}
@@ -647,6 +647,12 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	methods = append(methods, conversationMarkRead.ProxyMethod(), conversationPinned.ProxyMethod(), conversationReceiveOption.ProxyMethod())
 	methods = append(methods, friendHandler.ProxyMethods()...)
 	methods = append(methods, blacklistHandler.ProxyMethods()...)
+	policy := defaultInboundPolicy()
+	accept := acceptAllInbound(item.Deployment.UserID)
+	if serveOptions.inboundPolicy == daemonInboundPolicyOwnerFull {
+		policy = ownerFullInboundPolicy(methods)
+		accept = acceptInboundFrom(item.Deployment.UserID, serveOptions.ownerUserID)
+	}
 	inbound, err := daemon.New(daemon.Config{
 		ProfileID: item.Name,
 		Ledger:    ledger,
@@ -654,11 +660,9 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 		Runs:      runs,
 		Grants:    grant.NewStore(),
 		Methods:   methods,
-		Policy: daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
-			return daemon.Decision{Principal: "codex", Methods: []string{"message.history"}, RateBudget: 1}, true, nil
-		}),
-		GrantTTL: 2 * time.Minute,
-		Accept:   acceptAllInbound(item.Deployment.UserID),
+		Policy:    policy,
+		GrantTTL:  2 * time.Minute,
+		Accept:    accept,
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -697,11 +701,22 @@ func runDaemonServe(ctx context.Context, args []string, output io.Writer, roots 
 	return 0
 }
 
-type daemonServeOptions struct{}
+type daemonInboundPolicy string
+
+const (
+	daemonInboundPolicyDefault   daemonInboundPolicy = "default"
+	daemonInboundPolicyOwnerFull daemonInboundPolicy = "owner-full"
+)
+
+type daemonServeOptions struct {
+	inboundPolicy daemonInboundPolicy
+	ownerUserID   string
+}
 
 func parseDaemonServeOptions(args []string) (daemonServeOptions, error) {
 	allowPlaintext := false
 	allowInbound := false
+	options := daemonServeOptions{inboundPolicy: daemonInboundPolicyDefault}
 	for len(args) > 0 {
 		switch args[0] {
 		case "--allow-plaintext-credentials":
@@ -710,6 +725,21 @@ func parseDaemonServeOptions(args []string) (daemonServeOptions, error) {
 		case "--allow-all-inbound":
 			allowInbound = true
 			args = args[1:]
+		case "--inbound-policy":
+			if len(args) < 2 {
+				return daemonServeOptions{}, errors.New("--inbound-policy requires a value")
+			}
+			options.inboundPolicy = daemonInboundPolicy(args[1])
+			if options.inboundPolicy != daemonInboundPolicyOwnerFull {
+				return daemonServeOptions{}, errors.New("--inbound-policy must be owner-full")
+			}
+			args = args[2:]
+		case "--owner-user-id":
+			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+				return daemonServeOptions{}, errors.New("--owner-user-id requires a value")
+			}
+			options.ownerUserID = strings.TrimSpace(args[1])
+			args = args[2:]
 		default:
 			return daemonServeOptions{}, errors.New("unsupported daemon serve flag")
 		}
@@ -717,10 +747,44 @@ func parseDaemonServeOptions(args []string) (daemonServeOptions, error) {
 	if !allowPlaintext {
 		return daemonServeOptions{}, errors.New("daemon serve requires --allow-plaintext-credentials")
 	}
+	if options.inboundPolicy == daemonInboundPolicyOwnerFull {
+		if allowInbound {
+			return daemonServeOptions{}, errors.New("owner-full cannot be combined with --allow-all-inbound")
+		}
+		if options.ownerUserID == "" {
+			return daemonServeOptions{}, errors.New("owner-full requires --owner-user-id")
+		}
+		return options, nil
+	}
+	if options.ownerUserID != "" {
+		return daemonServeOptions{}, errors.New("--owner-user-id requires --inbound-policy owner-full")
+	}
 	if !allowInbound {
 		return daemonServeOptions{}, errors.New("daemon serve requires --allow-all-inbound")
 	}
-	return daemonServeOptions{}, nil
+	return options, nil
+}
+
+func defaultInboundPolicy() daemon.Policy {
+	return daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
+		return daemon.Decision{Principal: "codex", Methods: []string{"message.history"}, RateBudget: 1}, true, nil
+	})
+}
+
+func ownerFullInboundPolicy(methods []proxy.Method) daemon.Policy {
+	methodNames := make([]string, 0, len(methods))
+	for _, method := range methods {
+		methodNames = append(methodNames, method.Name)
+	}
+	return daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
+		return daemon.Decision{
+			Principal:           "owner",
+			Methods:             methodNames,
+			FullAccess:          true,
+			AttachmentByteLimit: 32 * 1024 * 1024,
+			RateBudget:          64,
+		}, true, nil
+	})
 }
 
 func currentCodexHome() (string, error) {
@@ -780,6 +844,19 @@ func acceptAllInbound(userID string) func(contracts.SDKEvent) bool {
 		default:
 			return false
 		}
+	}
+}
+
+func acceptInboundFrom(userID, ownerUserID string) func(contracts.SDKEvent) bool {
+	accept := acceptAllInbound(userID)
+	return func(event contracts.SDKEvent) bool {
+		if !accept(event) {
+			return false
+		}
+		var reference struct {
+			SenderID string `json:"sender_id"`
+		}
+		return json.Unmarshal(event.Data, &reference) == nil && reference.SenderID == ownerUserID
 	}
 }
 

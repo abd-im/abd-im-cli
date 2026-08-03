@@ -257,7 +257,10 @@ type StartRequest struct {
 	// verified capability manifest, and run grant. Provider adapters must not
 	// discover methods from another daemon surface.
 	AllowedMethods []string
-	Proxy          ToolProxy
+	// AutoApproveTools is reserved for a trusted, owner-only full-access run.
+	// Provider adapters must not infer it from the method list.
+	AutoApproveTools bool
+	Proxy            ToolProxy
 }
 
 type Session interface {

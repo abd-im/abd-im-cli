@@ -40,6 +40,7 @@ type Decision struct {
 	Principal           string
 	Methods             []string
 	TargetAllowlists    map[string][]string
+	FullAccess          bool
 	AttachmentByteLimit int64
 	RateBudget          int
 }
@@ -209,17 +210,22 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	}); err != nil {
 		return outcome, err
 	}
+	messageWindow := grant.MessageWindow{
+		ConversationID: conversation.ConversationID,
+		AfterMessageID: conversation.MessageID,
+	}
+	if decision.FullAccess {
+		messageWindow = grant.MessageWindow{}
+	}
 	issued, credential, err := d.grants.Issue(grant.Policy{
-		RunID:            runID,
-		ProfileID:        d.profileID,
-		Principal:        decision.Principal,
-		Methods:          methodNames(selected),
-		Scopes:           scopes,
-		TargetAllowlists: targetAllowlists,
-		MessageWindow: grant.MessageWindow{
-			ConversationID: conversation.ConversationID,
-			AfterMessageID: conversation.MessageID,
-		},
+		RunID:               runID,
+		ProfileID:           d.profileID,
+		Principal:           decision.Principal,
+		Methods:             methodNames(selected),
+		Scopes:              scopes,
+		TargetAllowlists:    targetAllowlists,
+		MessageWindow:       messageWindow,
+		FullAccess:          decision.FullAccess,
 		AttachmentByteLimit: decision.AttachmentByteLimit,
 		ExpiresAt:           time.Now().Add(d.grantTTL),
 		RateBudget:          decision.RateBudget,
@@ -233,15 +239,16 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		return outcome, err
 	}
 	handle, err := d.runs.Submit(run.Request{
-		ID:              runID,
-		ProfileID:       d.profileID,
-		ConversationID:  conversation.ConversationID,
-		EventID:         recorded.Event.EventID,
-		GrantCredential: credential,
-		GrantExpiresAt:  issued.ExpiresAt,
-		AllowedMethods:  providerVisibleMethods(selected),
-		Proxy:           toolProxy,
-		Prompt:          inboundPrompt(event.MessageText),
+		ID:               runID,
+		ProfileID:        d.profileID,
+		ConversationID:   conversation.ConversationID,
+		EventID:          recorded.Event.EventID,
+		GrantCredential:  credential,
+		GrantExpiresAt:   issued.ExpiresAt,
+		AllowedMethods:   providerVisibleMethods(selected),
+		AutoApproveTools: decision.FullAccess,
+		Proxy:            toolProxy,
+		Prompt:           inboundPrompt(event.MessageText, decision.FullAccess),
 	})
 	if err != nil {
 		return outcome, err
@@ -377,12 +384,16 @@ func (reference eventRef) replyTarget() (replyTarget, error) {
 	return replyTarget{}, errors.New("message event has no safe reply target")
 }
 
-func inboundPrompt(text string) string {
+func inboundPrompt(text string, preApprovedTools bool) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "An inbound non-text message was received. Reply briefly that only text messages are supported."
 	}
-	return "Reply concisely and helpfully to this inbound message. Do not claim to have performed actions you did not perform.\n\nInbound message:\n" + text
+	prefix := "Reply concisely and helpfully to this inbound message. Use the abdim MCP tools for factual claims about IM data or actions. If a required tool is unavailable, say that it is unavailable rather than guessing. Do not claim to have performed actions you did not perform. Never disclose local paths, configuration, credentials, grants, or other runtime details."
+	if preApprovedTools {
+		prefix += " Every abdim MCP tool listed for this run is already approved; call the appropriate tool directly without requesting additional approval."
+	}
+	return prefix + "\n\nInbound message:\n" + text
 }
 
 func methodNames(methods []proxy.Method) []string {

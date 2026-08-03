@@ -116,7 +116,7 @@ func (s *Service) authorize(access service.Access, method, conversationID string
 	if err := access.Authorize(method, capability.Scope, grant.ConversationTarget(conversationID)); err != nil {
 		return service.Meta{}, err
 	}
-	if !access.Owner {
+	if !access.Owner && !access.Grant.FullAccess() {
 		window := access.Grant.MessageWindow
 		if window.ConversationID != "" && window.ConversationID != conversationID {
 			return service.Meta{}, fmt.Errorf("%w: grant message window", service.ErrTargetDenied)
@@ -205,7 +205,7 @@ func (s *Service) Get(ctx context.Context, access service.Access, input GetInput
 	if item.ID != input.MessageID || item.ConversationID != input.ConversationID {
 		return service.Result[Message]{}, fmt.Errorf("%w: source returned a different message", service.ErrTargetDenied)
 	}
-	if !access.Owner && (access.Grant.MessageWindow.AfterMessageID != "" || access.Grant.MessageWindow.BeforeMessageID != "") {
+	if !access.Owner && !access.Grant.FullAccess() && (access.Grant.MessageWindow.AfterMessageID != "" || access.Grant.MessageWindow.BeforeMessageID != "") {
 		history, err := s.source.History(ctx, HistoryQuery{ConversationID: input.ConversationID, Limit: 100})
 		if err != nil {
 			return service.Result[Message]{}, fmt.Errorf("verify message window: %w", err)
@@ -241,7 +241,7 @@ func validateConversation(items []Message, conversationID string) error {
 }
 
 func applyWindow(items []Message, access service.Access) ([]Message, error) {
-	if access.Owner {
+	if access.Owner || access.Grant.FullAccess() {
 		return items, nil
 	}
 	window := access.Grant.MessageWindow

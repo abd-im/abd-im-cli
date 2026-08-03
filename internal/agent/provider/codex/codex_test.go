@@ -81,7 +81,7 @@ func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read run config: %v", err)
 	}
-	if strings.Contains(string(config), "must-not-inherit") || !strings.Contains(string(config), "model_provider = 'OpenIM'") || !strings.Contains(string(config), "base_url = 'https://api.example.test/v1'") || strings.Contains(string(config), "supports_websockets = true") || !strings.Contains(string(config), "supports_websockets = false") || !strings.Contains(string(config), "[mcp_servers.abdim]") || !strings.Contains(string(config), "enabled_tools = [\"abdim.message.history\"]") {
+	if strings.Contains(string(config), "must-not-inherit") || !strings.Contains(string(config), "model_provider = 'OpenIM'") || !strings.Contains(string(config), "base_url = 'https://api.example.test/v1'") || strings.Contains(string(config), "supports_websockets = true") || !strings.Contains(string(config), "supports_websockets = false") || !strings.Contains(string(config), "[mcp_servers.abdim]") || !strings.Contains(string(config), "enabled_tools = [\"abdim.message.history\"]") || !strings.Contains(string(config), "default_tools_approval_mode = \"auto\"") {
 		t.Fatalf("run MCP config = %s", config)
 	}
 	info, err := os.Stat(configPath)
@@ -96,6 +96,23 @@ func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
 	}
 	if _, err := os.Stat(runRoot); !os.IsNotExist(err) {
 		t.Fatalf("run directory still exists after close: %v", err)
+	}
+}
+
+func TestAdapterPreApprovesOwnerFullTools(t *testing.T) {
+	adapter := newAdapter(t, "", false)
+	request := startRequest()
+	request.AutoApproveTools = true
+	session, err := adapter.Start(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	config, err := os.ReadFile(filepath.Join(adapter.config.WorkingDir, request.RunID, "codex", "config.toml"))
+	if err != nil || !strings.Contains(string(config), "default_tools_approval_mode = \"approve\"") {
+		t.Fatalf("owner-full MCP config = %s, %v", config, err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 }
 

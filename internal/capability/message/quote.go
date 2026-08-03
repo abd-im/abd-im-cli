@@ -100,7 +100,7 @@ func (h *QuoteHandler) handle(ctx context.Context, request contracts.Request, it
 		IdempotencyKey: request.IdempotencyKey,
 		Input:          input,
 	}, func(ctx context.Context) error {
-		if err := h.verifyQuote(ctx, item.MessageWindow, input); err != nil {
+		if err := h.verifyQuote(ctx, item.MessageWindow, input, item.FullAccess()); err != nil {
 			return err
 		}
 		return h.sender.SendQuote(ctx, input)
@@ -123,8 +123,8 @@ func (h *QuoteHandler) handle(ctx context.Context, request contracts.Request, it
 	}{outcome.Operation.ID, string(outcome.Operation.Status)})
 }
 
-func (h *QuoteHandler) verifyQuote(ctx context.Context, window grant.MessageWindow, input QuoteInput) error {
-	if window.ConversationID == "" || window.ConversationID != input.ConversationID {
+func (h *QuoteHandler) verifyQuote(ctx context.Context, window grant.MessageWindow, input QuoteInput, fullAccess bool) error {
+	if !fullAccess && (window.ConversationID == "" || window.ConversationID != input.ConversationID) {
 		return errQuoteOutsideWindow
 	}
 	references, err := h.source.History(ctx, input.ConversationID)
@@ -136,9 +136,13 @@ func (h *QuoteHandler) verifyQuote(ctx context.Context, window grant.MessageWind
 			return errors.New("quote source returned an invalid reference")
 		}
 	}
-	start, end, err := quoteWindow(references, window)
-	if err != nil {
-		return err
+	start, end := 0, len(references)
+	if !fullAccess {
+		var err error
+		start, end, err = quoteWindow(references, window)
+		if err != nil {
+			return err
+		}
 	}
 	for _, reference := range references[start:end] {
 		if reference.ID == input.MessageID {

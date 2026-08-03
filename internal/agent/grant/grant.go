@@ -59,6 +59,7 @@ type Policy struct {
 	Scopes              []string
 	TargetAllowlists    map[string][]string
 	MessageWindow       MessageWindow
+	FullAccess          bool
 	AttachmentByteLimit int64
 	ExpiresAt           time.Time
 	RateBudget          int
@@ -74,6 +75,7 @@ type Grant struct {
 	AttachmentByteLimit int64
 	ExpiresAt           time.Time
 	RemainingBudget     int
+	fullAccess          bool
 
 	methods map[string]struct{}
 	scopes  map[string]struct{}
@@ -100,9 +102,16 @@ func (g Grant) AllowsTarget(method, target string) bool {
 	if target == "" {
 		return true
 	}
+	if g.fullAccess {
+		return true
+	}
 	_, allowed := g.targets[method][target]
 	return allowed
 }
+
+// FullAccess is an explicit policy property for a trusted owner run. It is
+// never inferred from a method, scope, or target value.
+func (g Grant) FullAccess() bool { return g.fullAccess }
 
 type storedGrant struct {
 	grant   Grant
@@ -138,6 +147,7 @@ func (s *Store) Issue(policy Policy) (Grant, string, error) {
 		AttachmentByteLimit: policy.AttachmentByteLimit,
 		ExpiresAt:           policy.ExpiresAt,
 		RemainingBudget:     policy.RateBudget,
+		fullAccess:          policy.FullAccess,
 		methods:             toSet(policy.Methods),
 		scopes:              toSet(policy.Scopes),
 		targets:             toMethodTargetSets(policy.TargetAllowlists),

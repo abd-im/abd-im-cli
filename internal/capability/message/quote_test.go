@@ -125,6 +125,23 @@ func TestSendQuoteRequiresManifestTypedTargetAndMessageWindow(t *testing.T) {
 	if response := call("allowed-group", group); !response.OK || sender.calls != 2 || sender.input != group {
 		t.Fatalf("allowed group quote = %+v, sender=%+v", response, sender)
 	}
+	_, fullCredential, err := grants.Issue(grant.Policy{
+		RunID: "run-full", ProfileID: "work", Principal: "owner", FullAccess: true,
+		Methods: []string{QuoteMethod}, Scopes: []string{QuoteScope},
+		ExpiresAt: time.Now().Add(time.Hour), RateBudget: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullTool, err := proxy.New(grants, "run-full", "work", []proxy.Method{handler.ProxyMethod()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, credential = fullTool, fullCredential
+	full := QuoteInput{Text: "full quote", RecipientID: "user-2", ConversationID: "conversation-1", MessageID: "message-0"}
+	if response := call("full-access", full); !response.OK || sender.calls != 3 || sender.input != full {
+		t.Fatalf("full access quote = %+v, sender=%+v", response, sender)
+	}
 }
 
 func TestSendQuoteIdempotencyAndUnknownOutcomeFailClosed(t *testing.T) {

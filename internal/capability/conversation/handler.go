@@ -123,6 +123,13 @@ func (h *Handler) handle(ctx context.Context, request contracts.Request, item gr
 }
 
 func (h *Handler) markRead(ctx context.Context, item grant.Grant, input Input) error {
+	if item.FullAccess() {
+		upTo, err := h.resolve(ctx, input.ConversationID, input.UpToMessageID)
+		if err != nil || upTo.ConversationID != input.ConversationID {
+			return errWindowDenied
+		}
+		return h.sender.MarkRead(ctx, MarkReadRequest{ConversationID: input.ConversationID, HasReadSeq: upTo.ServerSeq})
+	}
 	window := item.MessageWindow
 	if window.ConversationID != input.ConversationID || window.BeforeMessageID == "" {
 		return errWindowDenied

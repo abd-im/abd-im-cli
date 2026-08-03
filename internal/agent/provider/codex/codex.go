@@ -538,7 +538,7 @@ func (a *Adapter) prepareRun(request contracts.StartRequest) (runPathSet, error)
 	if err := copyCodexAuth(filepath.Join(a.sourceCodexHome, "auth.json"), filepath.Join(paths.home, "auth.json")); err != nil {
 		return cleanup(fmt.Errorf("copy Codex credentials: %w", err))
 	}
-	if err := writeRunConfig(filepath.Join(a.sourceCodexHome, "config.toml"), filepath.Join(paths.home, "config.toml"), a.config.BridgeCommand, paths.socket, mcpprovider.DefaultTools(request.AllowedMethods)); err != nil {
+	if err := writeRunConfig(filepath.Join(a.sourceCodexHome, "config.toml"), filepath.Join(paths.home, "config.toml"), a.config.BridgeCommand, paths.socket, mcpprovider.DefaultTools(request.AllowedMethods), request.AutoApproveTools); err != nil {
 		return cleanup(fmt.Errorf("write provider MCP configuration: %w", err))
 	}
 	return paths, nil
@@ -559,7 +559,7 @@ func copyCodexAuth(source, destination string) error {
 	return os.Chmod(destination, 0o600)
 }
 
-func writeRunConfig(sourcePath, path, command, socket string, tools []mcpprovider.Tool) error {
+func writeRunConfig(sourcePath, path, command, socket string, tools []mcpprovider.Tool, autoApproveTools bool) error {
 	base, err := inheritedConfig(sourcePath)
 	if err != nil {
 		return err
@@ -576,13 +576,17 @@ func writeRunConfig(sourcePath, path, command, socket string, tools []mcpprovide
 	if err != nil {
 		return err
 	}
+	approvalMode := "auto"
+	if autoApproveTools {
+		approvalMode = "approve"
+	}
 	config := base + "[history]\npersistence = \"none\"\n\n" +
 		"[mcp_servers.abdim]\n" +
 		"command = " + strconv.Quote(command) + "\n" +
 		"args = " + string(args) + "\n" +
 		"enabled_tools = " + string(encodedNames) + "\n" +
 		"required = true\n" +
-		"default_tools_approval_mode = \"auto\"\n"
+		"default_tools_approval_mode = \"" + approvalMode + "\"\n"
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		return err
 	}

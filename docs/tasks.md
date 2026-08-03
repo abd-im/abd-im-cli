@@ -72,7 +72,7 @@
 | 完成 | ID | 状态 | 场景 | 任务与记录 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
 
-**当前状态**：`ABD-024` 至 `ABD-059`（不含 deferred 的 `ABD-054`、`ABD-056`）已完成 daemon、P1 typed server-read/action source、消息控制、媒体、会话设置、好友/黑名单、群组管理、compatibility evidence、owner run 运维、GitHub Release 自动化和当前用户 Codex runtime。首版唯一支持模式是当前用户运行 daemon 并复用本机已登录 Codex；每个 run 仍有独立 `CODEX_HOME`、固定 MCP 配置、grant 和 event-bound reply，但同 UID 不被描述为 OS 级隔离。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。多 provider `ABD-054` 与 session migration `ABD-056` 保持 deferred。所有 action 只在 manifest、显式 grant 和对应 handler 共同允许时公开；默认入站 policy 仍只授予 `message.history`。
+**当前状态**：`ABD-024` 至 `ABD-059`（不含 deferred 的 `ABD-054`、`ABD-056`）已完成 daemon、P1 typed server-read/action source、消息控制、媒体、会话设置、好友/黑名单、群组管理、compatibility evidence、owner run 运维、GitHub Release 自动化和当前用户 Codex runtime。首版唯一支持模式是当前用户运行 daemon 并复用本机已登录 Codex；每个 run 仍有独立 `CODEX_HOME`、固定 MCP 配置、grant 和 event-bound reply，但同 UID 不被描述为 OS 级隔离。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。多 provider `ABD-054` 与 session migration `ABD-056` 保持 deferred。所有 action 只在 manifest、显式 grant 和对应 handler 共同允许时公开；默认入站 policy 仍只授予 `message.history`。受显式 `owner-full` 测试策略和 sender ID 限制的 run 可调用所有当前 `available` IM 方法。
 
 ## 执行顺序
 

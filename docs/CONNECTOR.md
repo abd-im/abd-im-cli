@@ -57,7 +57,8 @@ resolves `codex` from that user's `PATH` and reads its login from
 `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`). Do not start the daemon
 through `sudo`, because that would select root's profile and Codex login.
 
-Start the daemon with the credential and inbound-policy acknowledgements:
+Start the normal inbound daemon with the credential and inbound-policy
+acknowledgements:
 
 ```bash
 abdim --profile work daemon serve \
@@ -74,8 +75,30 @@ The reply service uses the callback-derived private recipient or group ID, so a
 provider prompt cannot choose another destination.
 
 `--allow-all-inbound` currently enables private and group messages from other
-users. It is deliberately not the default group policy and remains an explicit
-operator acknowledgement.
+users, but each resulting provider run receives only `message.history` for the
+triggering conversation and its bounded message window. It is deliberately not
+the default group policy and remains an explicit operator acknowledgement.
+
+For a controlled capability test, start an owner-only full-access run instead:
+
+```bash
+abdim --profile work daemon serve \
+  --allow-plaintext-credentials \
+  --inbound-policy owner-full \
+  --owner-user-id "$ABDIM_TEST_OWNER_USER_ID"
+```
+
+`owner-full` accepts only inbound messages whose canonical OpenIM `sender_id`
+matches `--owner-user-id`; it cannot be combined with `--allow-all-inbound`.
+Those trusted test runs receive every currently `available` typed provider
+method, unrestricted typed targets and message reads, a 64-call budget, and a
+32 MiB attachment budget. Their listed MCP tools are pre-approved for the
+run, so the non-interactive Codex App Server does not wait for an approval
+reply that the daemon cannot provide. They still expire after two minutes, use
+the same operation/idempotency guards, and can reply only to the
+callback-derived conversation. This mode is for a controlled test account, not
+a deployment policy for ordinary contacts. It does not provide scheduled or
+background message delivery.
 
 Each Codex run receives a fresh private `CODEX_HOME` containing the copied
 current-user login and the current user's non-MCP model/provider configuration

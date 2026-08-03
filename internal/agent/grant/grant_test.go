@@ -135,3 +135,22 @@ func TestGrantCarriesAttachmentByteLimit(t *testing.T) {
 		t.Fatal("Issue() accepted a negative attachment byte limit")
 	}
 }
+
+func TestFullAccessGrantAllowsAnyTypedTarget(t *testing.T) {
+	store := NewStore()
+	_, credential, err := store.Issue(Policy{
+		RunID: "run-full", ProfileID: "work", Principal: "owner", FullAccess: true,
+		Methods: []string{"message.send_text"}, Scopes: []string{"message.send"},
+		ExpiresAt: time.Now().Add(time.Hour), RateBudget: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := store.Authorize(credential, "run-full", "work", "message.send_text", "message.send", []string{UserTarget("any-user")})
+	if err != nil {
+		t.Fatalf("full access target denied: %v", err)
+	}
+	if !item.FullAccess() {
+		t.Fatal("grant did not retain full access")
+	}
+}

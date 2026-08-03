@@ -124,7 +124,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 
 `daemon serve` 由当前用户运行，持有 SDK、控制库、owner socket、run manager 和固定 Codex App Server adapter。它从当前用户 `PATH` 解析 `codex`，从 `CODEX_HOME`（默认 `~/.codex`）复制登录材料和非 MCP 模型/供应商配置到每个 run 的独立 `CODEX_HOME`；源 Codex MCP 与 history 表不继承，run 只获得固定 MCP 配置、Unix bridge 和 grant。adapter 拒绝文件和命令审批，并在取消时销毁进程组与 run 目录。
 
-所有 P1 typed read 都经固定 server source 提供，不读取 SDK 本地数据库。写入面已包括群创建、成员关系和群资料/禁言/群主转让、文本/控制/媒体消息、会话设置、好友和黑名单；每项均经 method-scoped target、operation/idempotency guard 和未知结果 fail-closed 保护。媒体内容只在 profile 私有目录和 daemon 内 file handle 中流转，control DB 只保存不透明引用和约束 metadata。群成员和群管理动作以固定 server endpoint 验证角色和成员状态，不调用会同步本地状态的 SDK Group API。默认入站 policy 仍只授予 `message.history`；`conversation.unread` 因服务端未公开该值而保持 `not_validated`。
+所有 P1 typed read 都经固定 server source 提供，不读取 SDK 本地数据库。写入面已包括群创建、成员关系和群资料/禁言/群主转让、文本/控制/媒体消息、会话设置、好友和黑名单；每项均经 method-scoped target、operation/idempotency guard 和未知结果 fail-closed 保护。媒体内容只在 profile 私有目录和 daemon 内 file handle 中流转，control DB 只保存不透明引用和约束 metadata。群成员和群管理动作以固定 server endpoint 验证角色和成员状态，不调用会同步本地状态的 SDK Group API。默认入站 policy 仍只授予 `message.history`；受显式 `owner-full` 测试策略和 sender ID 限制的 run 才可获得全部当前 `available` 方法、宽目标和消息窗口。`conversation.unread` 因服务端未公开该值而保持 `not_validated`。
 
 `available` 必须由固定 SDK/server/provider 组合的 integration gate 证明，不能由 manifest 静态声明替代。daemon 启动时将实际 MCP/SDK 组合与固定 evidence 精确匹配；未命中时 action manifest 自动降为 `not_validated`。run/operation 诊断只经 owner local service 暴露，provider tool registry 明确排除这些方法。
 
