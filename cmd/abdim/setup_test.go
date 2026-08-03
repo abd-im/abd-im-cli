@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/profile"
 )
@@ -51,23 +50,21 @@ func TestRunSetupPersistsTokenFreeProfileAndStartsDaemon(t *testing.T) {
 			started = true
 			return daemonProcessStatus{State: "ready", PID: 42}, true, nil
 		},
-		now:    func() time.Time { return time.Unix(1000, 0) },
-		random: bytes.NewReader([]byte{0xa1, 0xb2, 0xc3, 0xd4}),
 	}
 	var output, prompts bytes.Buffer
 	if got := runSetupWith(context.Background(), nil, strings.NewReader("15500000000\n\npassword\n"), &output, &prompts, roots, "default", dependencies); got != 0 {
 		t.Fatalf("runSetupWith() = %d: %s", got, output.String())
 	}
-	if !started || !strings.Contains(output.String(), "pair A1B2C3D4") || strings.Contains(output.String(), token) || strings.Contains(output.String(), "password") {
+	if !started || output.String() != "Setup complete. abdim is running (pid 42).\n" || strings.Contains(output.String(), token) || strings.Contains(output.String(), "password") {
 		t.Fatalf("setup output = %q, started=%t", output.String(), started)
 	}
 	paths, _ := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, "default")
 	item, err := profile.Load(paths.ConfigFile)
-	if err != nil || item.Deployment.UserID != "bot-user" || !item.Pairing.Pending(time.Unix(1001, 0)) {
+	if err != nil || item.Deployment.UserID != "bot-user" {
 		t.Fatalf("profile = %#v, %v", item, err)
 	}
 	profileContents, _ := os.ReadFile(paths.ConfigFile)
-	if strings.Contains(string(profileContents), token) || strings.Contains(string(profileContents), "A1B2C3D4") {
+	if strings.Contains(string(profileContents), token) || strings.Contains(string(profileContents), "pairing") || strings.Contains(string(profileContents), "owner_user_id") {
 		t.Fatalf("profile leaked setup secret: %s", profileContents)
 	}
 }

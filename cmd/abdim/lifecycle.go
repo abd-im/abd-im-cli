@@ -103,7 +103,7 @@ func startDaemon(ctx context.Context, roots commandRoots, profileName string) (d
 	if err != nil {
 		return daemonProcessStatus{}, false, errors.New("abdim is not configured; run 'abdim setup'")
 	}
-	if err := item.Deployment.Validate(); err != nil || !item.Pairing.Configured() {
+	if err := item.Deployment.Validate(); err != nil {
 		return daemonProcessStatus{}, false, errors.New("abdim setup is incomplete; run 'abdim setup'")
 	}
 	if err := paths.EnsurePrivate(); err != nil {

@@ -15,14 +15,14 @@
 
 ### US-01：通过 IM 与 Agent 对话（优先级：关键）
 
-用户完成一次 owner 配对后，在私聊或受支持的群聊中发消息。daemon 收到该 owner 的事件后唤起 provider；provider 返回 `final_text`，daemon 只向触发消息所在会话回复。普通对话不要求 provider 执行 `abdim` 命令。
+用户在私聊或受支持的群聊中向 bot 发消息。daemon 收到非 bot 自己发送的有效事件后唤起 provider；provider 返回 `final_text`，daemon 只向触发消息所在会话回复。普通对话不要求 provider 执行 `abdim` 命令。
 
 **独立测试**：向一个允许触发的私聊注入一条消息，验证只创建一个 run、一个 reply slot 和一条原会话回复。
 
 **验收场景**：
 
 1. 给定 daemon 已 `ready`，当私聊消息命中 policy 时，系统创建 run 并回复原私聊。
-2. 给定未配对或 sender 不是 owner，系统不创建 run；owner 在受支持的群聊中触发时也只回复该群。
+2. 给定自己发送、通知、重复或不受支持的消息，系统不创建 run；受支持的群聊消息触发时也只回复该群。
 
 ### US-02：在受限授权下使用 IM 能力（优先级：关键）
 
@@ -40,7 +40,7 @@ P1 的 Agent 可见读取能力包括 profile/user、conversation、message、fr
 
 ### US-03：Owner 查询和诊断本地 IM 状态（优先级：高）
 
-owner 通过 CLI 或完全信任的本地 MCP 查询 profile、会话、消息、群、好友、黑名单、事件和 operation，并获取结构化健康与能力状态。
+运行 daemon 的本机用户通过 CLI 或完全信任的本地 MCP 查询 profile、会话、消息、群、好友、黑名单、事件和 operation，并获取结构化健康与能力状态。代码和协议中的 `owner` 仅指该本机用户，不是需要配置的 IM 身份。
 
 **独立测试**：在无真实账号的 fake SDK 环境中执行每个公开读命令，验证 JSON contract、分页/cursor 和错误码。
 
@@ -57,7 +57,7 @@ owner 通过 CLI 或完全信任的本地 MCP 查询 profile、会话、消息�
 
 ## 2. 范围、非目标与依赖
 
-`abdim-cli` 为一个 OpenIM profile 提供本地 daemon、CLI、MCP 和入站 bot。`abdim setup` 通过固定 ABD 登录服务配置 bot、启动当前用户后台 daemon，并用一次性私聊消息绑定 owner。SDK 长连接、本地 SQLite、同步和 listener 只由 daemon 持有；CLI、MCP 和 provider 不直接初始化 SDK 或读取 SDK 数据表。首版只支持当前用户运行 daemon 并复用该用户已登录的本机 Codex CLI；这是受信任本地进程模型，不提供恶意代码的操作系统级隔离。
+`abdim-cli` 为一个 OpenIM profile 提供本地 daemon、CLI、MCP 和入站 bot。`abdim setup` 通过固定 ABD 登录服务配置 bot 并启动当前用户后台 daemon，不要求第二个账号或配对步骤。SDK 长连接、本地 SQLite、同步和 listener 只由 daemon 持有；CLI、MCP 和 provider 不直接初始化 SDK 或读取 SDK 数据表。首版只支持当前用户运行 daemon 并复用该用户已登录的本机 Codex CLI；这是受信任本地进程模型，不提供恶意代码的操作系统级隔离。
 
 P1 交付 US-01、US-02 和 US-03 所需的单 profile 闭环、event-bound reply、受 grant 约束的 typed 读取能力，以及以 `group.create` 验证的通用副作用路径。通用 `message send`、附件和更多写能力从 P2 开始。
 
@@ -82,14 +82,14 @@ P1 交付 US-01、US-02 和 US-03 所需的单 profile 闭环、event-bound repl
 
 ### 入站 bot 与 provider
 
-- **FR-010**：首次启动必须生成 15 分钟有效的一次性 owner 配对码；只接受私聊中的精确配对消息并持久化 canonical sender ID。配对前的消息、非 owner 消息、自己发送的消息、通知和重复事件不得创建 run。
+- **FR-010**：setup 完成后，所有非 bot 自己发送的受支持私聊和群聊消息都可触发 run；自己发送的消息、通知、重复事件和不受支持的 session 不得创建 run。不配置第二个 IM 身份或配对状态。
 - **FR-011**：provider 之前必须持久化 reply slot；它绑定 event、profile、来源 conversation、触发消息、run 和 operation。provider 或 prompt 不得指定 reply `conversation_id`。
 - **FR-012**：P1 的 provider 通过一个已配置 adapter 运行；provider 自行完成同步 tool loop，`TurnResult` 只返回 `final_text`、脱敏 tool 摘要、session reference 或诊断错误。
 - **FR-013**：同一 conversation 的 run 必须串行；policy 必须定义每会话最大队列、turn deadline 和溢出行为。撤回、访问丢失、policy 失效、grant 过期或 owner 取消时，必须取消 run、关闭 proxy 并撤销 grant。
 
 ### 授权、写入与审计
 
-- **FR-014**：grant 必须绑定 run、profile、principal、scope、按 typed method 隔离且带资源类型命名的目标 allowlist、消息窗口、附件额度、到期时间、速率预算和 approval policy。配对 owner 的自动 run 可获得全部当前 `available` 方法和宽目标，但仍必须使用具有效期、调用预算和附件额度的独立 grant。
+- **FR-014**：grant 必须绑定 run、profile、principal、scope、按 typed method 隔离且带资源类型命名的目标 allowlist、消息窗口、附件额度、到期时间、速率预算和 approval policy。自动入站 run 可获得全部当前 `available` 方法和宽目标，但仍必须使用具有效期、调用预算和附件额度的独立 grant。
 - **FR-015**：受限 provider 只能连接每 run 私有的 tool proxy；proxy 必须逐请求验证一次性 credential、run、grant、到期时间、capability manifest、method allowlist、method-scoped target 和读取窗口，拒绝 controller 命令、endpoint 覆盖和未授权方法。
 - **FR-016**：event-bound reply 由 daemon 执行而非通用 `message.send`；它以 `profile + event_id + reply_slot` 幂等。确认前中断为 `unknown`，不得创建新消息补发。
 - **FR-017**：每个远端副作用都必须具有独立 scope、输入/目标 allowlist、数量上限、批准策略和 operation/idempotency。P1 以 `group.create` 作为首个经过验证的 handler：相同 key 返回原 operation，参数摘要不同返回 `IDEMPOTENCY_CONFLICT`，未知结果不得自动重建群。新 handler 只有在 manifest、授权规则和集成测试齐备后才能公开。
@@ -175,10 +175,10 @@ P1 只在同一 daemon 生命周期内复用 provider session；重启中的 tur
 - **SC-006**：正常 provider 集成不能经 run-private MCP bridge 以外的路径直连 daemon、调用 controller 命令、读取超出消息窗口的历史，或向第三方会话发送；当前用户模式不声称能阻止同 UID 恶意进程直接访问本地文件或 socket。
 - **SC-007**：撤回、权限变化、grant 过期或取消会阻止排队 run、副作用和最终回复。
 - **SC-008**：daemon、SDK、HTTP/WebSocket 诊断和审计均不泄露测试 token 或完整消息正文。
-- **SC-009**：一次 `abdim setup` 可完成 ABD 登录、私有配置和后台启动；配对前不创建 provider run，配对后只有持久化 owner 能触发全部已验证能力。
+- **SC-009**：一次 `abdim setup` 可完成 ABD 登录、私有配置和后台启动，不要求第二个账号或配对；随后受支持的入站消息可立即触发具有全部已验证能力的 provider run。
 
 ## 8. 假设
 
-- 当前产品只连接固定 ABD 部署；用户拥有一个 bot 账号、一个独立 owner 账号，以及已登录的本机 Codex CLI。
+- 当前产品只连接固定 ABD 部署；用户拥有一个 bot 账号以及已登录的本机 Codex CLI。
 - P1 固定一个经集成测试验证的 SDK/server 组合和一个 provider adapter。
 - 需要额外能力或兼容组合时，先新增活跃 task，再改变 capability 状态或交付范围。

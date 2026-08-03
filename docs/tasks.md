@@ -72,8 +72,8 @@
 | 完成 | ID | 状态 | 场景 | 任务与记录 | 依赖 | 完成条件 |
 | --- | --- | --- | --- | --- | --- | --- |
 
-**当前状态**：`ABD-024` 至 `ABD-060`（不含 deferred 的 `ABD-054`、`ABD-056`）已完成 daemon、P1 typed server-read/action source、消息控制、媒体、会话设置、好友/黑名单、群组管理、compatibility evidence、owner run 运维、GitHub Release 自动化、当前用户 Codex runtime 和单命令首次设置。首版唯一支持模式是 `abdim setup` 登录固定 ABD 部署、一次性私聊绑定 owner 并自动启动当前用户 daemon；日常只保留 `start`、`stop`、`restart`、`status`。每个 run 仍有独立 `CODEX_HOME`、固定 MCP 配置、grant 和 event-bound reply，但同 UID 不被描述为 OS 级隔离。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。多 provider `ABD-054` 与 session migration `ABD-056` 保持 deferred。所有 action 只在 manifest、owner run grant 和对应 handler 共同允许时公开；未配对或非 owner 消息不创建 run，配对 owner 可调用所有当前 `available` IM 方法。
+**当前状态**：`ABD-024` 至 `ABD-061`（不含 deferred 的 `ABD-054`、`ABD-056`）已完成 daemon、P1 typed server-read/action source、消息控制、媒体、会话设置、好友/黑名单、群组管理、compatibility evidence、owner run 运维、GitHub Release 自动化、当前用户 Codex runtime 和单命令首次设置。首版唯一支持模式是 `abdim setup` 登录固定 ABD 部署并自动启动当前用户 daemon，不配置第二个 IM 身份或配对步骤；日常只保留 `start`、`stop`、`restart`、`status`。每个 run 仍有独立 `CODEX_HOME`、固定 MCP 配置、grant 和 event-bound reply，但同 UID 不被描述为 OS 级隔离。OpenIM 未公开 server unread count，故 `conversation.unread` 继续 `not_validated`。多 provider `ABD-054` 与 session migration `ABD-056` 保持 deferred。所有 action 只在 manifest、run grant 和对应 handler 共同允许时公开；任何能发送受支持消息的账号都可触发包含全部当前 `available` 方法的 run。
 
 ## 执行顺序
 
-`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。`ABD-048` 与 `ABD-052` 在领域实现和验证阶段并行完成，`ABD-053` 在 `ABD-052` 完成后交付；`ABD-055` 与 `ABD-057` 随后并行完成并在共享装配点串行收口，`ABD-058` 交付 CI、受控 integration 和 Unix tag release，`ABD-059` 完成当前用户 runtime 收口，`ABD-060` 将其收敛为单命令设置和持久 owner 配对。`ABD-054`、`ABD-056` 暂缓。共享注册表的修改不再并行写入。
+`ABD-001` 完成后，Foundation 中标记 `[P]` 的 task 可并行；P0 checkpoint 后，事件账本和 grant/proxy 可按依赖并行，US-01 是首个可交付闭环。`ABD-048` 与 `ABD-052` 在领域实现和验证阶段并行完成，`ABD-053` 在 `ABD-052` 完成后交付；`ABD-055` 与 `ABD-057` 随后并行完成并在共享装配点串行收口，`ABD-058` 交付 CI、受控 integration 和 Unix tag release，`ABD-059` 完成当前用户 runtime 收口，`ABD-060` 收敛单命令设置，`ABD-061` 删除未要求的配对门槛并恢复 setup 后立即对话。`ABD-054`、`ABD-056` 暂缓。共享注册表的修改不再并行写入。

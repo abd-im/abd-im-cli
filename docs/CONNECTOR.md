@@ -19,14 +19,14 @@ abdim --profile work setup
 ```
 
 `setup` prompts for the ABD bot account and password, exchanges them for the
-canonical OpenIM user ID and short-lived IM token, writes the owner-only local
-profile, and starts the daemon in the background. Phone accounts default to
-area code `+86`; email accounts do not prompt for an area code.
+canonical OpenIM user ID and short-lived IM token, writes the local profile,
+and starts the daemon in the background. Phone accounts default to area code
+`+86`; email accounts do not prompt for an area code.
 
 The password is read without terminal echo and is never persisted. The token is
-stored in an owner-only `0600` file and is never placed in argv, profile TOML,
-logs, audit records, MCP payloads, or RPC responses. The current ABD endpoints
-and platform are built in:
+stored in a current-user-only `0600` file and is never placed in argv, profile
+TOML, logs, audit records, MCP payloads, or RPC responses. The current ABD
+endpoints and platform are built in:
 
 ```text
 Account login = https://2.alissa.xin/chat/account/login
@@ -35,19 +35,16 @@ OpenIM WS     = wss://2.alissa.xin/msg_gateway
 Platform      = 7
 ```
 
-`setup` prints a one-time pairing message such as `pair A1B2C3D4`. Within 15
-minutes, send that exact text to the bot in a private conversation from the ABD
-account that will own it. The daemon stores only a SHA-256 digest while pairing
-is pending. Before pairing succeeds, inbound messages are consumed without
-creating a Codex run. A successful pairing persists the canonical sender ID;
-later setup runs preserve that owner binding. Run `abdim setup` again if the
-code expires before pairing.
-
-The paired owner is the only inbound principal. Its accepted messages receive
-the full set of methods currently marked `available`, while every provider call
-still passes through the run-private MCP bridge, typed proxy, grant, operation
-guard, and event-bound reply path. Other contacts cannot trigger a run. Replies
+Setup is complete when the command returns; there is no second account, owner
+ID, or pairing step. Every supported inbound message not sent by the bot itself
+can create a run. Each run receives the full set of methods currently marked
+`available`, while every provider call still passes through the run-private MCP
+bridge, typed proxy, grant, operation guard, and event-bound reply path. Replies
 remain fixed to the conversation that triggered them.
+
+Without an inbound identity rule, any account that can message the bot can
+trigger its available capabilities. This is the explicit security tradeoff of
+the zero-configuration inbound model.
 
 ## Lifecycle
 
@@ -74,8 +71,28 @@ and file approvals and removes the run directory on close. This is a trusted
 current-user model, not an operating-system sandbox: a malicious process with
 the same UID may access other files owned by that user.
 
-Owner CLI commands and `abdim mcp serve` connect to the already-running local
-daemon. They never initialize the SDK or open its data directory themselves.
+Local management CLI commands and `abdim mcp serve` connect to the
+already-running daemon. They never initialize the SDK or open its data
+directory themselves. In architecture and method names, "owner" means this
+current local OS user; it is not a configured IM identity.
+
+## MCP
+
+IM-triggered Codex runs need no MCP configuration. The daemon creates a fresh
+run-private MCP server automatically and exposes the currently available read
+and action tools through that run's grant.
+
+A trusted local Codex client can separately register the management MCP:
+
+```bash
+codex mcp add abdim-work -- \
+  /absolute/path/to/abdim --profile work mcp serve
+```
+
+This local management MCP exposes typed reads, diagnostics, run cancellation,
+and operation diagnostics. It does not expose provider action tools; message,
+group, friend, blacklist, and conversation actions are available inside the
+automatically constructed IM-triggered MCP run.
 
 ## Capability Gate
 

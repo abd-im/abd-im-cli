@@ -78,7 +78,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 | 路径 | 职责 |
 | --- | --- |
 | [`cmd/abdim`](../cmd/abdim) | `setup`、当前用户 daemon 生命周期、owner CLI 与 MCP 入口。 |
-| [`internal/profile`](../internal/profile) | profile 名称校验、私有路径、lock、owner-only token 引用与 owner 配对状态。 |
+| [`internal/profile`](../internal/profile) | profile 名称校验、私有路径、lock 与当前用户私有的 token 引用。 |
 | [`internal/connector`](../internal/connector) | 固定 ABD 账号登录、OpenIM 配置和 daemon-owned server source。 |
 | [`internal/bridge`](../internal/bridge) | 单 profile SDK 生命周期及状态转换。 |
 | [`internal/contracts`](../internal/contracts) | v1 RPC/event/provider 的共享 Go contract。 |
@@ -123,11 +123,11 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 
 ## 当前实现状态
 
-`abdim setup` 以固定 ABD 登录协议换取 bot 的 canonical user ID 和 IM token，保存 owner-only 配置并启动当前用户后台 daemon。首次设置只保存一次性配对码摘要和有效期；daemon 在私聊中验证配对消息后原子保存 owner sender ID。配对前所有入站消息都在 policy 和 provider 之前终止，配对后只有该 owner 可创建 run。公开生命周期由 `start`、`stop`、`restart` 和 `status` 管理，低层 daemon 装配入口只供二进制内部自重启。
+`abdim setup` 以固定 ABD 登录协议换取 bot 的 canonical user ID 和 IM token，保存当前用户私有配置并启动后台 daemon。它不创建第二个 IM 身份、owner ID 或配对状态；setup 返回后，所有非 bot 自己发送的受支持消息都可创建 run。公开生命周期由 `start`、`stop`、`restart` 和 `status` 管理，低层 daemon 装配入口只供二进制内部自重启。架构中的 owner 仅表示运行 daemon 的本机 OS 用户及其管理接口。
 
 后台 daemon 持有 SDK、控制库、owner socket、run manager 和固定 Codex App Server adapter。它从当前用户 `PATH` 解析 `codex`，从 `CODEX_HOME`（默认 `~/.codex`）复制登录材料和非 MCP 模型/供应商配置到每个 run 的独立 `CODEX_HOME`；源 Codex MCP 与 history 表不继承，run 只获得固定 MCP 配置、Unix bridge 和 grant。adapter 拒绝文件和命令审批，并在取消时销毁进程组与 run 目录。
 
-所有 P1 typed read 都经固定 server source 提供，不读取 SDK 本地数据库。写入面已包括群创建、成员关系和群资料/禁言/群主转让、文本/控制/媒体消息、会话设置、好友和黑名单；每项均经 method-scoped target、operation/idempotency guard 和未知结果 fail-closed 保护。媒体内容只在 profile 私有目录和 daemon 内 file handle 中流转，control DB 只保存不透明引用和约束 metadata。群成员和群管理动作以固定 server endpoint 验证角色和成员状态，不调用会同步本地状态的 SDK Group API。配对 owner 的 run 获得全部当前 `available` 方法、宽目标和消息窗口，仍受静态 registry、method scope、run grant、调用预算、附件额度和 operation guard 约束。`conversation.unread` 因服务端未公开该值而保持 `not_validated`。
+所有 P1 typed read 都经固定 server source 提供，不读取 SDK 本地数据库。写入面已包括群创建、成员关系和群资料/禁言/群主转让、文本/控制/媒体消息、会话设置、好友和黑名单；每项均经 method-scoped target、operation/idempotency guard 和未知结果 fail-closed 保护。媒体内容只在 profile 私有目录和 daemon 内 file handle 中流转，control DB 只保存不透明引用和约束 metadata。群成员和群管理动作以固定 server endpoint 验证角色和成员状态，不调用会同步本地状态的 SDK Group API。每个受支持的入站 run 获得全部当前 `available` 方法、宽目标和消息窗口，仍受静态 registry、method scope、run grant、调用预算、附件额度和 operation guard 约束。`conversation.unread` 因服务端未公开该值而保持 `not_validated`。
 
 `available` 必须由固定 SDK/server/provider 组合的 integration gate 证明，不能由 manifest 静态声明替代。daemon 启动时将实际 MCP/SDK 组合与固定 evidence 精确匹配；未命中时 action manifest 自动降为 `not_validated`。run/operation 诊断只经 owner local service 暴露，provider tool registry 明确排除这些方法。
 
@@ -136,7 +136,7 @@ Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 A
 ## 架构不变量
 
 - 一个 profile 同时只能由一个 daemon 持有 SDK、控制库和运行时目录。
-- 未完成 owner 配对或 sender ID 不匹配时不得创建 provider run；配对凭据只保存摘要，绑定后只保存 canonical owner ID。
+- 入站不配置第二个身份边界；任何能向 bot 发送受支持消息的账号都能触发可用能力，这是零配置模型的显式信任边界。
 - 正常 provider MCP 调用不能选择 reply conversation、调用任意 RPC/SDK 方法，或绕过 grant 的 method-scoped typed target 读取或写入数据；target 固定编码为 `conversation:<id>`、`group:<id>`、`message:<id>` 或 `user:<id>`，同一原始 ID 不可跨资源类型使用。当前用户模式不把相同 OS UID 视为对恶意本地代码的安全边界。
 - 同一入站 event 只有一个账本记录和一个 reply slot；同一 conversation 的 provider turn 串行。
 - 所有远端副作用都以 scope 和 idempotency key 绑定 operation；`unknown` 是终态，需要查询而不是新建请求。

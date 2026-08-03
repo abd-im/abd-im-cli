@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -19,14 +17,10 @@ import (
 	"golang.org/x/term"
 )
 
-const pairingLifetime = 15 * time.Minute
-
 type setupDependencies struct {
-	login  func(context.Context, string, string, string) (string, string, error)
-	stop   func(context.Context, commandRoots, string) (bool, error)
-	start  func(context.Context, commandRoots, string) (daemonProcessStatus, bool, error)
-	now    func() time.Time
-	random io.Reader
+	login func(context.Context, string, string, string) (string, string, error)
+	stop  func(context.Context, commandRoots, string) (bool, error)
+	start func(context.Context, commandRoots, string) (daemonProcessStatus, bool, error)
 }
 
 func defaultSetupDependencies() setupDependencies {
@@ -34,10 +28,8 @@ func defaultSetupDependencies() setupDependencies {
 		login: func(ctx context.Context, account, areaCode, password string) (string, string, error) {
 			return connector.AccountLogin(ctx, &http.Client{Timeout: 15 * time.Second}, connector.ABDLoginURL, account, areaCode, password)
 		},
-		stop:   stopDaemon,
-		start:  startDaemon,
-		now:    time.Now,
-		random: rand.Reader,
+		stop:  stopDaemon,
+		start: startDaemon,
 	}
 }
 
@@ -75,21 +67,6 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 	if err := paths.EnsurePrivate(); err != nil {
 		return writeTextError(output, err.Error())
 	}
-	pairing := profile.Pairing{}
-	if existing, loadErr := profile.Load(paths.ConfigFile); loadErr == nil && existing.Pairing.OwnerUserID != "" {
-		pairing.OwnerUserID = existing.Pairing.OwnerUserID
-	}
-	var pairingCode string
-	if pairing.OwnerUserID == "" {
-		pairingCode, err = newPairingCode(dependencies.random)
-		if err != nil {
-			return writeTextError(output, "generate owner pairing code")
-		}
-		pairing = profile.Pairing{
-			CodeHash:  profile.PairingCodeHash(pairingCode),
-			ExpiresAt: dependencies.now().Add(pairingLifetime).UTC().Truncate(time.Second),
-		}
-	}
 	store, err := profile.NewFileStore(roots.dataDir)
 	if err != nil {
 		return writeTextError(output, err.Error())
@@ -108,7 +85,6 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 			WSAddr:     connector.ABDWSAddr,
 			PlatformID: connector.ABDPlatformID,
 		},
-		Pairing: pairing,
 	}
 	if err := profile.Save(paths.ConfigFile, item); err != nil {
 		return writeTextError(output, err.Error())
@@ -119,11 +95,6 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 	}
 
 	fmt.Fprintf(output, "Setup complete. abdim is running (pid %d).\n", status.PID)
-	if pairingCode != "" {
-		fmt.Fprintf(output, "Send this private message to the bot within 15 minutes: pair %s\n", pairingCode)
-	} else {
-		fmt.Fprintln(output, "The existing owner pairing was preserved.")
-	}
 	return 0
 }
 
@@ -173,12 +144,4 @@ func readSetupLine(reader *bufio.Reader) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(line), nil
-}
-
-func newPairingCode(source io.Reader) (string, error) {
-	buffer := make([]byte, 4)
-	if _, err := io.ReadFull(source, buffer); err != nil {
-		return "", err
-	}
-	return strings.ToUpper(hex.EncodeToString(buffer)), nil
 }

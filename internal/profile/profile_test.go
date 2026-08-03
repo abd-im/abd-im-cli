@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestPathsCreatePrivateProfileLayout(t *testing.T) {
@@ -111,37 +110,15 @@ func TestFileStoreKeepsTokenOutOfProfile(t *testing.T) {
 	}
 }
 
-func TestPendingPairingPersistsOnlyDigestAndBindsOwner(t *testing.T) {
-	const code = "A1B2C3D4"
-	root := t.TempDir()
-	path := filepath.Join(root, "work.toml")
-	item := Profile{
-		Name:          "work",
-		CredentialRef: "file:work",
-		Deployment:    Deployment{UserID: "bot-user", APIAddr: "https://example.test/api", WSAddr: "wss://example.test/ws", PlatformID: 7},
-		Pairing:       Pairing{CodeHash: PairingCodeHash(code), ExpiresAt: time.Now().Add(time.Hour).UTC().Truncate(time.Second)},
-	}
-	if err := Save(path, item); err != nil {
+func TestLoadIgnoresRemovedPairingFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "work.toml")
+	contents := "name = \"work\"\ncredential_ref = \"file:work\"\nuser_id = \"bot-user\"\napi_addr = \"https://example.test/api\"\nws_addr = \"wss://example.test/ws\"\nplatform_id = 7\npairing_code_hash = \"legacy\"\npairing_expires_at = 1\nowner_user_id = \"legacy-owner\"\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
-	}
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(contents), code) || !strings.Contains(string(contents), PairingCodeHash(code)) {
-		t.Fatalf("pairing persistence failed: %s", contents)
 	}
 	loaded, err := Load(path)
-	if err != nil || !loaded.Pairing.Pending(time.Now()) {
-		t.Fatalf("Load() pairing = %#v, %v", loaded.Pairing, err)
-	}
-	bound, err := BindOwner(path, "owner-user")
-	if err != nil || bound.Pairing.OwnerUserID != "owner-user" || bound.Pairing.CodeHash != "" || !bound.Pairing.ExpiresAt.IsZero() {
-		t.Fatalf("BindOwner() = %#v, %v", bound.Pairing, err)
-	}
-	restored, err := Load(path)
-	if err != nil || restored.Pairing.OwnerUserID != "owner-user" {
-		t.Fatalf("bound profile = %#v, %v", restored, err)
+	if err != nil || loaded.Name != "work" || loaded.Deployment.UserID != "bot-user" {
+		t.Fatalf("Load() = %#v, %v", loaded, err)
 	}
 }
 

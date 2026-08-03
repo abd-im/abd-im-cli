@@ -8,12 +8,13 @@ go vet ./...
 ```
 
 `cmd/abdim` tests cover interactive ABD setup without real credentials,
-owner-only token persistence, lifecycle status/stop behavior, removal of the
-old manual setup commands, and the paired-owner capability policy.
-`internal/daemon` tests cover exact private-message pairing, expiry, canonical
-owner binding, and the guarantee that pairing traffic never starts a provider
-run. `internal/connector` verifies the fixed ABD login request and sanitized
-failure handling with an in-process HTTP server.
+current-user-only token persistence, lifecycle status/stop behavior, removal
+of the old manual setup commands, and zero-configuration inbound acceptance.
+The inbound policy test verifies all currently registered methods are granted
+without a second identity configuration. `internal/profile` verifies profiles
+from the removed pairing implementation remain readable. `internal/connector`
+verifies the fixed ABD login request and sanitized failure handling with an
+in-process HTTP server.
 
 ## GitHub Actions
 

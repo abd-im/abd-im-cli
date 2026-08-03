@@ -511,23 +511,6 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	methods = append(methods, conversationMarkRead.ProxyMethod(), conversationPinned.ProxyMethod(), conversationReceiveOption.ProxyMethod())
 	methods = append(methods, friendHandler.ProxyMethods()...)
 	methods = append(methods, blacklistHandler.ProxyMethods()...)
-	pairing, err := daemon.NewPairing(daemon.PairingConfig{
-		BotUserID:   item.Deployment.UserID,
-		OwnerUserID: item.Pairing.OwnerUserID,
-		CodeHash:    item.Pairing.CodeHash,
-		ExpiresAt:   item.Pairing.ExpiresAt,
-		BindOwner: func(ownerUserID string) error {
-			_, bindErr := profile.BindOwner(paths.ConfigFile, ownerUserID)
-			return bindErr
-		},
-		Send: func(sendContext context.Context, text, recipientID string) error {
-			return prepared.Adapter.SendText(sendContext, text, recipientID, "")
-		},
-	})
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	acceptInbound := acceptAllInbound(item.Deployment.UserID)
 	inbound, err := daemon.New(daemon.Config{
 		ProfileID: item.Name,
 		Ledger:    ledger,
@@ -535,12 +518,9 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 		Runs:      runs,
 		Grants:    grant.NewStore(),
 		Methods:   methods,
-		Policy:    pairedOwnerPolicy(methods),
+		Policy:    fullInboundPolicy(methods),
 		GrantTTL:  2 * time.Minute,
-		Accept: func(event contracts.SDKEvent) bool {
-			return acceptInbound(event) && pairing.Accept(event)
-		},
-		Pairing: pairing,
+		Accept:    acceptAllInbound(item.Deployment.UserID),
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -579,14 +559,14 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	return 0
 }
 
-func pairedOwnerPolicy(methods []proxy.Method) daemon.Policy {
+func fullInboundPolicy(methods []proxy.Method) daemon.Policy {
 	methodNames := make([]string, 0, len(methods))
 	for _, method := range methods {
 		methodNames = append(methodNames, method.Name)
 	}
 	return daemon.PolicyFunc(func(context.Context, contracts.Event) (daemon.Decision, bool, error) {
 		return daemon.Decision{
-			Principal:           "owner",
+			Principal:           "inbound",
 			Methods:             methodNames,
 			FullAccess:          true,
 			AttachmentByteLimit: 32 * 1024 * 1024,

@@ -37,13 +37,27 @@ func TestLegacyManualSetupCommandsAreRemoved(t *testing.T) {
 	}
 }
 
-func TestOwnerInboundPolicyGrantsVerifiedMethods(t *testing.T) {
-	policy := pairedOwnerPolicy([]proxy.Method{{Name: "group.list", Scope: "group.read", Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
+func TestInboundPolicyGrantsVerifiedMethods(t *testing.T) {
+	policy := fullInboundPolicy([]proxy.Method{{Name: "group.list", Scope: "group.read", Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
 		return json.RawMessage(`{}`), nil
 	}}})
 	decision, allowed, err := policy.Decide(context.Background(), contracts.Event{})
 	if err != nil || !allowed || !decision.FullAccess || len(decision.Methods) != 1 || decision.Methods[0] != "group.list" || decision.RateBudget != 64 {
-		t.Fatalf("owner policy = %+v, allowed=%t, err=%v", decision, allowed, err)
+		t.Fatalf("inbound policy = %+v, allowed=%t, err=%v", decision, allowed, err)
+	}
+}
+
+func TestInboundAcceptanceNeedsNoConfiguredSender(t *testing.T) {
+	accept := acceptAllInbound("bot-user")
+	for _, sender := range []string{"user-1", "user-2"} {
+		event := contracts.SDKEvent{Type: string(contracts.EventMessageReceived), Data: json.RawMessage(`{"sender_id":"` + sender + `","session_type":1}`)}
+		if !accept(event) {
+			t.Fatalf("inbound sender %q was rejected", sender)
+		}
+	}
+	self := contracts.SDKEvent{Type: string(contracts.EventMessageReceived), Data: json.RawMessage(`{"sender_id":"bot-user","session_type":1}`)}
+	if accept(self) {
+		t.Fatal("bot accepted its own message")
 	}
 }
 
