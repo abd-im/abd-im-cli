@@ -9,7 +9,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -31,31 +30,19 @@ type Sender interface {
 }
 
 type Handler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	sender   Sender
+	guard  *operation.Guard
+	sender Sender
 }
 
-func New(manifest *capability.Manifest, guard *operation.Guard, sender Sender) (*Handler, error) {
-	if manifest == nil || guard == nil || sender == nil {
-		return nil, errors.New("manifest, operation guard, and message sender are required")
+func New(guard *operation.Guard, sender Sender) (*Handler, error) {
+	if guard == nil || sender == nil {
+		return nil, errors.New("operation guard and message sender are required")
 	}
-	return &Handler{manifest: manifest, guard: guard, sender: sender}, nil
+	return &Handler{guard: guard, sender: sender}, nil
 }
 
 func (h *Handler) ProxyMethod() proxy.Method {
-	return proxy.Method{Name: Method, Scope: Scope, Allowed: func() bool { return h.manifest.Allows(Method, Scope) }, Targets: targets, Handle: h.handle}
-}
-
-func targets(raw json.RawMessage) ([]string, error) {
-	input, err := parse(raw)
-	if err != nil {
-		return nil, err
-	}
-	if input.RecipientID != "" {
-		return []string{grant.UserTarget(input.RecipientID)}, nil
-	}
-	return []string{grant.GroupTarget(input.GroupID)}, nil
+	return proxy.Method{Name: Method, Handle: h.handle}
 }
 
 func (h *Handler) handle(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {

@@ -14,7 +14,7 @@ const APIVersionV1 = "v1"
 
 var ErrInvalidContract = errors.New("invalid v1 contract")
 
-// Request is the JSON envelope sent over local RPC and run-scoped tool proxies.
+// Request is the JSON envelope sent over local RPC and run-scoped proxies.
 type Request struct {
 	APIVersion     string          `json:"api_version"`
 	RequestID      string          `json:"request_id"`
@@ -46,22 +46,9 @@ func (r Request) Validate() error {
 
 // Meta accompanies successful responses.
 type Meta struct {
-	ProfileID  string      `json:"profile_id"`
-	Stale      bool        `json:"stale"`
-	Schema     string      `json:"schema,omitempty"`
-	Capability *Capability `json:"capability,omitempty"`
-}
-
-// Capability describes why a typed method is or is not exposed. It is
-// optional in the shared envelope so existing lifecycle responses remain
-// byte-for-byte compatible while typed reads can surface verification state.
-type Capability struct {
-	Method        string `json:"method"`
-	Scope         string `json:"scope"`
-	Status        string `json:"status"`
-	Reason        string `json:"reason,omitempty"`
-	SDKVersion    string `json:"sdk_version,omitempty"`
-	ServerVersion string `json:"server_version,omitempty"`
+	ProfileID string `json:"profile_id"`
+	Stale     bool   `json:"stale"`
+	Schema    string `json:"schema,omitempty"`
 }
 
 // Response is the JSON envelope returned by local RPC and tool proxies.
@@ -213,7 +200,7 @@ type SDKEvent struct {
 	DedupKey   string
 	Data       json.RawMessage
 	// MessageText is transient provider input. It is excluded from ledger,
-	// IPC, MCP, and JSON serialization.
+	// IPC and JSON serialization.
 	MessageText string `json:"-"`
 }
 
@@ -253,9 +240,7 @@ type StartRequest struct {
 	ProfileID       string
 	RunID           string
 	GrantCredential string
-	// AllowedMethods is the construction-time intersection of the policy,
-	// verified capability manifest, and run grant. Provider adapters must not
-	// discover methods from another daemon surface.
+	// AllowedMethods is the fixed method snapshot selected for this run.
 	AllowedMethods []string
 	Proxy          ToolProxy
 }
@@ -272,7 +257,16 @@ type TurnRequest struct {
 	GrantCredential string
 	// Prompt is transient provider input derived from the SDK callback.
 	Prompt string
+	// Output receives the complete current user-visible Agent text after each
+	// provider update. It is daemon-owned and cannot select a reply target.
+	Output TurnOutputSink
 }
+
+type TurnOutput struct {
+	Text string
+}
+
+type TurnOutputSink func(context.Context, TurnOutput) error
 
 type TurnResult struct {
 	FinalText   string

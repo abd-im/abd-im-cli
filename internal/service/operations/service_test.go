@@ -51,15 +51,9 @@ func TestTrackerPersistsRunLifecycleAndServiceCancels(t *testing.T) {
 	if err != nil || len(listed.Data.Items) != 1 || listed.Data.Items[0].Status != string(control.RunRunning) {
 		t.Fatalf("List() = %#v, %v", listed, err)
 	}
-	if listed.Meta.Capability.Method != RunListMethod {
-		t.Fatalf("run.list metadata = %#v", listed.Meta)
-	}
 	cancelled, err := reader.Cancel(context.Background(), CancelInput{RunID: "run-1"})
 	if err != nil || cancelled.Data.Status != string(control.RunCancelled) || cancelled.Data.Reason != "owner cancelled" {
 		t.Fatalf("Cancel() = %#v, %v", cancelled, err)
-	}
-	if cancelled.Meta.Capability.Method != RunCancelMethod {
-		t.Fatalf("run.cancel metadata = %#v", cancelled.Meta)
 	}
 	provider.session.waitCanceled(t)
 	if result := <-handle.Done; result.Status != run.StatusCanceled {
@@ -110,9 +104,6 @@ func TestServicePaginatesRunsAndRedactsOperationDiagnostics(t *testing.T) {
 	if err != nil || diagnostic.Data.TargetSummary != "recipient:user-2" || diagnostic.Data.ErrorSummary != "remote action failed" {
 		t.Fatalf("Operation() = %#v, %v", diagnostic, err)
 	}
-	if diagnostic.Meta.Capability.Method != OperationGetMethod {
-		t.Fatalf("operation.get metadata = %#v", diagnostic.Meta)
-	}
 	payload, err := json.Marshal(diagnostic.Data)
 	if err != nil || string(payload) == "" || strings.Contains(string(payload), marker) {
 		t.Fatalf("operation diagnostic leaked input = %s, %v", payload, err)
@@ -120,9 +111,6 @@ func TestServicePaginatesRunsAndRedactsOperationDiagnostics(t *testing.T) {
 	marked, err := reader.MarkOperationUnknown(context.Background(), OperationInput{OperationID: "operation-1"})
 	if err != nil || marked.Data.Status != string(control.OperationUnknown) || marked.Data.ErrorSummary != "" {
 		t.Fatalf("MarkOperationUnknown() = %#v, %v", marked, err)
-	}
-	if marked.Meta.Capability.Method != OperationMarkUnknownMethod {
-		t.Fatalf("operation.mark_unknown metadata = %#v", marked.Meta)
 	}
 	if _, err := reader.Cancel(context.Background(), CancelInput{RunID: "missing"}); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("Cancel(missing) error = %v, want ErrNotFound", err)

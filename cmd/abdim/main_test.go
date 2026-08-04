@@ -1,20 +1,16 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"net"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/abd-im/abd-im-cli/internal/agent/grant"
+	"github.com/abd-im/abd-im-cli/internal/agent/access"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/daemon"
@@ -70,12 +66,6 @@ func TestDirectMessagePolicyExplicitlyEnablesRegisteredTools(t *testing.T) {
 	if len(decision.Methods) != len(methods) {
 		t.Fatalf("enabled methods = %v", decision.Methods)
 	}
-	for _, method := range methods {
-		allowedTargets := decision.TargetAllowlists[method.Name]
-		if len(allowedTargets) != 1 || allowedTargets[0] != grant.AnyTarget {
-			t.Fatalf("targets for %q = %v", method.Name, allowedTargets)
-		}
-	}
 }
 
 func TestDaemonSDKConfigUsesProfilePaths(t *testing.T) {
@@ -89,59 +79,20 @@ func TestDaemonSDKConfigUsesProfilePaths(t *testing.T) {
 	}
 }
 
-func TestCurrentCodexHomeUsesCallerConfiguration(t *testing.T) {
-	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"tokens":{"access_token":"test"}}`), 0o600); err != nil {
-		t.Fatal(err)
+func TestAgentLaunchUsesFixedCommands(t *testing.T) {
+	tests := map[string]agentLaunchSpec{
+		"codex":    {command: "codex"},
+		"hermes":   {command: "hermes", args: []string{"acp"}},
+		"openclaw": {command: "openclaw", args: []string{"acp"}},
 	}
-	t.Setenv("CODEX_HOME", home)
-	got, err := currentCodexHome()
-	if err != nil || got != home {
-		t.Fatalf("currentCodexHome() = %q, %v", got, err)
-	}
-
-	t.Setenv("CODEX_HOME", "relative")
-	if _, err := currentCodexHome(); err == nil {
-		t.Fatal("currentCodexHome() accepted a relative path")
-	}
-}
-
-func TestProviderMCPBridgeRelaysOnlyConfiguredSocket(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "provider.sock")
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-	serverDone := make(chan error, 1)
-	go func() {
-		connection, err := listener.AcceptUnix()
-		if err != nil {
-			serverDone <- err
-			return
+	for providerID, want := range tests {
+		got, err := agentLaunch(providerID)
+		if err != nil || got.command != want.command || strings.Join(got.args, " ") != strings.Join(want.args, " ") {
+			t.Errorf("agentLaunch(%q) = %#v, %v", providerID, got, err)
 		}
-		defer connection.Close()
-		line, err := bufio.NewReader(connection).ReadString('\n')
-		if err == nil && line != `{"jsonrpc":"2.0","id":1}`+"\n" {
-			err = errors.New("unexpected provider MCP input")
-		}
-		if err == nil {
-			_, err = connection.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}` + "\n"))
-		}
-		serverDone <- err
-	}()
-	var output bytes.Buffer
-	if got := runWithIO([]string{"mcp", "provider", "bridge", "--socket", socket}, strings.NewReader(`{"jsonrpc":"2.0","id":1}`+"\n"), &output, testRoots(t)); got != 0 {
-		t.Fatalf("bridge exit code = %d", got)
 	}
-	if output.String() != `{"jsonrpc":"2.0","id":1,"result":{}}`+"\n" {
-		t.Fatalf("bridge output = %q", output.String())
-	}
-	if err := <-serverDone; err != nil {
-		t.Fatalf("bridge server error = %v", err)
-	}
-	if got := runWithIO([]string{"mcp", "provider", "bridge", "--socket", "relative.sock"}, strings.NewReader(""), &output, testRoots(t)); got != 2 {
-		t.Fatalf("relative socket bridge exit code = %d", got)
+	if _, err := agentLaunch("/tmp/custom-agent"); err == nil {
+		t.Fatal("agentLaunch accepted arbitrary executable")
 	}
 }
 
@@ -219,35 +170,67 @@ func TestOwnerQueryRejectsUnregisteredCommandsAndDaemonPaths(t *testing.T) {
 	}
 }
 
-func TestMCPServeUsesDefaultOwnerToolRegistry(t *testing.T) {
+func TestCommandsListsDefaultOwnerRegistry(t *testing.T) {
 	roots := testRoots(t)
-	input := `{"jsonrpc":"2.0","id":"tools","method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`
 	var output bytes.Buffer
-	if got := runWithIO([]string{"--profile", "work", "mcp", "serve"}, strings.NewReader(input), &output, roots); got != 0 {
+	if got := runWithIO([]string{"--profile", "work", "commands"}, strings.NewReader(""), &output, roots); got != 0 {
 		t.Fatalf("runWithIO() = %d, want 0; output = %s", got, output.String())
 	}
 	var response struct {
-		Result struct {
-			Tools []struct {
-				Name string `json:"name"`
-			} `json:"tools"`
-		} `json:"result"`
+		Data []struct {
+			Method string `json:"method"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
-		t.Fatalf("decode MCP response: %v", err)
+		t.Fatalf("decode commands response: %v", err)
 	}
-	if len(response.Result.Tools) != 26 || response.Result.Tools[0].Name == "abdim.daemon.shutdown" {
-		t.Fatalf("MCP tools = %+v", response.Result.Tools)
+	if len(response.Data) != 25 || response.Data[0].Method == "daemon.shutdown" {
+		t.Fatalf("commands = %+v", response.Data)
 	}
 	foundRunCancel := false
-	for _, tool := range response.Result.Tools {
-		if tool.Name == "abdim.run.cancel" {
+	for _, command := range response.Data {
+		if command.Method == "run.cancel" {
 			foundRunCancel = true
 			break
 		}
 	}
 	if !foundRunCancel {
-		t.Fatalf("MCP tools omit owner run.cancel: %+v", response.Result.Tools)
+		t.Fatalf("commands omit owner run.cancel: %+v", response.Data)
+	}
+}
+
+func TestAgentCommandUsesRunSocketAndGrant(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "agent.sock")
+	requests := make(chan contracts.Request, 1)
+	server, err := ipc.Listen(socket, func(_ context.Context, request contracts.Request) (contracts.Response, error) {
+		requests <- request
+		return contracts.Response{APIVersion: contracts.APIVersionV1, RequestID: request.RequestID, OK: true, Data: json.RawMessage(`{"items":[]}`), Meta: &contracts.Meta{ProfileID: "work"}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		_ = server.Close()
+		<-done
+	})
+	t.Setenv(access.EnvSocket, socket)
+	t.Setenv(access.EnvProfile, "work")
+	t.Setenv(access.EnvRun, "run-1")
+	t.Setenv(access.EnvGrant, "grant-1")
+	t.Setenv(access.EnvMethods, `["message.history"]`)
+
+	var output bytes.Buffer
+	params := `{"conversation_id":"conversation-1","limit":1,"idempotency_key":"query-1"}`
+	if got := runWithIO([]string{"message", "history", "--params-stdin"}, strings.NewReader(params), &output, testRoots(t)); got != 0 {
+		t.Fatalf("agent command exit = %d: %s", got, output.String())
+	}
+	request := <-requests
+	if request.ProfileID != "work" || request.Method != "message.history" || request.Grant != "grant-1" || request.IdempotencyKey != "query-1" {
+		t.Fatalf("Agent request = %+v", request)
 	}
 }
 

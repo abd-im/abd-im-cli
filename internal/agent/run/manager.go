@@ -40,6 +40,7 @@ type Request struct {
 	AllowedMethods  []string
 	Proxy           contracts.ToolProxy
 	Prompt          string
+	Output          contracts.TurnOutputSink
 }
 
 // Result is delivered exactly once for every accepted or rejected run.
@@ -287,7 +288,11 @@ func (m *Manager) execute(item *job) {
 		case <-finished:
 		}
 	}()
-	result, err := session.Turn(turnContext, contracts.TurnRequest{RunID: item.request.ID, EventID: item.request.EventID, GrantCredential: item.request.GrantCredential, Prompt: item.request.Prompt})
+	result, err := session.Turn(turnContext, contracts.TurnRequest{
+		RunID: item.request.ID, EventID: item.request.EventID,
+		GrantCredential: item.request.GrantCredential, Prompt: item.request.Prompt,
+		Output: item.request.Output,
+	})
 	close(finished)
 	if status, canceled := item.cancellation(); canceled {
 		m.complete(item, Result{RunID: item.request.ID, Status: status, Err: turnContext.Err()})

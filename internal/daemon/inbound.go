@@ -50,7 +50,6 @@ type InboundContext struct {
 type Decision struct {
 	Principal            string
 	Methods              []string
-	TargetAllowlists     map[string][]string
 	HistoryBeforeTrigger bool
 	AttachmentByteLimit  int64
 	RateBudget           int
@@ -106,8 +105,8 @@ func New(config Config) (*Inbound, error) {
 	}
 	methods := make(map[string]proxy.Method, len(config.Methods))
 	for _, method := range config.Methods {
-		if strings.TrimSpace(method.Name) == "" || strings.TrimSpace(method.Scope) == "" || method.Handle == nil {
-			return nil, errors.New("typed method name, scope, and handler are required")
+		if strings.TrimSpace(method.Name) == "" || method.Handle == nil {
+			return nil, errors.New("typed method name and handler are required")
 		}
 		if _, exists := methods[method.Name]; exists {
 			return nil, fmt.Errorf("duplicate typed method %q", method.Name)
@@ -196,11 +195,7 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	if err != nil {
 		return outcome, err
 	}
-	selected, scopes, err := d.selectMethods(decision.Methods)
-	if err != nil {
-		return outcome, err
-	}
-	targetAllowlists, err := targetAllowlists(decision, selected, conversation.ConversationID)
+	selected, err := d.selectMethods(decision.Methods)
 	if err != nil {
 		return outcome, err
 	}
@@ -220,6 +215,10 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	}); err != nil {
 		return outcome, err
 	}
+	stream, err := d.replies.NewStream(ctx, d.profileID, recorded.Event.EventID)
+	if err != nil {
+		return outcome, err
+	}
 	messageWindow := grant.MessageWindow{
 		ConversationID: conversation.ConversationID,
 		AfterMessageID: conversation.MessageID,
@@ -233,8 +232,6 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		ProfileID:           d.profileID,
 		Principal:           decision.Principal,
 		Methods:             methodNames(selected),
-		Scopes:              scopes,
-		TargetAllowlists:    targetAllowlists,
 		MessageWindow:       messageWindow,
 		AttachmentByteLimit: decision.AttachmentByteLimit,
 		ExpiresAt:           time.Now().Add(d.grantTTL),
@@ -248,6 +245,7 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		d.grants.RevokeRun(runID)
 		return outcome, err
 	}
+	allowedMethods := providerVisibleMethods(selected)
 	handle, err := d.runs.Submit(run.Request{
 		ID:              runID,
 		ProfileID:       d.profileID,
@@ -255,9 +253,12 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		EventID:         recorded.Event.EventID,
 		GrantCredential: credential,
 		GrantExpiresAt:  issued.ExpiresAt,
-		AllowedMethods:  providerVisibleMethods(selected),
+		AllowedMethods:  allowedMethods,
 		Proxy:           toolProxy,
-		Prompt:          inboundPrompt(event.MessageText, len(selected) > 0),
+		Prompt:          inboundPrompt(event.MessageText, allowedMethods),
+		Output: func(outputContext context.Context, output contracts.TurnOutput) error {
+			return stream.Update(outputContext, output.Text)
+		},
 	})
 	if err != nil {
 		return outcome, err
@@ -274,31 +275,9 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	outcome.RunID = runID
 	go func() {
 		defer d.finishers.Done()
-		d.finish(recorded.Event.EventID, handle)
+		d.finish(recorded.Event.EventID, handle, stream)
 	}()
 	return outcome, nil
-}
-
-func targetAllowlists(decision Decision, methods []proxy.Method, defaultTarget string) (map[string][]string, error) {
-	if strings.TrimSpace(defaultTarget) == "" {
-		return nil, errors.New("default grant target is required")
-	}
-	result := make(map[string][]string, len(methods))
-	allowed := make(map[string]struct{}, len(methods))
-	for _, method := range methods {
-		allowed[method.Name] = struct{}{}
-		result[method.Name] = []string{grant.ConversationTarget(defaultTarget)}
-	}
-	for method, targets := range decision.TargetAllowlists {
-		if _, exists := allowed[method]; !exists {
-			return nil, fmt.Errorf("policy supplied targets for unselected method %q", method)
-		}
-		if len(targets) == 0 {
-			return nil, fmt.Errorf("policy supplied no targets for method %q", method)
-		}
-		result[method] = append([]string(nil), targets...)
-	}
-	return result, nil
 }
 
 // CancelEvent prevents the corresponding run from producing an event-bound
@@ -321,41 +300,37 @@ func (d *Inbound) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (d *Inbound) finish(eventID string, handle *run.Handle) {
+func (d *Inbound) finish(eventID string, handle *run.Handle, stream *reply.Stream) {
 	result, ok := <-handle.Done
 	d.mu.Lock()
 	delete(d.runsByEvent, eventID)
-	stopped := d.stopped
 	d.mu.Unlock()
-	if !ok || stopped || result.Status != run.StatusCompleted || strings.TrimSpace(result.Turn.FinalText) == "" {
+	if !ok || result.Status != run.StatusCompleted || strings.TrimSpace(result.Turn.FinalText) == "" {
+		if err := stream.Close(context.Background()); err != nil {
+			d.report(err)
+		}
 		return
 	}
-	if _, err := d.replies.Deliver(context.Background(), d.profileID, eventID, result.Turn.FinalText); err != nil {
+	if err := stream.Finish(context.Background(), result.Turn.FinalText); err != nil {
 		d.report(err)
 	}
 }
 
-func (d *Inbound) selectMethods(names []string) ([]proxy.Method, []string, error) {
+func (d *Inbound) selectMethods(names []string) ([]proxy.Method, error) {
 	selected := make([]proxy.Method, 0, len(names))
 	methodSeen := make(map[string]struct{}, len(names))
-	scopeSeen := make(map[string]struct{}, len(names))
-	scopes := make([]string, 0, len(names))
 	for _, name := range names {
 		method, exists := d.methods[name]
 		if !exists {
-			return nil, nil, fmt.Errorf("policy selected unregistered typed method %q", name)
+			return nil, fmt.Errorf("policy selected unregistered typed method %q", name)
 		}
 		if _, exists := methodSeen[name]; exists {
-			return nil, nil, fmt.Errorf("policy selected duplicate typed method %q", name)
+			return nil, fmt.Errorf("policy selected duplicate typed method %q", name)
 		}
 		methodSeen[name] = struct{}{}
 		selected = append(selected, method)
-		if _, exists := scopeSeen[method.Scope]; !exists {
-			scopeSeen[method.Scope] = struct{}{}
-			scopes = append(scopes, method.Scope)
-		}
 	}
-	return selected, scopes, nil
+	return selected, nil
 }
 
 type eventRef struct {
@@ -398,14 +373,14 @@ func (reference eventRef) replyTarget() (replyTarget, error) {
 	return replyTarget{}, errors.New("message event has no safe reply target")
 }
 
-func inboundPrompt(text string, hasTools bool) string {
+func inboundPrompt(text string, allowedMethods []string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "An inbound non-text message was received. Reply briefly that only text messages are supported."
 	}
 	prefix := "Reply concisely and helpfully to this inbound message. Do not claim to have accessed IM data or performed actions you did not perform. Never disclose local paths, configuration, credentials, grants, or other runtime details."
-	if hasTools {
-		prefix += " Use only the abdim MCP tools listed for this run for factual claims about IM data or actions. If a required tool is unavailable, say that it is unavailable rather than guessing."
+	if len(allowedMethods) > 0 {
+		prefix += " Use only the abdim CLI for IM data or actions. Run `\"$ABDIM_CLI\" commands` to inspect this run's allowed commands and JSON parameter schemas. Invoke a command as `printf '%s' '<json>' | \"$ABDIM_CLI\" <method words> --params-stdin`. If a required command is unavailable, say that it is unavailable rather than guessing."
 	}
 	return prefix + "\n\nInbound message:\n" + text
 }
@@ -419,30 +394,10 @@ func methodNames(methods []proxy.Method) []string {
 }
 
 // providerVisibleMethods freezes the discovery surface before a provider is
-// started. The run proxy still enforces expiry, revocation, target scopes, and
+// started. The run proxy still enforces method access, expiry, revocation, and
 // rate limits for every call after this snapshot is made.
 func providerVisibleMethods(methods []proxy.Method) []string {
-	visible := make([]string, 0, len(methods))
-	for _, method := range methods {
-		verified := false
-		if method.Allowed != nil && !method.Allowed() {
-			continue
-		} else if method.Allowed != nil {
-			verified = true
-		}
-		if method.Meta != nil {
-			capability := method.Meta().Capability
-			if capability == nil || capability.Status != "available" {
-				continue
-			}
-			verified = true
-		}
-		if !verified {
-			continue
-		}
-		visible = append(visible, method.Name)
-	}
-	return visible
+	return methodNames(methods)
 }
 
 func (d *Inbound) isStopped() bool {

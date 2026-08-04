@@ -8,7 +8,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -86,57 +85,24 @@ type AdministrationSource interface {
 // AdministrationHandler exposes fixed group administration methods to a
 // run-scoped proxy.
 type AdministrationHandler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	source   AdministrationSource
+	guard  *operation.Guard
+	source AdministrationSource
 }
 
-func NewAdministration(manifest *capability.Manifest, guard *operation.Guard, source AdministrationSource) (*AdministrationHandler, error) {
-	if manifest == nil || guard == nil || source == nil {
-		return nil, errors.New("manifest, operation guard, and group administration source are required")
+func NewAdministration(guard *operation.Guard, source AdministrationSource) (*AdministrationHandler, error) {
+	if guard == nil || source == nil {
+		return nil, errors.New("operation guard and group administration source are required")
 	}
-	return &AdministrationHandler{manifest: manifest, guard: guard, source: source}, nil
+	return &AdministrationHandler{guard: guard, source: source}, nil
 }
 
 func (h *AdministrationHandler) ProxyMethods() []proxy.Method {
 	return []proxy.Method{
-		{Name: SetInfoMethod, Scope: SetInfoScope, Allowed: func() bool { return h.manifest.Allows(SetInfoMethod, SetInfoScope) }, Targets: setInfoTargets, Handle: h.setInfo},
-		{Name: SetMuteMethod, Scope: SetMuteScope, Allowed: func() bool { return h.manifest.Allows(SetMuteMethod, SetMuteScope) }, Targets: setMuteTargets, Handle: h.setMute},
-		{Name: SetMemberMuteMethod, Scope: SetMemberMuteScope, Allowed: func() bool { return h.manifest.Allows(SetMemberMuteMethod, SetMemberMuteScope) }, Targets: setMemberMuteTargets, Handle: h.setMemberMute},
-		{Name: TransferOwnerMethod, Scope: TransferOwnerScope, Allowed: func() bool { return h.manifest.Allows(TransferOwnerMethod, TransferOwnerScope) }, Targets: transferOwnerTargets, Handle: h.transferOwner},
+		{Name: SetInfoMethod, Handle: h.setInfo},
+		{Name: SetMuteMethod, Handle: h.setMute},
+		{Name: SetMemberMuteMethod, Handle: h.setMemberMute},
+		{Name: TransferOwnerMethod, Handle: h.transferOwner},
 	}
-}
-
-func setInfoTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseSetInfo(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.GroupTarget(input.GroupID)}, nil
-}
-
-func setMuteTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseSetMute(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.GroupTarget(input.GroupID)}, nil
-}
-
-func setMemberMuteTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseSetMemberMute(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.GroupTarget(input.GroupID), grant.UserTarget(input.UserID)}, nil
-}
-
-func transferOwnerTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseTransferOwner(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.GroupTarget(input.GroupID), grant.UserTarget(input.NewOwnerUserID)}, nil
 }
 
 func (h *AdministrationHandler) setInfo(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {

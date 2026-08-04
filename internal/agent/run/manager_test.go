@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -92,6 +93,42 @@ func TestManagerRejectsOverflowAndCancelsGrantExpiry(t *testing.T) {
 	}
 	if result := <-handle.Done; result.Status != StatusGrantExpired {
 		t.Fatalf("expired result = %#v", result)
+	}
+}
+
+func TestManagerKeepsConversationQueuesDistinct(t *testing.T) {
+	block := make(chan struct{})
+	session := &recordingSession{block: block}
+	manager, err := NewManager(Config{Provider: &recordingProvider{session: session}, MaxQueue: 1, Deadline: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Shutdown(context.Background())
+
+	first, err := manager.Submit(testRequest("run-a1", "conversation-a", time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !session.waitForTurn(time.Second) {
+		t.Fatal("first conversation did not start")
+	}
+	second, err := manager.Submit(testRequest("run-a2", "conversation-a", time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Submit(testRequest("run-a3", "conversation-a", time.Now().Add(time.Hour))); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("third run in conversation-a error = %v, want ErrQueueFull", err)
+	}
+	other, err := manager.Submit(testRequest("run-b1", "conversation-b", time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatalf("conversation-b was blocked by conversation-a queue: %v", err)
+	}
+
+	close(block)
+	for name, handle := range map[string]*Handle{"first": first, "second": second, "other": other} {
+		if result := <-handle.Done; result.Status != StatusCompleted {
+			t.Fatalf("%s result = %#v", name, result)
+		}
 	}
 }
 

@@ -58,7 +58,7 @@ validation rather than allowing an integration test to skip.
 ## Release Candidate
 
 Before tagging, require a green CI run, manually approve and run the controlled
-OpenIM workflow, and complete both current-user daemon/Codex direct-message
+OpenIM workflow, and complete both current-user daemon/ACP Agent direct-message
 canaries from [`CONNECTOR.md`](CONNECTOR.md). Verify that the default run exposes
 no `abdim` tools, then enable inbound tools and verify discovery plus one read
 and one disposable write before disabling them again. In both modes, verify
@@ -86,8 +86,8 @@ Verify a downloaded archive before installation:
 sha256sum -c SHA256SUMS
 ```
 
-Use the verified binary as the same user whose Codex CLI is logged in. Put
-`codex` on that user's `PATH`, run `abdim setup`, and complete the one-time
+Use the verified binary as the same user whose selected Agent is logged in. Put
+its fixed entry point on that user's `PATH`, run `abdim setup`, and complete the one-time
 setup described in [`CONNECTOR.md`](CONNECTOR.md). Do not use `sudo`, a
 provider configuration file, a separate provider UID, or a manually copied
 browser/mobile token. Do not run a release daemon from the development checkout.

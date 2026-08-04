@@ -4,12 +4,15 @@ go 1.24.0
 
 require (
 	github.com/abd-im/abd-im-sdk-core/v3 v3.0.0-20260731102348-b1a26e4da231
+	github.com/coder/acp-go-sdk v0.13.5
 	github.com/google/uuid v1.6.0
-	github.com/openimsdk/protocol v0.0.73-alpha.12
+	github.com/openimsdk/protocol v0.0.73-alpha.20
 	github.com/openimsdk/tools v0.0.50-alpha.80
 	golang.org/x/term v0.35.0
 	modernc.org/sqlite v1.40.1
 )
+
+replace github.com/abd-im/abd-im-sdk-core/v3 => ../abd-im-sdk-core
 
 require (
 	github.com/coder/websocket v1.8.13 // indirect

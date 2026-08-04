@@ -121,7 +121,7 @@ func attachmentGrant(t *testing.T, profileID, runID string, limit int64, expires
 	t.Helper()
 	issued, _, err := grant.NewStore().Issue(grant.Policy{
 		RunID: runID, ProfileID: profileID, Principal: "provider",
-		Methods: []string{"message.send_image"}, Scopes: []string{"message.send_image"},
+		Methods:   []string{"message.send_image"},
 		ExpiresAt: expiresAt, RateBudget: 4, AttachmentByteLimit: limit,
 	})
 	if err != nil {

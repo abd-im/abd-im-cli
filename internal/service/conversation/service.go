@@ -19,20 +19,7 @@ const (
 	ListMethod   = "conversation.list"
 	GetMethod    = "conversation.get"
 	SearchMethod = "conversation.search"
-	UnreadMethod = "conversation.unread"
-	ReadScope    = "conversation.read"
 )
-
-// VerifiedCapabilities returns the server-backed conversation reads covered
-// by the controlled SDK/server integration gate. Unread counts are local SDK
-// state and remain unavailable until a server-backed mapping exists.
-func VerifiedCapabilities(sdkVersion string) map[string]service.Capability {
-	capabilities := make(map[string]service.Capability, 3)
-	for _, method := range []string{ListMethod, GetMethod, SearchMethod} {
-		capabilities[method] = service.Capability{Method: method, Scope: ReadScope, Status: "available", SDKVersion: sdkVersion}
-	}
-	return capabilities
-}
 
 type Conversation struct {
 	ID            string    `json:"id"`
@@ -67,13 +54,11 @@ type Source interface {
 	List(context.Context) ([]Conversation, error)
 	Get(context.Context, string) (Conversation, error)
 	Search(context.Context, string) ([]Conversation, error)
-	Unread(context.Context) (int, error)
 }
 
 type Options struct {
-	ProfileID    string
-	Stale        func() bool
-	Capabilities map[string]service.Capability
+	ProfileID string
+	Stale     func() bool
 }
 
 type Service struct {
@@ -91,31 +76,14 @@ func New(source Source, options Options) (*Service, error) {
 	if options.Stale == nil {
 		options.Stale = func() bool { return false }
 	}
-	if options.Capabilities == nil {
-		options.Capabilities = map[string]service.Capability{}
-	}
 	return &Service{source: source, options: options}, nil
 }
 
-func (s *Service) capability(method string) service.Capability {
-	if item, ok := s.options.Capabilities[method]; ok {
-		return item
-	}
-	return service.Capability{Method: method, Scope: ReadScope, Status: "not_validated", Reason: "method has no verified capability entry"}
+func (s *Service) meta() service.Meta {
+	return service.NewMeta(s.options.ProfileID, s.options.Stale())
 }
 
-func (s *Service) authorize(access service.Access, method string, targets ...string) (service.Meta, error) {
-	capability := s.capability(method)
-	if capability.Status != "available" {
-		return service.Meta{}, fmt.Errorf("%w: %s", service.ErrCapabilityUnavailable, capability.Status)
-	}
-	if err := access.Authorize(method, capability.Scope, conversationTargets(targets)...); err != nil {
-		return service.Meta{}, err
-	}
-	return service.NewMeta(s.options.ProfileID, s.options.Stale(), capability), nil
-}
-
-func (s *Service) List(ctx context.Context, access service.Access, input ListInput) (service.PageResult[Conversation], error) {
+func (s *Service) List(ctx context.Context, _ service.Access, input ListInput) (service.PageResult[Conversation], error) {
 	if err := service.ValidateLimit(input.Limit); err != nil {
 		return service.PageResult[Conversation]{}, err
 	}
@@ -124,29 +92,20 @@ func (s *Service) List(ctx context.Context, access service.Access, input ListInp
 	if err != nil {
 		return service.PageResult[Conversation]{}, err
 	}
-	meta, err := s.authorize(access, ListMethod)
-	if err != nil {
-		return service.PageResult[Conversation]{}, err
-	}
 	items, err := s.source.List(ctx)
 	if err != nil {
 		return service.PageResult[Conversation]{}, fmt.Errorf("list conversations: %w", err)
 	}
-	items = restrict(items, access, ListMethod)
 	page, err := page(items, offset, input.Limit, query)
 	if err != nil {
 		return service.PageResult[Conversation]{}, err
 	}
-	return service.PageResult[Conversation]{Data: page, Meta: meta}, nil
+	return service.PageResult[Conversation]{Data: page, Meta: s.meta()}, nil
 }
 
-func (s *Service) Get(ctx context.Context, access service.Access, input GetInput) (service.Result[Conversation], error) {
+func (s *Service) Get(ctx context.Context, _ service.Access, input GetInput) (service.Result[Conversation], error) {
 	if strings.TrimSpace(input.ConversationID) == "" {
 		return service.Result[Conversation]{}, fmt.Errorf("%w: conversation ID is required", service.ErrInvalidArgument)
-	}
-	meta, err := s.authorize(access, GetMethod, input.ConversationID)
-	if err != nil {
-		return service.Result[Conversation]{}, err
 	}
 	item, err := s.source.Get(ctx, input.ConversationID)
 	if err != nil {
@@ -157,10 +116,10 @@ func (s *Service) Get(ctx context.Context, access service.Access, input GetInput
 	} else if item.ID != input.ConversationID {
 		return service.Result[Conversation]{}, fmt.Errorf("%w: source returned a different conversation", service.ErrTargetDenied)
 	}
-	return service.Result[Conversation]{Data: item, Meta: meta}, nil
+	return service.Result[Conversation]{Data: item, Meta: s.meta()}, nil
 }
 
-func (s *Service) Search(ctx context.Context, access service.Access, input SearchInput) (service.PageResult[Conversation], error) {
+func (s *Service) Search(ctx context.Context, _ service.Access, input SearchInput) (service.PageResult[Conversation], error) {
 	if strings.TrimSpace(input.Query) == "" || len(input.Query) > 256 {
 		return service.PageResult[Conversation]{}, fmt.Errorf("%w: search query must contain 1-256 characters", service.ErrInvalidArgument)
 	}
@@ -172,48 +131,15 @@ func (s *Service) Search(ctx context.Context, access service.Access, input Searc
 	if err != nil {
 		return service.PageResult[Conversation]{}, err
 	}
-	meta, err := s.authorize(access, SearchMethod)
-	if err != nil {
-		return service.PageResult[Conversation]{}, err
-	}
 	items, err := s.source.Search(ctx, input.Query)
 	if err != nil {
 		return service.PageResult[Conversation]{}, fmt.Errorf("search conversations: %w", err)
 	}
-	items = restrict(items, access, SearchMethod)
 	page, err := page(items, offset, input.Limit, query)
 	if err != nil {
 		return service.PageResult[Conversation]{}, err
 	}
-	return service.PageResult[Conversation]{Data: page, Meta: meta}, nil
-}
-
-func (s *Service) Unread(ctx context.Context, access service.Access) (service.Result[int], error) {
-	meta, err := s.authorize(access, UnreadMethod)
-	if err != nil {
-		return service.Result[int]{}, err
-	}
-	count, err := s.source.Unread(ctx)
-	if err != nil {
-		return service.Result[int]{}, fmt.Errorf("read unread count: %w", err)
-	}
-	if count < 0 {
-		return service.Result[int]{}, fmt.Errorf("%w: unread count is negative", service.ErrInvalidArgument)
-	}
-	return service.Result[int]{Data: count, Meta: meta}, nil
-}
-
-func restrict(items []Conversation, access service.Access, method string) []Conversation {
-	if access.Owner {
-		return items
-	}
-	result := make([]Conversation, 0, len(items))
-	for _, item := range items {
-		if access.Grant.AllowsTarget(method, grant.ConversationTarget(item.ID)) {
-			result = append(result, item)
-		}
-	}
-	return result
+	return service.PageResult[Conversation]{Data: page, Meta: s.meta()}, nil
 }
 
 func page(items []Conversation, offset, limit int, query string) (service.Page[Conversation], error) {
@@ -232,10 +158,10 @@ func page(items []Conversation, offset, limit int, query string) (service.Page[C
 }
 
 func (s *Service) Methods() []proxy.Method {
-	wrap := func(name, scope string, targets func(json.RawMessage) ([]string, error), handle func(context.Context, contracts.Request, grant.Grant) (interface{}, error)) proxy.Method {
-		return proxy.Method{Name: name, Scope: scope, Meta: func() contracts.Meta {
-			return service.ContractMeta(service.NewMeta(s.options.ProfileID, s.options.Stale(), s.capability(name)))
-		}, Targets: targets, Handle: func(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {
+	wrap := func(name string, handle func(context.Context, contracts.Request, grant.Grant) (interface{}, error)) proxy.Method {
+		return proxy.Method{Name: name, Meta: func() contracts.Meta {
+			return service.ContractMeta(s.meta())
+		}, Handle: func(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {
 			value, err := handle(ctx, request, item)
 			if err != nil {
 				return nil, proxy.Failure(contracts.CodePolicyDenied, err.Error())
@@ -243,50 +169,30 @@ func (s *Service) Methods() []proxy.Method {
 			return json.Marshal(value)
 		}}
 	}
-	noTargets := func(json.RawMessage) ([]string, error) { return nil, nil }
-	getTargets := func(raw json.RawMessage) ([]string, error) {
-		var input GetInput
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return nil, err
-		}
-		return []string{grant.ConversationTarget(input.ConversationID)}, nil
-	}
 	return []proxy.Method{
-		wrap(ListMethod, s.capability(ListMethod).Scope, noTargets, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
+		wrap(ListMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
 			var input ListInput
 			if err := json.Unmarshal(request.Params, &input); err != nil {
 				return nil, service.ErrInvalidArgument
 			}
-			result, err := s.List(ctx, service.ProviderAccess(item, s.capability(ListMethod)), input)
+			result, err := s.List(ctx, service.ProviderAccess(item), input)
 			return result.Data, err
 		}),
-		wrap(GetMethod, s.capability(GetMethod).Scope, getTargets, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
+		wrap(GetMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
 			var input GetInput
 			if err := json.Unmarshal(request.Params, &input); err != nil {
 				return nil, service.ErrInvalidArgument
 			}
-			result, err := s.Get(ctx, service.ProviderAccess(item, s.capability(GetMethod)), input)
+			result, err := s.Get(ctx, service.ProviderAccess(item), input)
 			return result.Data, err
 		}),
-		wrap(SearchMethod, s.capability(SearchMethod).Scope, noTargets, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
+		wrap(SearchMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
 			var input SearchInput
 			if err := json.Unmarshal(request.Params, &input); err != nil {
 				return nil, service.ErrInvalidArgument
 			}
-			result, err := s.Search(ctx, service.ProviderAccess(item, s.capability(SearchMethod)), input)
-			return result.Data, err
-		}),
-		wrap(UnreadMethod, s.capability(UnreadMethod).Scope, noTargets, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			result, err := s.Unread(ctx, service.ProviderAccess(item, s.capability(UnreadMethod)))
+			result, err := s.Search(ctx, service.ProviderAccess(item), input)
 			return result.Data, err
 		}),
 	}
-}
-
-func conversationTargets(ids []string) []string {
-	targets := make([]string, 0, len(ids))
-	for _, id := range ids {
-		targets = append(targets, grant.ConversationTarget(id))
-	}
-	return targets
 }

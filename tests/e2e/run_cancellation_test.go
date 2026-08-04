@@ -46,14 +46,13 @@ func TestGrantExpiryCancelsRunAndClosesProxyE2E(t *testing.T) {
 	provider := newCancellationProvider()
 	tools := grant.NewStore()
 	_, credential, err := tools.Issue(grant.Policy{
-		RunID:            "run-expired",
-		ProfileID:        "work",
-		Principal:        "provider",
-		Methods:          []string{"message.history"},
-		Scopes:           []string{"message.read"},
-		TargetAllowlists: map[string][]string{"message.history": {grant.ConversationTarget("conversation-1")}},
-		ExpiresAt:        time.Now().Add(30 * time.Millisecond),
-		RateBudget:       1,
+		RunID:     "run-expired",
+		ProfileID: "work",
+		Principal: "provider",
+		Methods:   []string{"message.history"},
+
+		ExpiresAt:  time.Now().Add(30 * time.Millisecond),
+		RateBudget: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -153,17 +152,8 @@ func (h *cancellationInbound) close(t *testing.T) {
 
 func cancellationMethod() proxy.Method {
 	return proxy.Method{
-		Name:  "message.history",
-		Scope: "message.read",
-		Targets: func(raw json.RawMessage) ([]string, error) {
-			var input struct {
-				ConversationID string `json:"conversation_id"`
-			}
-			if err := json.Unmarshal(raw, &input); err != nil {
-				return nil, err
-			}
-			return []string{grant.ConversationTarget(input.ConversationID)}, nil
-		},
+		Name: "message.history",
+
 		Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
 			return json.RawMessage(`{"items":[]}`), nil
 		},
@@ -219,10 +209,25 @@ func assertNoCancellationReply(t *testing.T, deliveries <-chan reply.Delivery) {
 	}
 }
 
-type cancellationSender struct{ deliveries chan reply.Delivery }
+type cancellationSender struct {
+	deliveries chan reply.Delivery
+	stream     reply.StreamDelivery
+}
 
 func (s *cancellationSender) Reply(_ context.Context, delivery reply.Delivery) error {
 	s.deliveries <- delivery
+	return nil
+}
+
+func (s *cancellationSender) StartStream(_ context.Context, delivery reply.StreamDelivery) (reply.StreamRef, error) {
+	s.stream = delivery
+	return reply.StreamRef{ConversationID: delivery.ConversationID, ClientMsgID: delivery.ClientMsgID}, nil
+}
+
+func (s *cancellationSender) AppendStream(_ context.Context, appendValue reply.StreamAppend) error {
+	if appendValue.End {
+		s.deliveries <- reply.Delivery{EventID: s.stream.EventID, ConversationID: s.stream.ConversationID}
+	}
 	return nil
 }
 

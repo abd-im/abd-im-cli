@@ -148,9 +148,8 @@ func newRuntimeHarness(t *testing.T, databasePath, lockPath, socketPath string) 
 		t.Fatalf("new run manager: %v", err)
 	}
 	method := proxy.Method{
-		Name:    "message.history",
-		Scope:   "message.read",
-		Allowed: func() bool { return true },
+		Name: "message.history",
+
 		Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
 			return json.RawMessage(`{"items":[]}`), nil
 		},
@@ -249,10 +248,33 @@ func (h *runtimeHarness) close(t *testing.T) {
 
 type e2eSender struct {
 	deliveries chan reply.Delivery
+	stream     reply.StreamDelivery
+	text       string
 }
 
 func (s *e2eSender) Reply(_ context.Context, delivery reply.Delivery) error {
 	s.deliveries <- delivery
+	return nil
+}
+
+func (s *e2eSender) StartStream(_ context.Context, delivery reply.StreamDelivery) (reply.StreamRef, error) {
+	s.stream = delivery
+	s.text = delivery.Content
+	return reply.StreamRef{ConversationID: delivery.ConversationID, ClientMsgID: delivery.ClientMsgID}, nil
+}
+
+func (s *e2eSender) AppendStream(_ context.Context, appendValue reply.StreamAppend) error {
+	for _, packet := range appendValue.Packets {
+		s.text += packet
+	}
+	if appendValue.End {
+		s.deliveries <- reply.Delivery{
+			ProfileID: s.stream.ProfileID, EventID: s.stream.EventID,
+			ConversationID: s.stream.ConversationID, TriggerMessageID: s.stream.TriggerMessageID,
+			RecipientID: s.stream.RecipientID, GroupID: s.stream.GroupID,
+			OperationID: s.stream.ClientMsgID, Text: s.text,
+		}
+	}
 	return nil
 }
 

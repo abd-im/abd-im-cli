@@ -8,3 +8,4 @@
 | ABD-048 | 2026-08-01 | [`2026-08-01-ABD-048-media-messages.md`](2026-08-01-ABD-048-media-messages.md) |
 | ABD-052 | 2026-08-01 | [`2026-08-01-ABD-052-group-membership.md`](2026-08-01-ABD-052-group-membership.md) |
 | ABD-053 | 2026-08-01 | [`2026-08-01-ABD-053-group-administration.md`](2026-08-01-ABD-053-group-administration.md) |
+| ABD-064 | 2026-08-04 | [`2026-08-04-ABD-064-acp-v1-sdk-provider.md`](2026-08-04-ABD-064-acp-v1-sdk-provider.md) |

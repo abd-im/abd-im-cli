@@ -10,72 +10,55 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
-func TestProxyOnlyInvokesAllowedTypedMethodsAndTargets(t *testing.T) {
+func TestProxyOnlyInvokesGrantedRegisteredMethods(t *testing.T) {
 	store := grant.NewStore()
 	_, credential, err := store.Issue(grant.Policy{
-		RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{"conversation.get"}, Scopes: []string{"conversation.read"}, TargetAllowlists: map[string][]string{"conversation.get": {grant.ConversationTarget("conversation-1")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 2,
+		RunID: "run-1", ProfileID: "work", Principal: "provider",
+		Methods: []string{"conversation.get"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 2,
 	})
 	if err != nil {
-		t.Fatalf("Issue() error = %v", err)
+		t.Fatal(err)
 	}
 	calls := 0
-	proxy, err := New(store, "run-1", "work", []Method{{
-		Name:  "conversation.get",
-		Scope: "conversation.read",
-		Targets: func(params json.RawMessage) ([]string, error) {
-			var input struct {
-				ConversationID string `json:"conversation_id"`
-			}
-			if err := json.Unmarshal(params, &input); err != nil {
-				return nil, err
-			}
-			return []string{grant.ConversationTarget(input.ConversationID)}, nil
-		},
+	tool, err := New(store, "run-1", "work", []Method{{
+		Name: "conversation.get",
 		Handle: func(_ context.Context, _ contracts.Request, _ grant.Grant) (json.RawMessage, error) {
 			calls++
 			return json.RawMessage(`{"id":"conversation-1"}`), nil
 		},
 	}})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatal(err)
 	}
-	request := func(method, target string) contracts.Request {
-		return contracts.Request{APIVersion: contracts.APIVersionV1, RequestID: method + "-request", ProfileID: "work", Method: method, Params: json.RawMessage(`{"conversation_id":"` + target + `"}`), Grant: credential}
+	request := func(method string) contracts.Request {
+		return contracts.Request{APIVersion: contracts.APIVersionV1, RequestID: method, ProfileID: "work", Method: method, Params: json.RawMessage(`{}`), Grant: credential}
 	}
-	response, err := proxy.Call(context.Background(), request("conversation.get", "conversation-1"))
+	response, err := tool.Call(context.Background(), request("conversation.get"))
 	if err != nil || !response.OK || calls != 1 {
 		t.Fatalf("allowed Call() = %+v, %v; calls = %d", response, err, calls)
 	}
-	response, err = proxy.Call(context.Background(), request("conversation.get", "conversation-2"))
+	response, err = tool.Call(context.Background(), request("daemon.shutdown"))
 	if err != nil || response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || calls != 1 {
-		t.Fatalf("target denial = %+v, %v; calls = %d", response, err, calls)
-	}
-	response, err = proxy.Call(context.Background(), request("conversation.get", ""))
-	if err != nil || response.Error == nil || response.Error.Code != contracts.CodeInvalidArgument || calls != 1 {
-		t.Fatalf("missing target = %+v, %v; calls = %d", response, err, calls)
-	}
-	response, err = proxy.Call(context.Background(), request("daemon.shutdown", "conversation-1"))
-	if err != nil || response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || calls != 1 {
-		t.Fatalf("controller denial = %+v, %v; calls = %d", response, err, calls)
+		t.Fatalf("unregistered method = %+v, %v; calls = %d", response, err, calls)
 	}
 }
 
-func TestProxyCloseAndGrantExpiryFailClosed(t *testing.T) {
+func TestProxyCloseFailsClosed(t *testing.T) {
 	store := grant.NewStore()
-	_, credential, err := store.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{"profile.get"}, Scopes: []string{"profile.read"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 1})
+	_, credential, err := store.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{"profile.get"}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 1})
 	if err != nil {
-		t.Fatalf("Issue() error = %v", err)
+		t.Fatal(err)
 	}
-	proxy, err := New(store, "run-1", "work", []Method{{Name: "profile.get", Scope: "profile.read", Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
+	tool, err := New(store, "run-1", "work", []Method{{Name: "profile.get", Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
 		return json.RawMessage(`{}`), nil
 	}}})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatal(err)
 	}
-	if err := proxy.Close(context.Background()); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	if err := tool.Close(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	response, err := proxy.Call(context.Background(), contracts.Request{APIVersion: contracts.APIVersionV1, RequestID: "req-1", ProfileID: "work", Method: "profile.get", Params: json.RawMessage(`{}`), Grant: credential})
+	response, err := tool.Call(context.Background(), contracts.Request{APIVersion: contracts.APIVersionV1, RequestID: "req-1", ProfileID: "work", Method: "profile.get", Params: json.RawMessage(`{}`), Grant: credential})
 	if err != nil || response.Error == nil || response.Error.Code != contracts.CodeGrantInvalid {
 		t.Fatalf("Call() after Close = %+v, %v", response, err)
 	}

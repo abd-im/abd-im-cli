@@ -20,7 +20,6 @@ const (
 	RunCancelMethod            = "run.cancel"
 	OperationGetMethod         = "operation.get"
 	OperationMarkUnknownMethod = "operation.mark_unknown"
-	ownerOperationsScope       = "owner.operations"
 )
 
 var (
@@ -265,8 +264,8 @@ func (s *Service) operation(ctx context.Context, input OperationInput) (control.
 	return s.store.OperationByID(ctx, s.profileID, input.OperationID)
 }
 
-func (s *Service) meta(method string) baseservice.Meta {
-	return baseservice.NewMeta(s.profileID, false, baseservice.Capability{Method: method, Scope: ownerOperationsScope, Status: "available"})
+func (s *Service) meta(string) baseservice.Meta {
+	return baseservice.NewMeta(s.profileID, false)
 }
 
 func terminal(status control.RunStatus) bool {

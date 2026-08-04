@@ -1,143 +1,103 @@
-# abdim-cli 架构
+# abdim 架构
 
-状态：实现架构说明
-
-本文件说明 `abdim-cli` 的组件职责、信任边界和当前代码落点。产品范围、接口契约和交付要求以 [`spec.md`](spec.md) 为准；发生冲突时，以规格为准。本文件不将尚未组装的组件描述为已可用功能。
-
-## 架构目标
-
-一个 daemon 只拥有一个 OpenIM profile 的 SDK 生命周期、本地控制库和运行时资源。Owner 经本地 RPC 使用 daemon；受限 provider 只经一次 run 私有的 typed tool proxy 使用被授权的能力。CLI、MCP 和 provider 都不直接初始化 SDK 或读取 SDK 数据库。
+## 当前结构
 
 ```text
-                        +----------------------+
-                        |     OpenIM Server     |
-                        +----------+-----------+
-                                   |
-                         SDK UserContext
-                                   |
- +----------------------+----------+-----------+----------------------+
- |                    abdim daemon                                |
- |                                                                  |
- |  bridge -> event ledger -> reply slot -> run manager -> provider |
- |     |          |               |              |                  |
- |  SDK lifecycle  control.db   operation      grant -> tool proxy  |
- |     |          |               |                         |        |
- |  profile lock   +---------------+-------------------------+        |
- +----------------------+-------------------------------+------------+
-                        |                               |
-               Unix socket RPC                  run-private proxy
-                        |                               |
-              owner CLI / owner MCP             current-user Codex
+OpenIM callback
+    -> event ledger
+    -> inbound policy
+    -> per-conversation run queue
+    -> Codex app-server / ACP Agent
+    -> event-bound Stream reply
+
+Agent
+    -> run-private abdim CLI
+    -> run-private Unix socket
+    -> typed IM handlers
+    -> daemon-owned OpenIM SDK/server client
 ```
 
-## 信任与所有权边界
+daemon 是唯一持有 OpenIM SDK、控制数据库和 owner socket 的进程。CLI 和
+Agent 都不直接打开 SDK 数据库。
 
-| 边界 | 持有者 | 规则 |
-| --- | --- | --- |
-| SDK `UserContext`、SDK 数据目录和 listener | daemon | 只通过 `bridge.LoginMgr` 创建和关闭；同 profile 由 lock 排他。 |
-| 控制面 SQLite | daemon | 仅保存控制元数据，不复制消息正文或 SDK 聊天库。 |
-| 本地管理接口 | owner CLI / owner MCP | 通过 daemon 的本地 RPC 调用 typed service；不提供 TCP 管理面。 |
-| provider 工具接口 | 单个 run | 只暴露 policy 为该 run 选择的静态 typed 方法；默认空集合，profile 显式启用后为全部 `available` 方法。 |
-| 远端副作用 | reply/action handler | 先记录 operation，再调用 SDK；不确定结果保持 `unknown`，不自动补发或重试。 |
+## Provider
 
-当前用户 Codex 不是 daemon 的管理接口客户端：正常 provider 调用只经每 run 私有 MCP bridge 和 grant-bound typed proxy。每个 run 使用新的 `CODEX_HOME`，复制当前用户的 Codex 登录材料和非 MCP 模型/供应商配置，剔除源 MCP 与 history 表后注入固定 run bridge。由于 daemon 与 Codex 使用同一 OS UID，这不是对恶意本地代码的文件系统隔离边界；本产品只适用于信任当前用户本机 Codex 的场景。
+- `codex` 直接启动 `codex app-server`。
+- `hermes` 和 `openclaw` 保留固定 ACP v1 启动入口，不支持任意 provider 命令。
+- 每个 run 都有独立工作目录、私有 socket、短期 grant 和允许方法快照。
+- Agent 只能通过注入的 `abdim` CLI 调用 IM 方法；owner 管理方法不会出现在
+  run 命令列表中。
 
-## 运行时闭环
+Codex app-server 使用 `approvalPolicy=never` 和
+`sandbox=danger-full-access`，因此命令、文件和网络工具不会被 adapter 全部禁用。
+permission 请求只回传 Codex 请求中的文件系统和网络范围。这个模式信任当前
+本机用户，不是同 UID 恶意进程的操作系统隔离。
 
-1. daemon 为 profile 创建私有目录和控制库，获取 profile lock，再按 `InitSDK -> InitResources -> SetEventListener -> Login` 启动 SDK。
-2. listener 只复制回调身份并交给事件账本。账本以 `profile_id + SDK dedup key` 去重，分配 daemon sequence，并持久化 event。
-3. 只有非 self 的有效私聊命中公开 policy；群聊和其他 session 被忽略。命中的 event 在 provider 开始前预留 `ReplySlot`，slot 固定 event、触发消息和来源 conversation，provider 无法覆盖回复目标。
-4. daemon 根据 profile 开关创建 grant：默认为空方法、单次预算；显式启用后选择固定 registry 中的全部方法，由 capability gate 决定 discovery，并按方法授予 typed target 通配、64 次预算和 32 MiB 附件额度。两种模式都绑定真实 sender、触发私聊消息窗口和有效期；run manager 同一 conversation 串行执行，并在 deadline、撤回、策略变化或 grant 失效时取消 turn。
-5. provider 返回 `final_text` 后，reply service 从持久化 slot 构造投递。它以 `profile + event_id + reply_slot` 创建 operation；已存在的 `confirmed`、`failed` 或 `unknown` operation 不会再次发送。
-6. daemon 关闭时停止新请求和新 run，取消未完成 turn，关闭 provider session、SDK 和本地 socket。重启差异只能记录为 `state.reconciled`。
+## 会话
 
-## 接口与数据
+OpenIM `conversation_id` 是会话隔离键：
 
-### 本地协议
+- event、reply slot 和 run 都记录 conversation ID。
+- 同一 conversation 的 run 排队执行，不与其他 conversation 混用队列。
+- 回复目标只来自持久化 reply slot，Agent 不能改写目标。
+- run 及其状态持久化，可供未来网页工作区列出、取消和展示历史状态。
 
-本地 RPC 和 tool proxy 共用 [`internal/contracts`](../internal/contracts) 的 v1 JSON envelope。请求包含 `api_version`、`request_id`、`profile_id`、`method` 和 `params`；受控调用另带不透明 `grant`，远端副作用另带 `idempotency_key`。响应始终包含同一版本和请求 ID，成功响应包含 `meta.profile_id`，typed read 还会返回 `schema`、`stale` 和 capability 状态。
+当前每个 run 新建一个 provider session；Codex thread 尚未跨多条 IM 消息复用。
+也就是说当前已经区分会话和回复边界，但还没有会话级 Agent 长期上下文。未来网页
+工作区应在现有 conversation/run 标识上增加 thread 复用，不需要改变 IM 工具边界。
 
-Unix 实现使用长度前缀帧和 owner-only Unix socket；Windows 的受限 ACL named pipe 是规格定义的对应实现。P1 不监听 loopback TCP。
+## 简单权限
 
-### 持久化模型
+权限只保留运行所需字段：
 
-`control.db` 中的关键实体是 `Profile`、`Event`、`ReplySlot`、`Grant` 和 `Operation`。其中 Event 只保存 conversation/message 标识和去重键；Operation 只保存 canonical 输入摘要。日志、审计和健康信息不得写入 token、消息正文、附件内容或完整本地路径。
+- `run_id`、`profile_id` 和调用者 principal。
+- 允许的 typed method 列表。
+- 过期时间和调用预算。
+- 当前 conversation 的消息读取窗口。
+- 附件字节上限。
 
-目录由 [`internal/profile`](../internal/profile) 统一生成：
+默认入站 run 的 method 列表为空，但仍可回复。执行
+`abdim inbound tools enable` 后，run 获得固定 registry 中可用的 IM 方法。
+proxy 每次调用只校验 credential、run、profile、method、有效期和预算；handler
+继续负责参数校验、消息窗口、IM 状态和副作用幂等。
 
-```text
-<config-dir>/abdim/profiles/<profile>.toml
-<data-dir>/abdim/profiles/<profile>/{sdk,control.db,attachments,logs}/
-<runtime-dir>/abdim/<profile>/{daemon.sock,daemon.lock,runs/}
-```
+## 持久化
 
-目录权限为 `0700`，socket、profile、token 和 daemon 日志文件为 `0600`。profile 只保存不透明凭据引用；账号密码不写入任何持久化模型。
+`control.db` 只保存运行控制数据：
 
-## 代码映射
+| 实体 | 用途 |
+| --- | --- |
+| `Event` | 入站去重、顺序和 conversation/message 标识。 |
+| `ReplySlot` | 把 run 回复固定到触发会话。 |
+| `Run` | conversation、event、状态和有限错误原因。 |
+| `Operation` | 写操作幂等状态：`confirmed`、`failed` 或 `unknown`。 |
+| `Attachment` | run 范围的不透明附件引用和额度。 |
+
+grant 只存在于 daemon 内存中，daemon 重启后不恢复旧 grant。旧数据库 migration 中
+保留已废弃的 `grants` 表，避免破坏已有 profile 数据库；生产代码不再读写它。
+
+## 代码位置
 
 | 路径 | 职责 |
 | --- | --- |
-| [`cmd/abdim`](../cmd/abdim) | `setup`、当前用户 daemon 生命周期、owner CLI 与 MCP 入口。 |
-| [`internal/profile`](../internal/profile) | profile 名称校验、私有路径、lock 与当前用户私有的 token 引用。 |
-| [`internal/connector`](../internal/connector) | 固定 ABD 账号登录、OpenIM 配置和 daemon-owned server source。 |
-| [`internal/bridge`](../internal/bridge) | 单 profile SDK 生命周期及状态转换。 |
-| [`internal/contracts`](../internal/contracts) | v1 RPC/event/provider 的共享 Go contract。 |
-| [`internal/ipc`](../internal/ipc) | Unix socket、长度前缀帧和请求/响应校验。 |
-| [`internal/control`](../internal/control) | SQLite migration 与控制面实体持久化。 |
-| [`internal/events`](../internal/events) | 回调去重、sequence、cursor、watch 和 reconciliation event。 |
-| [`internal/reply`](../internal/reply) | reply slot 与 event-bound、幂等的最终回复。 |
-| [`internal/daemon`](../internal/daemon) | 入站事件到 policy、run-private proxy、provider turn 和 event-bound reply 的生产编排；runtime 只在 SDK ready 后开放 owner-only socket。 |
-| [`internal/agent/grant`](../internal/agent/grant) | run 级授权的发行、过期、目标和速率检查。 |
-| [`internal/agent/proxy`](../internal/agent/proxy) | provider 的 run-private typed tool 边界。 |
-| [`internal/agent/run`](../internal/agent/run) | per-conversation 排队、deadline、取消和 provider session 生命周期。 |
-| [`internal/agent/provider/codex`](../internal/agent/provider/codex) | 固定 `codex app-server --listen stdio://` 的 JSON-RPC session、取消和审批拒绝。 |
-| [`internal/capability`](../internal/capability) | capability manifest；action handler 与 daemon-owned action source 按 IM 领域组织（当前为 [`conversation`](../internal/capability/conversation)、[`friend`](../internal/capability/friend)、[`blacklist`](../internal/capability/blacklist)、[`group`](../internal/capability/group) 和 [`message`](../internal/capability/message)）。 |
-| [`internal/service`](../internal/service) | owner 查询和受限 grant 测试共用的 typed read service contract 及各领域实现；group source 使用 daemon SDK context 调用服务端 API，不触及 SDK 本地数据库。 |
-| [`internal/mcp`](../internal/mcp) | owner daemon adapter 使用固定 MCP `2026-07-28` stdio contract；run-private provider adapter 在握手时协商固定 Codex app-server 提供的 MCP 版本。 |
-| [`docs/CONNECTOR.md`](CONNECTOR.md) | 外部部署 connector 的配置边界、启动顺序和 capability 验证门禁。 |
-| [`.github/workflows`](../.github/workflows) 和 [`scripts/build-release.sh`](../scripts/build-release.sh) | PR/main CI、受控 OpenIM integration、tag 制品构建和 GitHub Release；不部署 daemon。 |
+| `cmd/abdim` | setup、daemon 生命周期、owner/run CLI。 |
+| `internal/agent/provider/codex` | Codex app-server adapter。 |
+| `internal/agent/provider/acp` | 其他 Agent 的 ACP v1 adapter。 |
+| `internal/agent/run` | conversation 队列、deadline 和取消。 |
+| `internal/agent/grant` | 内存 grant。 |
+| `internal/agent/access` | run 私有 socket 和 CLI 环境。 |
+| `internal/agent/proxy` | typed method 调用边界。 |
+| `internal/daemon` | 入站编排和 owner RPC。 |
+| `internal/control` | event、reply、run、operation 和 attachment 持久化。 |
+| `internal/commands` | owner/run CLI 的固定命令 schema。 |
+| `internal/service` | daemon-owned typed 读取服务。 |
+| `internal/capability` | IM 写操作 handlers。 |
 
-### P2/P3 Capability Ownership
+## 不变量
 
-下表是 P2/P3 能力的实现映射。`delivered` 表示 handler、授权规则和集成测试已交付；默认入站 policy 不发放这些方法，profile 显式启用 tools 后才可调用其中 capability 为 `available` 的方法。
-
-| 能力族 | 状态 | Capability handler | Daemon-owned source | Tool/CLI registration | 验证 |
-| --- | --- | --- | --- | --- | --- |
-| 附件基础设施 | 已交付；不直接公开 provider 方法 | `internal/capability/message` | `internal/control`、`internal/profile` | 不直接公开 provider 方法 | `tests/e2e` |
-| 消息控制 | delivered；默认 disabled | `internal/capability/message` | `internal/bridge/abdim`、`internal/connector` | internal provider registry | `internal/capability/message` unit + controlled integration |
-| 媒体与文件 | delivered；默认 disabled | `internal/capability/message` | `internal/bridge/abdim`、`internal/connector` | internal provider registry | unit/proxy + controlled SDK/server integration |
-| 会话设置 | delivered；默认 disabled | `internal/capability/conversation` | `internal/connector` | internal provider registry | `internal/capability/conversation` unit + controlled integration |
-| 好友关系 | delivered；默认 disabled | `internal/capability/friend` | `internal/connector` | internal provider registry | `internal/capability/friend` unit + controlled integration |
-| 黑名单管理 | delivered；默认 disabled | `internal/capability/blacklist` | `internal/connector` | internal provider registry | `internal/capability/blacklist` unit + controlled integration |
-| 群成员关系 | delivered；默认 disabled | `internal/capability/group` | `internal/connector` | internal provider registry | unit/proxy + controlled server integration |
-| 群管理 | delivered；默认 disabled | `internal/capability/group` | `internal/connector` | internal provider registry | unit/proxy + controlled server integration |
-
-### P4 Ownership
-
-| 能力族 | 状态 | 实现所有权 | 共享收口 | 验证 |
-| --- | --- | --- | --- | --- |
-| 多 provider | deferred | `internal/agent/provider` | provider registry、run construction | 暂不进入当前交付；保留单 Codex provider |
-| 兼容矩阵 | delivered | `tests/compatibility`、capability evidence contract | daemon manifest construction | fixed SDK/server/provider matrix + controlled OpenIM probe |
-| session migration | deferred | `internal/agent/provider`、`internal/agent/run` | session envelope/version registry | 依赖多 provider，暂不进入当前交付 |
-| run operations | delivered | `internal/agent/run`、`internal/operation`、owner service | local RPC typed dispatcher | owner authorization/cancellation/privacy e2e |
-
-## 当前实现状态
-
-`abdim setup` 以固定 ABD 登录协议换取 bot 的 canonical user ID 和 IM token，保存当前用户私有配置并启动后台 daemon。它不创建第二个 IM 身份、owner ID 或配对状态；setup 返回后，非 bot 自己发送的有效私聊可创建默认 reply-only run，群聊默认忽略。`abdim inbound tools enable|disable|status` 管理 profile 级工具开关，修改时自动重启正在运行的 daemon。公开生命周期由 `start`、`stop`、`restart` 和 `status` 管理，低层 daemon 装配入口只供二进制内部自重启。架构中的 owner 仅表示运行 daemon 的本机 OS 用户及其管理接口。
-
-后台 daemon 持有 SDK、控制库、owner socket、run manager 和固定 Codex App Server adapter。它从当前用户 `PATH` 解析 `codex`，从 `CODEX_HOME`（默认 `~/.codex`）复制登录材料和非 MCP 模型/供应商配置到每个 run 的独立 `CODEX_HOME`；源 Codex MCP 与 history 表不继承，run 只获得固定 MCP 配置、Unix bridge 和 grant。adapter 拒绝文件和命令审批，并在取消时销毁进程组与 run 目录。
-
-所有 P1 typed read 都经固定 server source 提供，不读取 SDK 本地数据库，并从 owner CLI/owner MCP 或显式启用的入站 grant 对外开放。内部 action handler 已包括群创建、成员关系和群资料/禁言/群主转让、文本/控制/媒体消息、会话设置、好友和黑名单；每项均经 method-scoped target、operation/idempotency guard 和未知结果 fail-closed 保护。媒体内容只在 profile 私有目录和 daemon 内 file handle 中流转，control DB 只保存不透明引用和约束 metadata。群成员和群管理动作以固定 server endpoint 验证角色和成员状态，不调用会同步本地状态的 SDK Group API。默认入站 run 使用空 methods/scopes 和单次预算；显式启用后使用 method-scoped typed target 通配，但消息读取仍固定为触发私聊中触发消息之前的窗口。不存在跳过 target 或消息窗口校验的 full-access 分支。`conversation.unread` 因服务端未公开该值而保持 `not_validated`。
-
-`available` 必须由固定 SDK/server/provider 组合的完整 controlled integration gate 证明，不能由 manifest 静态声明替代。daemon 启动时将实际 MCP/SDK 组合与固定 evidence 精确匹配；未命中时 action manifest 自动降为 `not_validated`。即使 method 为 `available`，仍需 profile 开关和 admission policy 共同选择才会进入 run。run/operation 诊断只经 owner local service 暴露，provider tool registry 明确排除这些方法。
-
-交付自动化将普通 CI、会产生 OpenIM 测试数据的受控 integration，以及 tag 制品发布分离。CI 仅使用无凭据测试和 fake provider；受控 integration 只从受保护 GitHub environment 读取短期 OpenIM token；tag workflow 只创建 GitHub Release，不拥有 daemon 主机或 deployment 凭据。具体配置和发布步骤见 [`RELEASING.md`](RELEASING.md)。
-
-## 架构不变量
-
-- 一个 profile 同时只能由一个 daemon 持有 SDK、控制库和运行时目录。
-- 入站不配置第二个身份边界；任何能私聊 bot 的账号都能触发 run。默认 run 无 IM tools；profile 显式启用后，每个私聊 sender 都获得全部已验证 tools，因此该模式只适用于受控 bot。群聊和 self event 不触发。
-- 正常 provider MCP 调用不能选择 event-bound reply conversation、调用任意 RPC/SDK 方法，或绕过 grant 的 method-scoped typed target 和消息读取窗口；target 固定编码为 `conversation:<id>`、`group:<id>`、`message:<id>` 或 `user:<id>`，启用模式的通配仍逐方法生效。当前用户模式不把相同 OS UID 视为对恶意本地代码的安全边界。
-- 同一入站 event 只有一个账本记录和一个 reply slot；同一 conversation 的 provider turn 串行。
-- 所有远端副作用都以 scope 和 idempotency key 绑定 operation；`unknown` 是终态，需要查询而不是新建请求。
-- capability 只有同时被 manifest、admission policy 和 grant 允许时才可供 provider 使用；owner 也只能经 typed 服务访问公开读取能力。
+- 一个 profile 同时只运行一个 daemon。
+- 一条入站 event 只创建一个 reply slot；回复不能跨 conversation。
+- provider 不能调用 owner 管理方法或未授予的 IM method。
+- 消息历史不能越过 run 的 conversation 和消息窗口。
+- 远端写操作不自动重试 `unknown` 结果。
+- 控制数据库和日志不保存 token、完整 prompt 或 Agent 输出。

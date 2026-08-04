@@ -58,6 +58,8 @@ type userContext interface {
 	SendFileMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string, string) error
 	SendSoundMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, int64, string, string) error
 	SendVideoMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, int64, string, string, string) error
+	StartStreamMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string, string, string) (string, error)
+	AppendStreamMessage(context.Context, string, string, int64, []string, bool) error
 	Logout(context.Context) error
 	UnInitSDK()
 }
@@ -65,6 +67,20 @@ type userContext interface {
 type sdkUserContext struct{ *open_im_sdk.UserContext }
 
 func newSDKUserContext() userContext { return sdkUserContext{open_im_sdk.NewLoginMgr()} }
+
+func (u sdkUserContext) StartStreamMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, streamType, content, clientMsgID, recipientID, groupID string) (string, error) {
+	sourceID := recipientID
+	sessionType := pbconstant.SingleChatType
+	if groupID != "" {
+		sourceID = groupID
+		sessionType = pbconstant.ReadGroupChatType
+	}
+	conversationID := u.Conversation().GetConversationIDBySessionType(ctx, sourceID, sessionType)
+	if err := u.SendStreamMessage(ctx, callback, streamType, content, clientMsgID, recipientID, groupID); err != nil {
+		return "", err
+	}
+	return conversationID, nil
+}
 
 func (u sdkUserContext) SendAtMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, text, groupID string, mentionUserIDs []string) error {
 	message, err := u.Conversation().CreateTextAtMessage(ctx, text, mentionUserIDs, nil, nil)
@@ -150,7 +166,7 @@ func (u sdkUserContext) SendVideoMessage(ctx context.Context, callback open_im_s
 }
 
 // Adapter is the sole owner of one SDK UserContext. Its Context method is for
-// daemon-internal typed services only; CLI, MCP, and providers never receive
+// daemon-internal typed services only; CLI and providers never receive
 // it.
 type Adapter struct {
 	profileID string
@@ -355,6 +371,61 @@ func (a *Adapter) Reply(ctx context.Context, delivery reply.Delivery) error {
 	}
 }
 
+func (a *Adapter) StartStream(ctx context.Context, delivery reply.StreamDelivery) (reply.StreamRef, error) {
+	if err := contextError(ctx); err != nil {
+		return reply.StreamRef{}, err
+	}
+	if delivery.Type == "" || delivery.Content == "" || delivery.ClientMsgID == "" || delivery.ConversationID == "" ||
+		(delivery.RecipientID == "" && delivery.GroupID == "") || (delivery.RecipientID != "" && delivery.GroupID != "") {
+		return reply.StreamRef{}, errors.New("invalid event-bound stream delivery")
+	}
+	user, err := a.currentUser()
+	if err != nil {
+		return reply.StreamRef{}, err
+	}
+	callback := newSendCallback()
+	config := a.config
+	replyContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
+	conversationID, err := user.StartStreamMessage(ccontext.WithOperationID(replyContext, uuid.NewString()), callback,
+		delivery.Type, delivery.Content, delivery.ClientMsgID, delivery.RecipientID, delivery.GroupID)
+	if err != nil {
+		return reply.StreamRef{}, errors.New("OpenIM stream submission failed")
+	}
+	if conversationID != delivery.ConversationID {
+		return reply.StreamRef{}, errors.New("OpenIM stream conversation does not match reply slot")
+	}
+	select {
+	case err := <-callback.done:
+		if err != nil {
+			return reply.StreamRef{}, err
+		}
+		return reply.StreamRef{ConversationID: conversationID, ClientMsgID: delivery.ClientMsgID}, nil
+	case <-ctx.Done():
+		return reply.StreamRef{}, reply.ErrOutcomeUnknown
+	}
+}
+
+func (a *Adapter) AppendStream(ctx context.Context, appendValue reply.StreamAppend) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if appendValue.ConversationID == "" || appendValue.ClientMsgID == "" || appendValue.StartIndex < 0 ||
+		(len(appendValue.Packets) == 0 && !appendValue.End) {
+		return errors.New("invalid event-bound stream append")
+	}
+	user, err := a.currentUser()
+	if err != nil {
+		return err
+	}
+	config := a.config
+	replyContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
+	if err := user.AppendStreamMessage(ccontext.WithOperationID(replyContext, uuid.NewString()), appendValue.ConversationID,
+		appendValue.ClientMsgID, appendValue.StartIndex, appendValue.Packets, appendValue.End); err != nil {
+		return errors.New("OpenIM stream append failed")
+	}
+	return nil
+}
+
 // SendText delivers a grant-authorized text message through the daemon-owned
 // SDK context. Authorization, target selection, and idempotency are enforced
 // by the message capability handler before this method is reached.
@@ -383,8 +454,8 @@ func (a *Adapter) SendText(ctx context.Context, text, recipientID, groupID strin
 	}
 }
 
-// SendAt delivers a grant-authorized text message that mentions approved
-// users in one approved group. The message capability validates all targets
+// SendAt delivers a grant-authorized text message that mentions selected
+// users in one group. The message capability validates all targets
 // before this daemon-owned SDK call.
 func (a *Adapter) SendAt(ctx context.Context, text, groupID string, mentionUserIDs []string) error {
 	if err := contextError(ctx); err != nil {
@@ -661,7 +732,7 @@ func validMediaPayload(payload messagecapability.MediaPayload) bool {
 }
 
 // Context returns a daemon-private SDK context for a typed server API source.
-// The returned value must not cross an IPC, MCP, or provider boundary.
+// The returned value must not cross an IPC or provider boundary.
 func (a *Adapter) Context() context.Context {
 	config := a.config
 	return ccontext.WithInfo(context.Background(), &ccontext.GlobalConfig{

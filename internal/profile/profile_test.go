@@ -75,7 +75,7 @@ func TestFileStoreKeepsTokenOutOfProfile(t *testing.T) {
 	if reference != "file:work" {
 		t.Fatalf("reference = %q, want file:work", reference)
 	}
-	item := Profile{Name: "work", CredentialRef: reference, InboundToolsEnabled: true}
+	item := Profile{Name: "work", CredentialRef: reference, InboundToolsEnabled: true, Agent: DefaultAgent}
 	if err := Save(paths.ConfigFile, item); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -117,8 +117,24 @@ func TestLoadIgnoresRemovedPairingFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded, err := Load(path)
-	if err != nil || loaded.Name != "work" || loaded.Deployment.UserID != "bot-user" || loaded.InboundToolsEnabled {
+	if err != nil || loaded.Name != "work" || loaded.Deployment.UserID != "bot-user" || loaded.InboundToolsEnabled || loaded.Agent != DefaultAgent {
 		t.Fatalf("Load() = %#v, %v", loaded, err)
+	}
+}
+
+func TestNormalizeAgentAcceptsOnlyFixedProviders(t *testing.T) {
+	for _, value := range []string{"codex", "hermes", "openclaw"} {
+		if got, err := NormalizeAgent(value); err != nil || got != value {
+			t.Errorf("NormalizeAgent(%q) = %q, %v", value, got, err)
+		}
+	}
+	if got, err := NormalizeAgent(""); err != nil || got != DefaultAgent {
+		t.Fatalf("NormalizeAgent(empty) = %q, %v", got, err)
+	}
+	for _, value := range []string{"codex --dangerously-bypass", "/tmp/agent", "other"} {
+		if _, err := NormalizeAgent(value); !errors.Is(err, ErrInvalidAgent) {
+			t.Errorf("NormalizeAgent(%q) error = %v, want ErrInvalidAgent", value, err)
+		}
 	}
 }
 

@@ -11,7 +11,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -74,39 +73,25 @@ var mediaSpecs = []mediaSpec{
 
 // MediaHandler exposes the fixed image, file, sound, and video action family.
 type MediaHandler struct {
-	manifest    *capability.Manifest
 	guard       *operation.Guard
 	attachments *AttachmentStore
 	sender      MediaSender
 }
 
-func NewMedia(manifest *capability.Manifest, guard *operation.Guard, attachments *AttachmentStore, sender MediaSender) (*MediaHandler, error) {
-	if manifest == nil || guard == nil || attachments == nil || sender == nil {
-		return nil, errors.New("manifest, operation guard, attachment store, and media sender are required")
+func NewMedia(guard *operation.Guard, attachments *AttachmentStore, sender MediaSender) (*MediaHandler, error) {
+	if guard == nil || attachments == nil || sender == nil {
+		return nil, errors.New("operation guard, attachment store, and media sender are required")
 	}
-	return &MediaHandler{manifest: manifest, guard: guard, attachments: attachments, sender: sender}, nil
+	return &MediaHandler{guard: guard, attachments: attachments, sender: sender}, nil
 }
 
-// ProxyMethods returns the complete media capability family. Each method has
-// its own manifest scope and grant target check.
+// ProxyMethods returns the complete media capability family.
 func (h *MediaHandler) ProxyMethods() []proxy.Method {
 	methods := make([]proxy.Method, 0, len(mediaSpecs))
 	for _, value := range mediaSpecs {
 		spec := value
 		methods = append(methods, proxy.Method{
-			Name:    spec.method,
-			Scope:   spec.scope,
-			Allowed: func() bool { return h.manifest.Allows(spec.method, spec.scope) },
-			Targets: func(raw json.RawMessage) ([]string, error) {
-				input, err := parseMedia(raw, spec)
-				if err != nil {
-					return nil, err
-				}
-				if input.RecipientID != "" {
-					return []string{grant.UserTarget(input.RecipientID)}, nil
-				}
-				return []string{grant.GroupTarget(input.GroupID)}, nil
-			},
+			Name: spec.method,
 			Handle: func(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {
 				return h.handle(ctx, request, item, spec)
 			},

@@ -9,7 +9,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -41,16 +40,15 @@ type Source interface {
 }
 
 type Handler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	source   Source
+	guard  *operation.Guard
+	source Source
 }
 
-func New(manifest *capability.Manifest, guard *operation.Guard, source Source) (*Handler, error) {
-	if manifest == nil || guard == nil || source == nil {
-		return nil, errors.New("manifest, operation guard, and blacklist source are required")
+func New(guard *operation.Guard, source Source) (*Handler, error) {
+	if guard == nil || source == nil {
+		return nil, errors.New("operation guard and blacklist source are required")
 	}
-	return &Handler{manifest: manifest, guard: guard, source: source}, nil
+	return &Handler{guard: guard, source: source}, nil
 }
 
 // ProxyMethods returns the complete static blacklist action surface.
@@ -63,22 +61,11 @@ func (h *Handler) ProxyMethods() []proxy.Method {
 
 func (h *Handler) proxyMethod(method, scope string) proxy.Method {
 	return proxy.Method{
-		Name:    method,
-		Scope:   scope,
-		Allowed: func() bool { return h.manifest.Allows(method, scope) },
-		Targets: targets,
+		Name: method,
 		Handle: func(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {
 			return h.handle(ctx, method, scope, request)
 		},
 	}
-}
-
-func targets(raw json.RawMessage) ([]string, error) {
-	input, err := parse(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.UserTarget(input.UserID)}, nil
 }
 
 func (h *Handler) handle(ctx context.Context, method, scope string, request contracts.Request) (json.RawMessage, error) {

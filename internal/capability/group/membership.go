@@ -8,7 +8,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -72,66 +71,24 @@ type MembershipSource interface {
 // MembershipHandler exposes the fixed group membership action surface to one
 // run-scoped proxy.
 type MembershipHandler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	source   MembershipSource
+	guard  *operation.Guard
+	source MembershipSource
 }
 
-func NewMembership(manifest *capability.Manifest, guard *operation.Guard, source MembershipSource) (*MembershipHandler, error) {
-	if manifest == nil || guard == nil || source == nil {
-		return nil, errors.New("manifest, operation guard, and group membership source are required")
+func NewMembership(guard *operation.Guard, source MembershipSource) (*MembershipHandler, error) {
+	if guard == nil || source == nil {
+		return nil, errors.New("operation guard and group membership source are required")
 	}
-	return &MembershipHandler{manifest: manifest, guard: guard, source: source}, nil
+	return &MembershipHandler{guard: guard, source: source}, nil
 }
 
 func (h *MembershipHandler) ProxyMethods() []proxy.Method {
 	return []proxy.Method{
-		{Name: JoinMethod, Scope: JoinScope, Allowed: func() bool { return h.manifest.Allows(JoinMethod, JoinScope) }, Targets: joinTargets, Handle: h.join},
-		{Name: LeaveMethod, Scope: LeaveScope, Allowed: func() bool { return h.manifest.Allows(LeaveMethod, LeaveScope) }, Targets: leaveTargets, Handle: h.leave},
-		{Name: InviteMembersMethod, Scope: InviteMembersScope, Allowed: func() bool { return h.manifest.Allows(InviteMembersMethod, InviteMembersScope) }, Targets: inviteTargets, Handle: h.invite},
-		{Name: RemoveMembersMethod, Scope: RemoveMembersScope, Allowed: func() bool { return h.manifest.Allows(RemoveMembersMethod, RemoveMembersScope) }, Targets: removeTargets, Handle: h.remove},
+		{Name: JoinMethod, Handle: h.join},
+		{Name: LeaveMethod, Handle: h.leave},
+		{Name: InviteMembersMethod, Handle: h.invite},
+		{Name: RemoveMembersMethod, Handle: h.remove},
 	}
-}
-
-func joinTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseJoin(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.GroupTarget(input.GroupID)}, nil
-}
-
-func leaveTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseLeave(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.GroupTarget(input.GroupID)}, nil
-}
-
-func inviteTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseMembers(raw)
-	if err != nil {
-		return nil, err
-	}
-	return membersTargets(input), nil
-}
-
-func removeTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseMembers(raw)
-	if err != nil {
-		return nil, err
-	}
-	return membersTargets(input), nil
-}
-
-func membersTargets(input MembersInput) []string {
-	targets := make([]string, 0, len(input.UserIDs)+1)
-	targets = append(targets, grant.GroupTarget(input.GroupID))
-	for _, userID := range input.UserIDs {
-		targets = append(targets, grant.UserTarget(userID))
-	}
-	return targets
 }
 
 func (h *MembershipHandler) join(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {

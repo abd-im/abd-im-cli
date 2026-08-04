@@ -51,7 +51,7 @@ func e2eAttachmentGrant(t *testing.T, runID string) grant.Grant {
 	t.Helper()
 	issued, _, err := grant.NewStore().Issue(grant.Policy{
 		RunID: runID, ProfileID: "work", Principal: "provider",
-		Methods: []string{"message.send_file"}, Scopes: []string{"message.send_file"},
+		Methods:   []string{"message.send_file"},
 		ExpiresAt: time.Now().Add(time.Hour), RateBudget: 2, AttachmentByteLimit: 7,
 	})
 	if err != nil {

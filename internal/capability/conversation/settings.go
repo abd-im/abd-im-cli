@@ -10,7 +10,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -56,34 +55,22 @@ type SettingsSender interface {
 
 // SetPinnedHandler exposes one typed, grant-scoped conversation setting.
 type SetPinnedHandler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	sender   SettingsSender
+	guard  *operation.Guard
+	sender SettingsSender
 }
 
-func NewSetPinned(manifest *capability.Manifest, guard *operation.Guard, sender SettingsSender) (*SetPinnedHandler, error) {
-	if manifest == nil || guard == nil || sender == nil {
-		return nil, errors.New("manifest, operation guard, and conversation settings sender are required")
+func NewSetPinned(guard *operation.Guard, sender SettingsSender) (*SetPinnedHandler, error) {
+	if guard == nil || sender == nil {
+		return nil, errors.New("operation guard and conversation settings sender are required")
 	}
-	return &SetPinnedHandler{manifest: manifest, guard: guard, sender: sender}, nil
+	return &SetPinnedHandler{guard: guard, sender: sender}, nil
 }
 
 func (h *SetPinnedHandler) ProxyMethod() proxy.Method {
 	return proxy.Method{
-		Name:    SetPinnedMethod,
-		Scope:   SetPinnedScope,
-		Allowed: func() bool { return h.manifest.Allows(SetPinnedMethod, SetPinnedScope) },
-		Targets: setPinnedTargets,
-		Handle:  h.handle,
+		Name:   SetPinnedMethod,
+		Handle: h.handle,
 	}
-}
-
-func setPinnedTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseSetPinned(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.ConversationTarget(input.ConversationID)}, nil
 }
 
 func (h *SetPinnedHandler) handle(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {
@@ -102,34 +89,22 @@ func (h *SetPinnedHandler) handle(ctx context.Context, request contracts.Request
 // SetReceiveOptionHandler exposes one typed, grant-scoped conversation
 // setting. It cannot patch any other conversation property.
 type SetReceiveOptionHandler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	sender   SettingsSender
+	guard  *operation.Guard
+	sender SettingsSender
 }
 
-func NewSetReceiveOption(manifest *capability.Manifest, guard *operation.Guard, sender SettingsSender) (*SetReceiveOptionHandler, error) {
-	if manifest == nil || guard == nil || sender == nil {
-		return nil, errors.New("manifest, operation guard, and conversation settings sender are required")
+func NewSetReceiveOption(guard *operation.Guard, sender SettingsSender) (*SetReceiveOptionHandler, error) {
+	if guard == nil || sender == nil {
+		return nil, errors.New("operation guard and conversation settings sender are required")
 	}
-	return &SetReceiveOptionHandler{manifest: manifest, guard: guard, sender: sender}, nil
+	return &SetReceiveOptionHandler{guard: guard, sender: sender}, nil
 }
 
 func (h *SetReceiveOptionHandler) ProxyMethod() proxy.Method {
 	return proxy.Method{
-		Name:    SetReceiveOptionMethod,
-		Scope:   SetReceiveOptionScope,
-		Allowed: func() bool { return h.manifest.Allows(SetReceiveOptionMethod, SetReceiveOptionScope) },
-		Targets: setReceiveOptionTargets,
-		Handle:  h.handle,
+		Name:   SetReceiveOptionMethod,
+		Handle: h.handle,
 	}
-}
-
-func setReceiveOptionTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseSetReceiveOption(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.ConversationTarget(input.ConversationID)}, nil
 }
 
 func (h *SetReceiveOptionHandler) handle(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {

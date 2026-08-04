@@ -11,43 +11,21 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
 
-func TestBlacklistActionsRequireManifestAndMethodScopedUserTarget(t *testing.T) {
-	manifest, err := capability.New([]capability.Entry{
-		{Method: AddMethod, Scope: AddScope, Status: capability.Gated},
-		{Method: RemoveMethod, Scope: RemoveScope, Status: capability.Gated},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestBlacklistActions(t *testing.T) {
+
 	source := &fakeSource{blocked: map[string]bool{"user-1": true}}
-	handler, tool, credential := newTool(t, manifest, source)
+	handler, tool, credential := newTool(t, source)
 	call := func(method, key, userID string) contracts.Response {
 		t.Helper()
 		return callAction(t, tool, credential, method, key, Input{UserID: userID})
 	}
-	if response := call(AddMethod, "gated", "user-1"); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || source.adds != 0 {
-		t.Fatalf("gated blacklist.add = %+v, adds=%d", response, source.adds)
-	}
-
-	manifest, err = capability.New([]capability.Entry{
-		{Method: AddMethod, Scope: AddScope, Status: capability.Available},
-		{Method: RemoveMethod, Scope: RemoveScope, Status: capability.Available},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler, tool, credential = newTool(t, manifest, source)
 	if handler == nil {
 		t.Fatal("handler is nil")
-	}
-	if response := call(AddMethod, "outside", "user-2"); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || source.adds != 0 {
-		t.Fatalf("outside blacklist.add = %+v, adds=%d", response, source.adds)
 	}
 	if response := call(AddMethod, "allowed-add", "user-1"); !response.OK || source.adds != 1 || source.lastAdd != "user-1" {
 		t.Fatalf("allowed blacklist.add = %+v, source=%+v", response, source)
@@ -58,15 +36,9 @@ func TestBlacklistActionsRequireManifestAndMethodScopedUserTarget(t *testing.T) 
 }
 
 func TestBlacklistRemoveVerifiesExistingRelationshipBeforeMutation(t *testing.T) {
-	manifest, err := capability.New([]capability.Entry{
-		{Method: AddMethod, Scope: AddScope, Status: capability.Available},
-		{Method: RemoveMethod, Scope: RemoveScope, Status: capability.Available},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	source := &fakeSource{blocked: map[string]bool{}}
-	_, tool, credential := newTool(t, manifest, source)
+	_, tool, credential := newTool(t, source)
 	if response := callAction(t, tool, credential, RemoveMethod, "missing", Input{UserID: "user-1"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || source.checks != 1 || source.removes != 0 {
 		t.Fatalf("missing blacklist.remove = %+v, source=%+v", response, source)
 	}
@@ -77,15 +49,9 @@ func TestBlacklistRemoveVerifiesExistingRelationshipBeforeMutation(t *testing.T)
 }
 
 func TestBlacklistActionsPreserveIdempotencyAndUnknownOutcomes(t *testing.T) {
-	manifest, err := capability.New([]capability.Entry{
-		{Method: AddMethod, Scope: AddScope, Status: capability.Available},
-		{Method: RemoveMethod, Scope: RemoveScope, Status: capability.Available},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	source := &fakeSource{blocked: map[string]bool{"user-1": true}}
-	_, tool, credential := newTool(t, manifest, source)
+	_, tool, credential := newTool(t, source)
 	input := Input{UserID: "user-1"}
 	first := callAction(t, tool, credential, AddMethod, "same", input)
 	if !first.OK || source.adds != 1 {
@@ -121,7 +87,6 @@ func TestParseRejectsInvalidUserID(t *testing.T) {
 }
 
 func TestNewRequiresAllDependencies(t *testing.T) {
-	manifest, _ := capability.New(nil)
 	store, err := control.Open(filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -131,18 +96,15 @@ func TestNewRequiresAllDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := New(nil, guard, &fakeSource{}); err == nil {
-		t.Fatal("New(nil manifest) error = nil")
-	}
-	if _, err := New(manifest, nil, &fakeSource{}); err == nil {
+	if _, err := New(nil, &fakeSource{}); err == nil {
 		t.Fatal("New(nil guard) error = nil")
 	}
-	if _, err := New(manifest, guard, nil); err == nil {
+	if _, err := New(guard, nil); err == nil {
 		t.Fatal("New(nil source) error = nil")
 	}
 }
 
-func newTool(t *testing.T, manifest *capability.Manifest, source *fakeSource) (*Handler, *proxy.Proxy, string) {
+func newTool(t *testing.T, source *fakeSource) (*Handler, *proxy.Proxy, string) {
 	t.Helper()
 	store, err := control.Open(filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
@@ -153,7 +115,7 @@ func newTool(t *testing.T, manifest *capability.Manifest, source *fakeSource) (*
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := New(manifest, guard, source)
+	handler, err := New(guard, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,11 +125,7 @@ func newTool(t *testing.T, manifest *capability.Manifest, source *fakeSource) (*
 		ProfileID: "work",
 		Principal: "provider",
 		Methods:   []string{AddMethod, RemoveMethod},
-		Scopes:    []string{AddScope, RemoveScope},
-		TargetAllowlists: map[string][]string{
-			AddMethod:    {grant.UserTarget("user-1")},
-			RemoveMethod: {grant.UserTarget("user-1")},
-		},
+
 		ExpiresAt:  time.Now().Add(time.Hour),
 		RateBudget: 20,
 	})

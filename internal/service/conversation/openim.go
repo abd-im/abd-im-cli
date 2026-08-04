@@ -18,8 +18,7 @@ import (
 )
 
 var (
-	ErrNotFound          = errors.New("conversation not found")
-	ErrUnreadUnavailable = errors.New("server conversation API does not expose unread count")
+	ErrNotFound = errors.New("conversation not found")
 )
 
 // Client is the narrow authenticated server-read surface used by SDKSource.
@@ -207,9 +206,6 @@ func (s *SDKSource) Search(ctx context.Context, query string) ([]Conversation, e
 // Unread deliberately fails: OpenIM keeps unread counts in the local SDK
 // database, while the verified conversation endpoints only expose server-side
 // conversation settings. Its capability consequently remains not_validated.
-func (s *SDKSource) Unread(context.Context) (int, error) {
-	return 0, ErrUnreadUnavailable
-}
 
 func conversationsFromSDK(items []*pbconversation.Conversation) []Conversation {
 	result := make([]Conversation, 0, len(items))

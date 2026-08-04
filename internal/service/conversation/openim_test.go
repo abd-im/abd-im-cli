@@ -45,9 +45,6 @@ func TestSDKSourceUsesOnlyServerReadsAndMapsResponses(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(search, want[1:]) {
 		t.Fatalf("Search() = %#v, %v", search, err)
 	}
-	if _, err := source.Unread(context.Background()); !errors.Is(err, ErrUnreadUnavailable) {
-		t.Fatalf("Unread() error = %v", err)
-	}
 }
 
 func TestSDKSourceRejectsMissingConversation(t *testing.T) {

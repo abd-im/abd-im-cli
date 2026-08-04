@@ -10,29 +10,25 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
 
-func TestSendAtRequiresManifestAndMethodScopedGroupUserTargets(t *testing.T) {
-	manifest, _ := capability.New([]capability.Entry{{Method: AtMethod, Scope: AtScope, Status: capability.Gated}})
+func TestSendAt(t *testing.T) {
+
 	sender := &fakeAtSender{}
 	store, _ := control.Open(filepath.Join(t.TempDir(), "control.db"))
 	defer store.Close()
 	guard, _ := operation.NewGuard(store)
-	handler, _ := NewAt(manifest, guard, sender)
+	handler, _ := NewAt(guard, sender)
 	grants := grant.NewStore()
 	_, credential, _ := grants.Issue(grant.Policy{
 		RunID:     "run-1",
 		ProfileID: "work",
 		Principal: "provider",
 		Methods:   []string{AtMethod},
-		Scopes:    []string{AtScope},
-		TargetAllowlists: map[string][]string{
-			AtMethod: {grant.GroupTarget("group-1"), grant.UserTarget("user-1"), grant.UserTarget("user-2")},
-		},
+
 		ExpiresAt:  time.Now().Add(time.Hour),
 		RateBudget: 5,
 	})
@@ -51,19 +47,6 @@ func TestSendAtRequiresManifestAndMethodScopedGroupUserTargets(t *testing.T) {
 		return response
 	}
 	allowed := AtInput{Text: "hello", GroupID: "group-1", MentionUserIDs: []string{"user-1", "user-2"}}
-	if response := call("gated", allowed); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
-		t.Fatalf("gated send = %+v, calls=%d", response, sender.calls)
-	}
-
-	manifest, _ = capability.New([]capability.Entry{{Method: AtMethod, Scope: AtScope, Status: capability.Available}})
-	handler, _ = NewAt(manifest, guard, sender)
-	tool, _ = proxy.New(grants, "run-1", "work", []proxy.Method{handler.ProxyMethod()})
-	if response := call("outside-user", AtInput{Text: "hello", GroupID: "group-1", MentionUserIDs: []string{"user-3"}}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
-		t.Fatalf("outside user = %+v, calls=%d", response, sender.calls)
-	}
-	if response := call("outside-group", AtInput{Text: "hello", GroupID: "group-2", MentionUserIDs: []string{"user-1"}}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
-		t.Fatalf("outside group = %+v, calls=%d", response, sender.calls)
-	}
 	if response := call("allowed", allowed); !response.OK || sender.calls != 1 || sender.groupID != "group-1" || sender.text != "hello" || len(sender.mentionUserIDs) != 2 || sender.mentionUserIDs[0] != "user-1" || sender.mentionUserIDs[1] != "user-2" {
 		t.Fatalf("allowed send = %+v, sender=%+v", response, sender)
 	}
@@ -138,22 +121,19 @@ func TestParseAtRejectsInvalidTargetsAndMentions(t *testing.T) {
 
 func newAtTool(t *testing.T, sendErr error) (*proxy.Proxy, string, *fakeAtSender) {
 	t.Helper()
-	manifest, _ := capability.New([]capability.Entry{{Method: AtMethod, Scope: AtScope, Status: capability.Available}})
+
 	sender := &fakeAtSender{err: sendErr}
 	store, _ := control.Open(filepath.Join(t.TempDir(), "control.db"))
 	t.Cleanup(func() { _ = store.Close() })
 	guard, _ := operation.NewGuard(store)
-	handler, _ := NewAt(manifest, guard, sender)
+	handler, _ := NewAt(guard, sender)
 	grants := grant.NewStore()
 	_, credential, _ := grants.Issue(grant.Policy{
 		RunID:     "run-1",
 		ProfileID: "work",
 		Principal: "provider",
 		Methods:   []string{AtMethod},
-		Scopes:    []string{AtScope},
-		TargetAllowlists: map[string][]string{
-			AtMethod: {grant.GroupTarget("group-1"), grant.UserTarget("user-1")},
-		},
+
 		ExpiresAt:  time.Now().Add(time.Hour),
 		RateBudget: 5,
 	})

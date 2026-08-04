@@ -4,14 +4,12 @@ package conversation
 
 import (
 	"context"
-	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/service"
-	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
@@ -32,12 +30,12 @@ func TestOpenIMConversationReadsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := New(source, Options{ProfileID: "integration", Capabilities: VerifiedCapabilities(open_im_sdk.GetSdkVersion())})
+	reader, err := New(source, Options{ProfileID: "integration"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	owner := service.OwnerAccess(reader.capability(ListMethod))
+	owner := service.OwnerAccess()
 	list, err := reader.List(ctx, owner, ListInput{Limit: 1})
 	if err != nil || len(list.Data.Items) == 0 {
 		t.Fatalf("conversation.list = %#v, %v", list, err)
@@ -52,23 +50,20 @@ func TestOpenIMConversationReadsIntegration(t *testing.T) {
 	}
 
 	conversationID := list.Data.Items[0].ID
-	owner = service.OwnerAccess(reader.capability(GetMethod))
+	owner = service.OwnerAccess()
 	get, err := reader.Get(ctx, owner, GetInput{ConversationID: conversationID})
 	if err != nil || get.Data.ID != conversationID {
 		t.Fatalf("conversation.get = %#v, %v", get, err)
 	}
 	assertConversationIntegrationMeta(t, get.Meta, GetMethod)
 
-	owner = service.OwnerAccess(reader.capability(SearchMethod))
+	owner = service.OwnerAccess()
 	search, err := reader.Search(ctx, owner, SearchInput{Query: conversationID, Limit: 1})
 	if err != nil || len(search.Data.Items) == 0 || search.Data.Items[0].ID != conversationID {
 		t.Fatalf("conversation.search = %#v, %v", search, err)
 	}
 	assertConversationIntegrationMeta(t, search.Meta, SearchMethod)
 
-	if _, err := reader.Unread(ctx, service.OwnerAccess(service.Capability{})); !errors.Is(err, service.ErrCapabilityUnavailable) {
-		t.Fatalf("conversation.unread error = %v", err)
-	}
 }
 
 func conversationIntegrationEnv(t *testing.T, name string) string {
@@ -82,7 +77,7 @@ func conversationIntegrationEnv(t *testing.T, name string) string {
 
 func assertConversationIntegrationMeta(t *testing.T, meta service.Meta, method string) {
 	t.Helper()
-	if meta.Schema != service.SchemaVersion || meta.Stale || meta.Capability.Method != method || meta.Capability.Status != "available" || meta.Capability.SDKVersion != open_im_sdk.GetSdkVersion() {
+	if meta.Schema != service.SchemaVersion || meta.Stale || meta.ProfileID != "integration" {
 		t.Fatalf("%s response metadata is invalid", method)
 	}
 }

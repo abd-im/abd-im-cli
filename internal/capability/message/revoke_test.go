@@ -12,7 +12,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
@@ -22,23 +21,20 @@ import (
 	"github.com/openimsdk/protocol/sdkws"
 )
 
-func TestRevokeRequiresConversationAndMessageGrantTargets(t *testing.T) {
-	manifest, _ := capability.New([]capability.Entry{{Method: RevokeMethod, Scope: RevokeScope, Status: capability.Available}})
+func TestRevoke(t *testing.T) {
+
 	revoker := &fakeRevoker{}
 	store, _ := control.Open(filepath.Join(t.TempDir(), "control.db"))
 	defer store.Close()
 	guard, _ := operation.NewGuard(store)
-	handler, _ := NewRevoke(manifest, guard, revoker)
+	handler, _ := NewRevoke(guard, revoker)
 	grants := grant.NewStore()
-	_, credential, _ := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{RevokeMethod}, Scopes: []string{RevokeScope}, TargetAllowlists: map[string][]string{RevokeMethod: {grant.ConversationTarget("si_user-1_user-2"), grant.MessageTarget("message-1")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3})
+	_, credential, _ := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{RevokeMethod}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3})
 	tool, _ := proxy.New(grants, "run-1", "work", []proxy.Method{handler.ProxyMethod()})
 	call := func(key string, input RevokeInput) contracts.Response {
 		raw, _ := json.Marshal(input)
 		response, _ := tool.Call(context.Background(), contracts.Request{APIVersion: contracts.APIVersionV1, RequestID: key, ProfileID: "work", Method: RevokeMethod, Params: raw, Grant: credential, IdempotencyKey: key})
 		return response
-	}
-	if response := call("outside", RevokeInput{ConversationID: "si_user-1_user-2", MessageID: "message-2"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || revoker.calls != 0 {
-		t.Fatalf("outside revoke = %+v, calls=%d", response, revoker.calls)
 	}
 	if response := call("allowed", RevokeInput{ConversationID: "si_user-1_user-2", MessageID: "message-1"}); !response.OK || revoker.calls != 1 {
 		t.Fatalf("allowed revoke = %+v, calls=%d", response, revoker.calls)

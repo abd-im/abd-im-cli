@@ -96,8 +96,32 @@ func TestInboundReplyOnlyRunExposesNoTypedTools(t *testing.T) {
 	if methods := harness.provider.allowedMethods(); len(methods) != 0 {
 		t.Fatalf("reply-only provider methods = %v, want empty", methods)
 	}
-	if strings.Contains(harness.session.prompt(), "Use only the abdim MCP tools") {
-		t.Fatalf("reply-only prompt advertised tools: %q", harness.session.prompt())
+	if strings.Contains(harness.session.prompt(), "Use only the abdim CLI") {
+		t.Fatalf("reply-only prompt advertised CLI access: %q", harness.session.prompt())
+	}
+}
+
+func TestInboundStreamsProviderOutputIntoOneEventBoundMessage(t *testing.T) {
+	harness := newHarness(t, false)
+	defer harness.close(t)
+	harness.session.setReplyOnly()
+	harness.session.setOutputUpdates("hel", "hello", "hello world")
+	if _, err := harness.inbound.Process(context.Background(), inboundEvent("sdk-stream", "conversation-original", "message-trigger")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case delivery := <-harness.sender.deliveries:
+		if delivery.Text != "hello world" || delivery.ConversationID != "conversation-original" {
+			t.Fatalf("stream delivery = %#v", delivery)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stream did not finish")
+	}
+	harness.sender.mu.Lock()
+	starts, appends, ended := harness.sender.count, harness.sender.streamAppendCount, harness.sender.streamEnded
+	harness.sender.mu.Unlock()
+	if starts != 1 || appends != 2 || !ended {
+		t.Fatalf("stream starts=%d appends=%d ended=%t", starts, appends, ended)
 	}
 }
 
@@ -214,17 +238,15 @@ func TestInboundRejectsPolicyMethodsOutsideStaticRegistry(t *testing.T) {
 	}
 }
 
-func TestProviderVisibleMethodsFreezeVerifiedCapabilities(t *testing.T) {
+func TestProviderVisibleMethodsFreezesFixedRegistry(t *testing.T) {
 	methods := []proxy.Method{
-		{Name: "group.get", Meta: func() contracts.Meta { return contracts.Meta{Capability: &contracts.Capability{Status: "available"}} }},
-		{Name: "message.history", Meta: func() contracts.Meta {
-			return contracts.Meta{Capability: &contracts.Capability{Status: "not_validated"}}
-		}},
-		{Name: "group.create", Allowed: func() bool { return true }},
-		{Name: "group.delete", Allowed: func() bool { return false }},
+		{Name: "group.get"},
+		{Name: "message.history"},
+		{Name: "group.create"},
+		{Name: "group.delete"},
 	}
 	visible := providerVisibleMethods(methods)
-	if len(visible) != 2 || visible[0] != "group.get" || visible[1] != "group.create" {
+	if len(visible) != 4 || visible[0] != "group.get" || visible[1] != "message.history" || visible[2] != "group.create" || visible[3] != "group.delete" {
 		t.Fatalf("providerVisibleMethods() = %v", visible)
 	}
 }
@@ -279,21 +301,18 @@ func newHarness(t *testing.T, blockTurn bool) *harness {
 		allowed:  true,
 	}
 	reader := proxy.Method{
-		Name:  "message.history",
-		Scope: "message.read",
-		Targets: func(raw json.RawMessage) ([]string, error) {
-			var input struct {
-				ConversationID string `json:"conversation_id"`
-			}
-			if err := json.Unmarshal(raw, &input); err != nil {
-				return nil, err
-			}
-			return []string{grant.ConversationTarget(input.ConversationID)}, nil
-		},
-		Handle: func(_ context.Context, _ contracts.Request, access grant.Grant) (json.RawMessage, error) {
+		Name: "message.history",
+
+		Handle: func(_ context.Context, request contracts.Request, access grant.Grant) (json.RawMessage, error) {
 			h.mu.Lock()
 			h.windowed = access.MessageWindow
 			h.mu.Unlock()
+			var input struct {
+				ConversationID string `json:"conversation_id"`
+			}
+			if json.Unmarshal(request.Params, &input) != nil || input.ConversationID != access.MessageWindow.ConversationID {
+				return nil, proxy.Failure(contracts.CodePolicyDenied, "conversation is outside the run window")
+			}
 			return json.RawMessage(`{"items":[]}`), nil
 		},
 	}
@@ -370,10 +389,14 @@ func inboundEvent(dedup, conversationID, messageID string) contracts.SDKEvent {
 }
 
 type recordingSender struct {
-	mu         sync.Mutex
-	count      int
-	deliveries chan reply.Delivery
-	release    <-chan struct{}
+	mu                sync.Mutex
+	count             int
+	deliveries        chan reply.Delivery
+	release           <-chan struct{}
+	stream            reply.StreamDelivery
+	streamText        string
+	streamAppendCount int
+	streamEnded       bool
 }
 
 func (s *recordingSender) Reply(_ context.Context, delivery reply.Delivery) error {
@@ -383,6 +406,43 @@ func (s *recordingSender) Reply(_ context.Context, delivery reply.Delivery) erro
 	s.deliveries <- delivery
 	if s.release != nil {
 		<-s.release
+	}
+	return nil
+}
+
+func (s *recordingSender) StartStream(_ context.Context, delivery reply.StreamDelivery) (reply.StreamRef, error) {
+	s.mu.Lock()
+	s.count++
+	s.stream = delivery
+	s.streamText = delivery.Content
+	s.mu.Unlock()
+	return reply.StreamRef{ConversationID: delivery.ConversationID, ClientMsgID: delivery.ClientMsgID}, nil
+}
+
+func (s *recordingSender) AppendStream(_ context.Context, appendValue reply.StreamAppend) error {
+	s.mu.Lock()
+	for _, packet := range appendValue.Packets {
+		s.streamText += packet
+	}
+	if len(appendValue.Packets) > 0 {
+		s.streamAppendCount++
+	}
+	if !appendValue.End {
+		s.mu.Unlock()
+		return nil
+	}
+	delivery := reply.Delivery{
+		ProfileID: s.stream.ProfileID, EventID: s.stream.EventID,
+		ConversationID: s.stream.ConversationID, RecipientID: s.stream.RecipientID,
+		TriggerMessageID: s.stream.TriggerMessageID, GroupID: s.stream.GroupID,
+		OperationID: s.stream.ClientMsgID, Text: s.streamText,
+	}
+	s.streamEnded = true
+	release := s.release
+	s.mu.Unlock()
+	s.deliveries <- delivery
+	if release != nil {
+		<-release
 	}
 	return nil
 }
@@ -422,14 +482,15 @@ func (p *recordingProvider) startCount() int {
 }
 
 type recordingSession struct {
-	mu         sync.Mutex
-	proxy      contracts.ToolProxy
-	turns      int
-	lastPrompt string
-	denied     bool
-	replyOnly  bool
-	block      bool
-	started    chan struct{}
+	mu            sync.Mutex
+	proxy         contracts.ToolProxy
+	turns         int
+	lastPrompt    string
+	denied        bool
+	replyOnly     bool
+	outputUpdates []string
+	block         bool
+	started       chan struct{}
 }
 
 func (s *recordingSession) setProxy(value contracts.ToolProxy) {
@@ -453,6 +514,7 @@ func (s *recordingSession) Turn(ctx context.Context, turn contracts.TurnRequest)
 	}
 	block := s.block
 	replyOnly := s.replyOnly
+	outputUpdates := append([]string(nil), s.outputUpdates...)
 	s.mu.Unlock()
 	if block {
 		<-ctx.Done()
@@ -466,7 +528,19 @@ func (s *recordingSession) Turn(ctx context.Context, turn contracts.TurnRequest)
 		s.mu.Unlock()
 	}
 	if replyOnly {
-		return contracts.TurnResult{FinalText: "final response"}, nil
+		for _, update := range outputUpdates {
+			if turn.Output == nil {
+				return contracts.TurnResult{}, errors.New("provider output sink is unavailable")
+			}
+			if err := turn.Output(ctx, contracts.TurnOutput{Text: update}); err != nil {
+				return contracts.TurnResult{}, err
+			}
+		}
+		final := "final response"
+		if len(outputUpdates) > 0 {
+			final = outputUpdates[len(outputUpdates)-1]
+		}
+		return contracts.TurnResult{FinalText: final}, nil
 	}
 	response, err := s.call(ctx, proxyValue, turn, "conversation-original")
 	if err != nil || !response.OK {
@@ -478,6 +552,12 @@ func (s *recordingSession) Turn(ctx context.Context, turn contracts.TurnRequest)
 func (s *recordingSession) setReplyOnly() {
 	s.mu.Lock()
 	s.replyOnly = true
+	s.mu.Unlock()
+}
+
+func (s *recordingSession) setOutputUpdates(updates ...string) {
+	s.mu.Lock()
+	s.outputUpdates = append([]string(nil), updates...)
 	s.mu.Unlock()
 }
 

@@ -11,13 +11,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/abd-im/abd-im-cli/internal/agent/access"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
-	mcpprovider "github.com/abd-im/abd-im-cli/internal/mcp/provider"
 )
 
 const defaultInitializeTimeout = 30 * time.Second
@@ -30,7 +29,7 @@ type Config struct {
 	WorkingDir        string
 	SourceCodexHome   string
 	Environment       []string
-	BridgeCommand     string
+	CLICommand        string
 	InitializeTimeout time.Duration
 }
 
@@ -56,8 +55,8 @@ func New(config Config) (*Adapter, error) {
 	if len(config.Environment) == 0 {
 		return nil, errors.New("explicit Codex environment is required")
 	}
-	if strings.TrimSpace(config.BridgeCommand) == "" || !filepath.IsAbs(config.BridgeCommand) {
-		return nil, errors.New("absolute provider MCP bridge command is required")
+	if strings.TrimSpace(config.CLICommand) == "" || !filepath.IsAbs(config.CLICommand) {
+		return nil, errors.New("absolute abdim CLI command is required")
 	}
 	if config.InitializeTimeout <= 0 {
 		config.InitializeTimeout = defaultInitializeTimeout
@@ -77,47 +76,51 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 		return nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(runPaths.root) }
-	tools := mcpprovider.DefaultTools(request.AllowedMethods)
-	mcpServer, err := mcpprovider.New(request.ProfileID, request.GrantCredential, request.Proxy, tools)
+	accessServer, err := access.Listen(runPaths.socket, request.Proxy)
 	if err != nil {
 		cleanup()
-		return nil, fmt.Errorf("create provider MCP server: %w", err)
-	}
-	mcpBridge, err := mcpprovider.StartBridge(runPaths.socket, mcpServer)
-	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("start provider MCP bridge: %w", err)
+		return nil, err
 	}
 	executable, err := exec.LookPath(a.config.Executable)
 	if err != nil {
-		_ = mcpBridge.Close()
+		_ = accessServer.Close()
 		cleanup()
 		return nil, errors.New("Codex executable is unavailable")
 	}
 	processContext, cancel := context.WithCancel(context.Background())
+	environment, err := access.Environment(runEnvironment(a.config.Environment, runPaths.home, runPaths.workDir), a.config.CLICommand, access.Context{
+		Socket: runPaths.socket, ProfileID: request.ProfileID, RunID: request.RunID,
+		Grant: request.GrantCredential, AllowedMethods: request.AllowedMethods,
+	})
+	if err != nil {
+		cancel()
+		_ = accessServer.Close()
+		cleanup()
+		return nil, err
+	}
 	command := exec.CommandContext(processContext, executable, "app-server", "--listen", "stdio://")
 	command.Dir = runPaths.workDir
-	command.Env = runEnvironment(a.config.Environment, runPaths.home, runPaths.workDir)
+	command.Env = environment
 	configureProcessGroup(command)
 
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		cancel()
-		_ = mcpBridge.Close()
+		_ = accessServer.Close()
 		cleanup()
 		return nil, errors.New("create Codex stdin pipe")
 	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		cancel()
-		_ = mcpBridge.Close()
+		_ = accessServer.Close()
 		cleanup()
 		return nil, errors.New("create Codex stdout pipe")
 	}
 	command.Stderr = io.Discard
 	if err := command.Start(); err != nil {
 		cancel()
-		_ = mcpBridge.Close()
+		_ = accessServer.Close()
 		cleanup()
 		return nil, fmt.Errorf("start Codex app-server: %w", err)
 	}
@@ -128,7 +131,7 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 		cancel:  cancel,
 		pending: make(map[int]chan rpcResult),
 		done:    make(chan struct{}),
-		bridge:  mcpBridge,
+		access:  accessServer,
 		cleanup: cleanup,
 	}
 	go session.read(stdout)
@@ -153,7 +156,7 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 		"profile":                nil,
 		"cwd":                    runPaths.workDir,
 		"approvalPolicy":         "never",
-		"sandbox":                "read-only",
+		"sandbox":                "danger-full-access",
 		"config":                 nil,
 		"baseInstructions":       nil,
 		"developerInstructions":  nil,
@@ -183,9 +186,12 @@ type rpcResult struct {
 }
 
 type turnState struct {
-	done  chan struct{}
-	final string
-	err   error
+	ctx    context.Context
+	output contracts.TurnOutputSink
+	done   chan struct{}
+	text   string
+	final  string
+	err    error
 }
 
 type session struct {
@@ -203,7 +209,7 @@ type session struct {
 	waitErr  error
 	done     chan struct{}
 	close    sync.Once
-	bridge   *mcpprovider.Bridge
+	access   *access.Server
 	cleanup  func()
 }
 
@@ -216,7 +222,7 @@ func (s *session) Turn(ctx context.Context, request contracts.TurnRequest) (cont
 		s.mu.Unlock()
 		return contracts.TurnResult{}, errors.New("Codex session is unavailable")
 	}
-	turn := &turnState{done: make(chan struct{})}
+	turn := &turnState{ctx: ctx, output: request.Output, done: make(chan struct{})}
 	threadID := s.threadID
 	s.turn = turn
 	s.mu.Unlock()
@@ -277,8 +283,8 @@ func (s *session) closeProcess() {
 			s.finishTurn(turn, "", errors.New("Codex turn interrupted"))
 		}
 		_ = s.stdin.Close()
-		if s.bridge != nil {
-			_ = s.bridge.Close()
+		if s.access != nil {
+			_ = s.access.Close()
 		}
 		terminateProcessGroup(s.command)
 		s.cancel()
@@ -298,8 +304,8 @@ func (s *session) read(reader io.Reader) {
 
 func (s *session) wait() {
 	err := s.command.Wait()
-	if s.bridge != nil {
-		_ = s.bridge.Close()
+	if s.access != nil {
+		_ = s.access.Close()
 	}
 	if s.cleanup != nil {
 		s.cleanup()
@@ -411,7 +417,7 @@ func (s *session) handle(line string) {
 		return
 	}
 	if len(message.ID) != 0 && message.Method != "" {
-		s.handleServerRequest(message.ID, message.Method)
+		s.handleServerRequest(message.ID, message.Method, message.Params)
 		return
 	}
 	if message.Method != "" {
@@ -419,18 +425,34 @@ func (s *session) handle(line string) {
 	}
 }
 
-func (s *session) handleServerRequest(id json.RawMessage, method string) {
+func (s *session) handleServerRequest(id json.RawMessage, method string, params json.RawMessage) {
 	var requestID int
 	if json.Unmarshal(id, &requestID) != nil {
 		return
 	}
-	// The provider has no direct command or file authority. Declining keeps
-	// this adapter useful for text replies without expanding its privileges.
 	if method == "item/commandExecution/requestApproval" || method == "item/fileChange/requestApproval" {
-		_ = s.write(map[string]any{"jsonrpc": "2.0", "id": requestID, "result": map[string]string{"decision": "decline"}})
+		_ = s.write(map[string]any{"jsonrpc": "2.0", "id": requestID, "result": map[string]string{"decision": "accept"}})
+		return
+	}
+	if method == "item/permissions/requestApproval" {
+		_ = s.write(map[string]any{"jsonrpc": "2.0", "id": requestID, "result": permissionApproval(params)})
 		return
 	}
 	_ = s.write(map[string]any{"jsonrpc": "2.0", "id": requestID, "error": map[string]any{"code": -32601, "message": "method not supported"}})
+}
+
+func permissionApproval(raw json.RawMessage) map[string]any {
+	var request struct {
+		Permissions map[string]any `json:"permissions"`
+	}
+	_ = json.Unmarshal(raw, &request)
+	permissions := make(map[string]any, 2)
+	for _, key := range []string{"network", "fileSystem"} {
+		if value := request.Permissions[key]; value != nil {
+			permissions[key] = value
+		}
+	}
+	return map[string]any{"permissions": permissions, "scope": "turn"}
 }
 
 func (s *session) handleNotification(method string, raw json.RawMessage) {
@@ -449,6 +471,14 @@ func (s *session) handleNotification(method string, raw json.RawMessage) {
 		return
 	}
 	switch method {
+	case "item/agentMessage/delta":
+		delta, _ := params["delta"].(string)
+		if delta != "" {
+			s.mu.Lock()
+			text := turn.text + delta
+			s.mu.Unlock()
+			s.deliver(turn, text)
+		}
 	case "item/completed":
 		item, _ := params["item"].(map[string]any)
 		itemType, _ := item["type"].(string)
@@ -456,10 +486,9 @@ func (s *session) handleNotification(method string, raw json.RawMessage) {
 		if itemType == "agentMessage" && phase == "final_answer" {
 			text, _ := item["text"].(string)
 			if text != "" {
+				s.deliver(turn, text)
 				s.mu.Lock()
-				if s.turn == turn {
-					turn.final = text
-				}
+				turn.final = text
 				s.mu.Unlock()
 			}
 		}
@@ -473,6 +502,27 @@ func (s *session) handleNotification(method string, raw json.RawMessage) {
 	case "thread/status/changed":
 		if nestedString(params, "status", "type") == "idle" {
 			s.finishTurn(turn, "", nil)
+		}
+	}
+}
+
+func (s *session) deliver(turn *turnState, text string) {
+	s.mu.Lock()
+	if s.turn != turn || turn.err != nil || text == turn.text {
+		s.mu.Unlock()
+		return
+	}
+	turn.text = text
+	output, outputContext := turn.output, turn.ctx
+	s.mu.Unlock()
+	if output != nil {
+		if err := output(outputContext, contracts.TurnOutput{Text: text}); err != nil {
+			s.mu.Lock()
+			if s.turn == turn && turn.err == nil {
+				turn.err = err
+			}
+			s.mu.Unlock()
+			_ = s.Cancel(context.Background())
 		}
 	}
 }
@@ -518,7 +568,7 @@ func (a *Adapter) prepareRun(request contracts.StartRequest) (runPathSet, error)
 		root:    filepath.Join(a.config.WorkingDir, request.RunID),
 		home:    filepath.Join(a.config.WorkingDir, request.RunID, "codex"),
 		workDir: filepath.Join(a.config.WorkingDir, request.RunID, "work"),
-		socket:  filepath.Join(a.config.WorkingDir, request.RunID, "mcp.sock"),
+		socket:  filepath.Join(a.config.WorkingDir, request.RunID, "work", ".abdim.sock"),
 	}
 	if err := os.RemoveAll(paths.root); err != nil {
 		return runPathSet{}, fmt.Errorf("remove previous Codex run directory: %w", err)
@@ -538,8 +588,8 @@ func (a *Adapter) prepareRun(request contracts.StartRequest) (runPathSet, error)
 	if err := copyCodexAuth(filepath.Join(a.sourceCodexHome, "auth.json"), filepath.Join(paths.home, "auth.json")); err != nil {
 		return cleanup(fmt.Errorf("copy Codex credentials: %w", err))
 	}
-	if err := writeRunConfig(filepath.Join(a.sourceCodexHome, "config.toml"), filepath.Join(paths.home, "config.toml"), a.config.BridgeCommand, paths.socket, mcpprovider.DefaultTools(request.AllowedMethods)); err != nil {
-		return cleanup(fmt.Errorf("write provider MCP configuration: %w", err))
+	if err := writeRunConfig(filepath.Join(a.sourceCodexHome, "config.toml"), filepath.Join(paths.home, "config.toml")); err != nil {
+		return cleanup(fmt.Errorf("write Codex run configuration: %w", err))
 	}
 	return paths, nil
 }
@@ -559,30 +609,16 @@ func copyCodexAuth(source, destination string) error {
 	return os.Chmod(destination, 0o600)
 }
 
-func writeRunConfig(sourcePath, path, command, socket string, tools []mcpprovider.Tool) error {
+func writeRunConfig(sourcePath, path string) error {
 	base, err := inheritedConfig(sourcePath)
 	if err != nil {
 		return err
 	}
-	names := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		names = append(names, tool.Name)
-	}
-	encodedNames, err := json.Marshal(names)
-	if err != nil {
-		return err
-	}
-	args, err := json.Marshal([]string{"mcp", "provider", "bridge", "--socket", socket})
-	if err != nil {
-		return err
-	}
 	config := base + "[history]\npersistence = \"none\"\n\n" +
-		"[mcp_servers.abdim]\n" +
-		"command = " + strconv.Quote(command) + "\n" +
-		"args = " + string(args) + "\n" +
-		"enabled_tools = " + string(encodedNames) + "\n" +
-		"required = true\n" +
-		"default_tools_approval_mode = \"auto\"\n"
+		"[shell_environment_policy]\n" +
+		"inherit = \"all\"\n" +
+		"ignore_default_excludes = true\n" +
+		"include_only = [\"PATH\", \"ABDIM_CLI\", \"ABDIM_AGENT_SOCKET\", \"ABDIM_AGENT_PROFILE\", \"ABDIM_AGENT_RUN\", \"ABDIM_AGENT_GRANT\", \"ABDIM_AGENT_METHODS\"]\n"
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		return err
 	}
@@ -590,8 +626,8 @@ func writeRunConfig(sourcePath, path, command, socket string, tools []mcpprovide
 }
 
 // inheritedConfig keeps top-level model settings and model provider tables.
-// Every other source table is excluded so only the run's typed bridge is
-// discoverable and history persistence is controlled by this adapter.
+// Every other source table is excluded so history and shell environment
+// propagation are controlled by this adapter.
 func inheritedConfig(path string) (string, error) {
 	payload, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

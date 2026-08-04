@@ -10,26 +10,14 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
 
-func TestFriendActionsRequireManifestAndPerMethodUserGrant(t *testing.T) {
+func TestFriendActions(t *testing.T) {
 	source := &fakeSource{pending: true, friend: true}
-	manifest := friendManifest(t, capability.Gated)
-	tool, credential := newFriendTool(t, manifest, source, "run-1")
-
-	if response := callFriend(t, tool, credential, RequestMethod, "gated", RequestInput{UserID: "user-1", Message: "hello"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || source.requestCalls != 0 {
-		t.Fatalf("gated request = %+v, calls=%d", response, source.requestCalls)
-	}
-
-	manifest = friendManifest(t, capability.Available)
-	tool, credential = newFriendTool(t, manifest, source, "run-2")
-	if response := callFriend(t, tool, credential, RequestMethod, "outside", RequestInput{UserID: "user-outside", Message: "hello"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || source.requestCalls != 0 {
-		t.Fatalf("outside target request = %+v, calls=%d", response, source.requestCalls)
-	}
+	tool, credential := newFriendTool(t, source, "run-1")
 	if response := callFriend(t, tool, credential, RequestMethod, "request", RequestInput{UserID: "user-1", Message: "hello"}); !response.OK || source.requestCalls != 1 || source.request != (RequestInput{UserID: "user-1", Message: "hello"}) {
 		t.Fatalf("request = %+v, source=%+v", response, source)
 	}
@@ -46,7 +34,7 @@ func TestFriendActionsRequireManifestAndPerMethodUserGrant(t *testing.T) {
 
 func TestFriendResponseAndDeleteFailClosedForUnverifiedState(t *testing.T) {
 	source := &fakeSource{}
-	tool, credential := newFriendTool(t, friendManifest(t, capability.Available), source, "run-1")
+	tool, credential := newFriendTool(t, source, "run-1")
 	if response := callFriend(t, tool, credential, RespondMethod, "response-missing", RespondInput{UserID: "user-1", Response: "accept"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || source.respondCalls != 0 {
 		t.Fatalf("missing pending request = %+v, source=%+v", response, source)
 	}
@@ -62,7 +50,7 @@ func TestFriendResponseAndDeleteFailClosedForUnverifiedState(t *testing.T) {
 
 func TestFriendActionsValidateInputAndPreserveUnknownOutcomes(t *testing.T) {
 	source := &fakeSource{requestErr: operation.ErrOutcomeUnknown}
-	tool, credential := newFriendTool(t, friendManifest(t, capability.Available), source, "run-1")
+	tool, credential := newFriendTool(t, source, "run-1")
 	for _, input := range []struct {
 		method string
 		value  any
@@ -87,7 +75,7 @@ func TestFriendActionsValidateInputAndPreserveUnknownOutcomes(t *testing.T) {
 
 func TestFriendActionsRequireIdempotencyKey(t *testing.T) {
 	source := &fakeSource{pending: true, friend: true}
-	tool, credential := newFriendTool(t, friendManifest(t, capability.Available), source, "run-1")
+	tool, credential := newFriendTool(t, source, "run-1")
 	params, err := json.Marshal(RequestInput{UserID: "user-1"})
 	if err != nil {
 		t.Fatal(err)
@@ -108,21 +96,7 @@ func TestFriendActionsRequireIdempotencyKey(t *testing.T) {
 	}
 }
 
-func friendManifest(t *testing.T, status capability.Status) *capability.Manifest {
-	t.Helper()
-	manifest, err := capability.New([]capability.Entry{
-		{Method: RequestMethod, Scope: RequestScope, Status: status},
-		{Method: RespondMethod, Scope: RespondScope, Status: status},
-		{Method: DeleteMethod, Scope: DeleteScope, Status: status},
-		{Method: SetRemarkMethod, Scope: SetRemarkScope, Status: status},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return manifest
-}
-
-func newFriendTool(t *testing.T, manifest *capability.Manifest, source Source, runID string) (*proxy.Proxy, string) {
+func newFriendTool(t *testing.T, source Source, runID string) (*proxy.Proxy, string) {
 	t.Helper()
 	store, err := control.Open(filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
@@ -133,7 +107,7 @@ func newFriendTool(t *testing.T, manifest *capability.Manifest, source Source, r
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := New(manifest, guard, source)
+	handler, err := New(guard, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,13 +117,7 @@ func newFriendTool(t *testing.T, manifest *capability.Manifest, source Source, r
 		ProfileID: "work",
 		Principal: "provider",
 		Methods:   []string{RequestMethod, RespondMethod, DeleteMethod, SetRemarkMethod},
-		Scopes:    []string{RequestScope, RespondScope, DeleteScope, SetRemarkScope},
-		TargetAllowlists: map[string][]string{
-			RequestMethod:   {grant.UserTarget("user-1")},
-			RespondMethod:   {grant.UserTarget("user-1")},
-			DeleteMethod:    {grant.UserTarget("user-1")},
-			SetRemarkMethod: {grant.UserTarget("user-1")},
-		},
+
 		ExpiresAt:  time.Now().Add(time.Hour),
 		RateBudget: 20,
 	})

@@ -17,33 +17,8 @@ var (
 	ErrExpired           = errors.New("grant expired")
 	ErrRevoked           = errors.New("grant revoked")
 	ErrMethodDenied      = errors.New("method is not allowed by grant")
-	ErrScopeDenied       = errors.New("scope is not allowed by grant")
-	ErrTargetDenied      = errors.New("target is not allowed by grant")
 	ErrRateLimited       = errors.New("grant rate budget is exhausted")
 )
-
-const (
-	// AnyTarget grants one method access to every typed resource target.
-	AnyTarget          = "*:*"
-	TargetConversation = "conversation"
-	TargetGroup        = "group"
-	TargetMessage      = "message"
-	TargetUser         = "user"
-)
-
-// Target gives an allowlist entry a stable resource namespace. It prevents a
-// user, group, and conversation that share an ID from being interchangeable.
-func Target(resource, id string) string {
-	if strings.TrimSpace(resource) == "" || strings.TrimSpace(id) == "" {
-		return ""
-	}
-	return resource + ":" + id
-}
-
-func ConversationTarget(id string) string { return Target(TargetConversation, id) }
-func GroupTarget(id string) string        { return Target(TargetGroup, id) }
-func MessageTarget(id string) string      { return Target(TargetMessage, id) }
-func UserTarget(id string) string         { return Target(TargetUser, id) }
 
 // MessageWindow limits the history made available to a provider run.
 type MessageWindow struct {
@@ -58,8 +33,6 @@ type Policy struct {
 	ProfileID           string
 	Principal           string
 	Methods             []string
-	Scopes              []string
-	TargetAllowlists    map[string][]string
 	MessageWindow       MessageWindow
 	AttachmentByteLimit int64
 	ExpiresAt           time.Time
@@ -78,35 +51,11 @@ type Grant struct {
 	RemainingBudget     int
 
 	methods map[string]struct{}
-	scopes  map[string]struct{}
-	targets map[string]map[string]struct{}
-}
-
-// AllowsScope reports whether a handler may use its required capability scope.
-func (g Grant) AllowsScope(scope string) bool {
-	_, allowed := g.scopes[scope]
-	return allowed
 }
 
 // AllowsMethod reports whether the grant explicitly exposes a typed method.
-// It is kept separate from scope checks because two methods may share a
-// scope while still having different target and parameter contracts.
 func (g Grant) AllowsMethod(method string) bool {
 	_, allowed := g.methods[method]
-	return allowed
-}
-
-// AllowsTarget reports whether a typed target belongs to this method's
-// allowlist. An empty target is always safe for target-free typed methods.
-func (g Grant) AllowsTarget(method, target string) bool {
-	if target == "" {
-		return true
-	}
-	targets := g.targets[method]
-	if _, allowed := targets[target]; allowed {
-		return true
-	}
-	_, allowed := targets[AnyTarget]
 	return allowed
 }
 
@@ -145,8 +94,6 @@ func (s *Store) Issue(policy Policy) (Grant, string, error) {
 		ExpiresAt:           policy.ExpiresAt,
 		RemainingBudget:     policy.RateBudget,
 		methods:             toSet(policy.Methods),
-		scopes:              toSet(policy.Scopes),
-		targets:             toMethodTargetSets(policy.TargetAllowlists),
 	}
 	s.mu.Lock()
 	s.grants[credentialHash(credential)] = &storedGrant{grant: item}
@@ -155,7 +102,7 @@ func (s *Store) Issue(policy Policy) (Grant, string, error) {
 }
 
 // Authorize validates and consumes one tool-call budget atomically.
-func (s *Store) Authorize(credential, runID, profileID, method, scope string, targets []string) (Grant, error) {
+func (s *Store) Authorize(credential, runID, profileID, method string) (Grant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -175,14 +122,6 @@ func (s *Store) Authorize(credential, runID, profileID, method, scope string, ta
 	}
 	if _, allowed := item.methods[method]; !allowed {
 		return Grant{}, ErrMethodDenied
-	}
-	if _, allowed := item.scopes[scope]; !allowed {
-		return Grant{}, ErrScopeDenied
-	}
-	for _, target := range targets {
-		if !item.AllowsTarget(method, target) {
-			return Grant{}, ErrTargetDenied
-		}
 	}
 	if item.RemainingBudget <= 0 {
 		return Grant{}, ErrRateLimited
@@ -206,9 +145,6 @@ func validatePolicy(policy Policy) error {
 	if strings.TrimSpace(policy.RunID) == "" || strings.TrimSpace(policy.ProfileID) == "" || strings.TrimSpace(policy.Principal) == "" {
 		return errors.New("grant run ID, profile ID, and principal are required")
 	}
-	if (len(policy.Methods) == 0) != (len(policy.Scopes) == 0) {
-		return errors.New("grant methods and scopes must both be empty or both be present")
-	}
 	if policy.ExpiresAt.IsZero() || !policy.ExpiresAt.After(time.Now()) {
 		return errors.New("grant expiry must be in the future")
 	}
@@ -218,39 +154,16 @@ func validatePolicy(policy Policy) error {
 	if policy.AttachmentByteLimit < 0 {
 		return errors.New("grant attachment byte limit must not be negative")
 	}
-	methods := toSet(policy.Methods)
-	for _, values := range [][]string{policy.Methods, policy.Scopes} {
-		for _, value := range values {
-			if strings.TrimSpace(value) == "" {
-				return errors.New("grant allowlists must not contain empty values")
-			}
-		}
-	}
-	for method, targets := range policy.TargetAllowlists {
+	for _, method := range policy.Methods {
 		if strings.TrimSpace(method) == "" {
-			return errors.New("grant target method must not be empty")
-		}
-		if _, allowed := methods[method]; !allowed {
-			return errors.New("grant target method must be allowed")
-		}
-		for _, target := range targets {
-			if !validTarget(target) {
-				return errors.New("grant targets must not be empty")
-			}
+			return errors.New("grant methods must not contain empty values")
 		}
 	}
 	return nil
 }
 
-func validTarget(target string) bool {
-	resource, id, found := strings.Cut(target, ":")
-	return found && strings.TrimSpace(resource) != "" && strings.TrimSpace(id) != ""
-}
-
 func publicGrant(item Grant) Grant {
 	item.methods = cloneSet(item.methods)
-	item.scopes = cloneSet(item.scopes)
-	item.targets = cloneMethodTargetSets(item.targets)
 	return item
 }
 
@@ -266,22 +179,6 @@ func cloneSet(values map[string]struct{}) map[string]struct{} {
 	result := make(map[string]struct{}, len(values))
 	for value := range values {
 		result[value] = struct{}{}
-	}
-	return result
-}
-
-func toMethodTargetSets(values map[string][]string) map[string]map[string]struct{} {
-	result := make(map[string]map[string]struct{}, len(values))
-	for method, targets := range values {
-		result[method] = toSet(targets)
-	}
-	return result
-}
-
-func cloneMethodTargetSets(values map[string]map[string]struct{}) map[string]map[string]struct{} {
-	result := make(map[string]map[string]struct{}, len(values))
-	for method, targets := range values {
-		result[method] = cloneSet(targets)
 	}
 	return result
 }

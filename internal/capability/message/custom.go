@@ -8,7 +8,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -36,37 +35,22 @@ type CustomSender interface {
 }
 
 type CustomHandler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	sender   CustomSender
+	guard  *operation.Guard
+	sender CustomSender
 }
 
-func NewCustom(manifest *capability.Manifest, guard *operation.Guard, sender CustomSender) (*CustomHandler, error) {
-	if manifest == nil || guard == nil || sender == nil {
-		return nil, errors.New("manifest, operation guard, and custom sender are required")
+func NewCustom(guard *operation.Guard, sender CustomSender) (*CustomHandler, error) {
+	if guard == nil || sender == nil {
+		return nil, errors.New("operation guard and custom sender are required")
 	}
-	return &CustomHandler{manifest: manifest, guard: guard, sender: sender}, nil
+	return &CustomHandler{guard: guard, sender: sender}, nil
 }
 
 func (h *CustomHandler) ProxyMethod() proxy.Method {
 	return proxy.Method{
-		Name:    CustomMethod,
-		Scope:   CustomScope,
-		Allowed: func() bool { return h.manifest.Allows(CustomMethod, CustomScope) },
-		Targets: customTargets,
-		Handle:  h.handle,
+		Name:   CustomMethod,
+		Handle: h.handle,
 	}
-}
-
-func customTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseCustom(raw)
-	if err != nil {
-		return nil, err
-	}
-	if input.RecipientID != "" {
-		return []string{grant.UserTarget(input.RecipientID)}, nil
-	}
-	return []string{grant.GroupTarget(input.GroupID)}, nil
 }
 
 func (h *CustomHandler) handle(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {

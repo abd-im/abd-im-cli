@@ -11,31 +11,22 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 	"github.com/abd-im/abd-im-cli/internal/profile"
 )
 
-func TestMediaMethodsRequireMatchingAttachmentGrantAndTarget(t *testing.T) {
+func TestMediaMethodsRequireMatchingAttachmentGrant(t *testing.T) {
 	store, attachments := newMediaStore(t)
 	defer store.Close()
 	guard, err := operation.NewGuard(store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := capability.New([]capability.Entry{
-		{Method: ImageMethod, Scope: ImageScope, Status: capability.Gated},
-		{Method: FileMethod, Scope: FileScope, Status: capability.Available},
-		{Method: SoundMethod, Scope: SoundScope, Status: capability.Available},
-		{Method: VideoMethod, Scope: VideoScope, Status: capability.Available},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	sender := &fakeMediaSender{}
-	handler, err := NewMedia(manifest, guard, attachments, sender)
+	handler, err := NewMedia(guard, attachments, sender)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,13 +34,7 @@ func TestMediaMethodsRequireMatchingAttachmentGrantAndTarget(t *testing.T) {
 	access, credential, err := grants.Issue(grant.Policy{
 		RunID: "run-1", ProfileID: "work", Principal: "provider",
 		Methods: []string{ImageMethod, FileMethod, SoundMethod, VideoMethod},
-		Scopes:  []string{ImageScope, FileScope, SoundScope, VideoScope},
-		TargetAllowlists: map[string][]string{
-			ImageMethod: {grant.UserTarget("user-1")},
-			FileMethod:  {grant.GroupTarget("group-1")},
-			SoundMethod: {grant.UserTarget("user-1")},
-			VideoMethod: {grant.UserTarget("user-1")},
-		},
+
 		ExpiresAt: time.Now().Add(time.Hour), RateBudget: 16, AttachmentByteLimit: 1024,
 	})
 	if err != nil {
@@ -76,31 +61,8 @@ func TestMediaMethodsRequireMatchingAttachmentGrantAndTarget(t *testing.T) {
 		}
 		return response
 	}
-	if response := call(ImageMethod, "gated", MediaInput{AttachmentRef: image, FileName: "photo.png", RecipientID: "user-1"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
-		t.Fatalf("gated image = %+v, calls=%d", response, sender.calls)
-	}
-	manifest, err = capability.New([]capability.Entry{
-		{Method: ImageMethod, Scope: ImageScope, Status: capability.Available},
-		{Method: FileMethod, Scope: FileScope, Status: capability.Available},
-		{Method: SoundMethod, Scope: SoundScope, Status: capability.Available},
-		{Method: VideoMethod, Scope: VideoScope, Status: capability.Available},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler, err = NewMedia(manifest, guard, attachments, sender)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tool, err = proxy.New(grants, "run-1", "work", handler.ProxyMethods())
-	if err != nil {
-		t.Fatal(err)
-	}
 	if response := call(ImageMethod, "wrong-kind", MediaInput{AttachmentRef: file, FileName: "wrong.png", RecipientID: "user-1"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
 		t.Fatalf("wrong attachment kind = %+v, calls=%d", response, sender.calls)
-	}
-	if response := call(ImageMethod, "outside-target", MediaInput{AttachmentRef: image, FileName: "photo.png", RecipientID: "user-2"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
-		t.Fatalf("outside target = %+v, calls=%d", response, sender.calls)
 	}
 	for _, request := range []struct {
 		method string
@@ -127,14 +89,14 @@ func TestMediaRejectsPathNamesAndUnknownOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, _ := capability.New([]capability.Entry{{Method: ImageMethod, Scope: ImageScope, Status: capability.Available}, {Method: FileMethod, Scope: FileScope, Status: capability.Available}, {Method: SoundMethod, Scope: SoundScope, Status: capability.Available}, {Method: VideoMethod, Scope: VideoScope, Status: capability.Available}})
+
 	sender := &fakeMediaSender{err: operation.ErrOutcomeUnknown}
-	handler, err := NewMedia(manifest, guard, attachments, sender)
+	handler, err := NewMedia(guard, attachments, sender)
 	if err != nil {
 		t.Fatal(err)
 	}
 	grants := grant.NewStore()
-	access, credential, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{ImageMethod}, Scopes: []string{ImageScope}, TargetAllowlists: map[string][]string{ImageMethod: {grant.UserTarget("user-1")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 4, AttachmentByteLimit: 64})
+	access, credential, err := grants.Issue(grant.Policy{RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{ImageMethod}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 4, AttachmentByteLimit: 64})
 	if err != nil {
 		t.Fatal(err)
 	}

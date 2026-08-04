@@ -23,16 +23,6 @@ const (
 	DoctorGet  = "doctor.get"
 )
 
-// VerifiedCapabilities returns the fixed profile read surface covered by the
-// controlled SDK/server integration gate.
-func VerifiedCapabilities(sdkVersion string) map[string]service.Capability {
-	capabilities := make(map[string]service.Capability, 5)
-	for _, method := range []string{ProfileGet, UserMe, UserGet, DaemonGet, DoctorGet} {
-		capabilities[method] = service.Capability{Method: method, Scope: method + ".read", Status: "available", SDKVersion: sdkVersion}
-	}
-	return capabilities
-}
-
 type Profile struct {
 	ID            string    `json:"id"`
 	Name          string    `json:"name"`
@@ -85,9 +75,8 @@ type Source interface {
 }
 
 type Options struct {
-	ProfileID    string
-	Stale        func() bool
-	Capabilities map[string]service.Capability
+	ProfileID string
+	Stale     func() bool
 }
 
 type Service struct {
@@ -105,35 +94,14 @@ func New(source Source, options Options) (*Service, error) {
 	if options.Stale == nil {
 		options.Stale = func() bool { return false }
 	}
-	if options.Capabilities == nil {
-		options.Capabilities = make(map[string]service.Capability)
-	}
 	return &Service{source: source, options: options}, nil
 }
 
-func (s *Service) capability(method string) service.Capability {
-	if item, ok := s.options.Capabilities[method]; ok {
-		return item
-	}
-	return service.Capability{Method: method, Scope: method + ".read", Status: "not_validated", Reason: "method has no verified capability entry"}
+func (s *Service) meta() service.Meta {
+	return service.NewMeta(s.options.ProfileID, s.options.Stale())
 }
 
-func (s *Service) meta(access service.Access, method string) (service.Meta, error) {
-	capability := s.capability(method)
-	if capability.Status != "available" {
-		return service.Meta{}, fmt.Errorf("%w: %s", service.ErrCapabilityUnavailable, capability.Status)
-	}
-	if err := access.Authorize(method, capability.Scope); err != nil {
-		return service.Meta{}, err
-	}
-	return service.NewMeta(s.options.ProfileID, s.options.Stale(), capability), nil
-}
-
-func (s *Service) Profile(ctx context.Context, access service.Access) (service.Result[Profile], error) {
-	meta, err := s.meta(access, ProfileGet)
-	if err != nil {
-		return service.Result[Profile]{}, err
-	}
+func (s *Service) Profile(ctx context.Context, _ service.Access) (service.Result[Profile], error) {
 	item, err := s.source.Profile(ctx)
 	if err != nil {
 		return service.Result[Profile]{}, fmt.Errorf("read profile: %w", err)
@@ -143,22 +111,18 @@ func (s *Service) Profile(ctx context.Context, access service.Access) (service.R
 	} else if item.ID != s.options.ProfileID {
 		return service.Result[Profile]{}, fmt.Errorf("%w: source returned a different profile", service.ErrTargetDenied)
 	}
-	return service.Result[Profile]{Data: item, Meta: meta}, nil
+	return service.Result[Profile]{Data: item, Meta: s.meta()}, nil
 }
 
-func (s *Service) Self(ctx context.Context, access service.Access) (service.Result[User], error) {
-	meta, err := s.meta(access, UserMe)
-	if err != nil {
-		return service.Result[User]{}, err
-	}
+func (s *Service) Self(ctx context.Context, _ service.Access) (service.Result[User], error) {
 	item, err := s.source.Self(ctx)
 	if err != nil {
 		return service.Result[User]{}, fmt.Errorf("read self user: %w", err)
 	}
-	return service.Result[User]{Data: item, Meta: meta}, nil
+	return service.Result[User]{Data: item, Meta: s.meta()}, nil
 }
 
-func (s *Service) Users(ctx context.Context, access service.Access, ids []string) (service.Result[[]User], error) {
+func (s *Service) Users(ctx context.Context, _ service.Access, ids []string) (service.Result[[]User], error) {
 	if len(ids) == 0 || len(ids) > 100 {
 		return service.Result[[]User]{}, fmt.Errorf("%w: user IDs must contain 1-100 items", service.ErrInvalidArgument)
 	}
@@ -166,13 +130,6 @@ func (s *Service) Users(ctx context.Context, access service.Access, ids []string
 		if strings.TrimSpace(id) == "" {
 			return service.Result[[]User]{}, fmt.Errorf("%w: user ID is required", service.ErrInvalidArgument)
 		}
-	}
-	capability := s.capability(UserGet)
-	if capability.Status != "available" {
-		return service.Result[[]User]{}, fmt.Errorf("%w: %s", service.ErrCapabilityUnavailable, capability.Status)
-	}
-	if err := access.Authorize(UserGet, capability.Scope, userTargets(ids)...); err != nil {
-		return service.Result[[]User]{}, err
 	}
 	items, err := s.source.Users(ctx, append([]string(nil), ids...))
 	if err != nil {
@@ -187,55 +144,33 @@ func (s *Service) Users(ctx context.Context, access service.Access, ids []string
 			return service.Result[[]User]{}, fmt.Errorf("%w: source returned an unrequested user", service.ErrTargetDenied)
 		}
 	}
-	return service.Result[[]User]{Data: items, Meta: service.NewMeta(s.options.ProfileID, s.options.Stale(), capability)}, nil
+	return service.Result[[]User]{Data: items, Meta: s.meta()}, nil
 }
 
-func (s *Service) Daemon(ctx context.Context, access service.Access) (service.Result[DaemonStatus], error) {
-	meta, err := s.meta(access, DaemonGet)
-	if err != nil {
-		return service.Result[DaemonStatus]{}, err
-	}
+func (s *Service) Daemon(ctx context.Context, _ service.Access) (service.Result[DaemonStatus], error) {
 	item, err := s.source.Daemon(ctx)
 	if err != nil {
 		return service.Result[DaemonStatus]{}, fmt.Errorf("read daemon status: %w", err)
 	}
-	return service.Result[DaemonStatus]{Data: item, Meta: meta}, nil
+	return service.Result[DaemonStatus]{Data: item, Meta: s.meta()}, nil
 }
 
-func (s *Service) Doctor(ctx context.Context, access service.Access) (service.Result[DoctorReport], error) {
-	meta, err := s.meta(access, DoctorGet)
-	if err != nil {
-		return service.Result[DoctorReport]{}, err
-	}
+func (s *Service) Doctor(ctx context.Context, _ service.Access) (service.Result[DoctorReport], error) {
 	item, err := s.source.Doctor(ctx)
 	if err != nil {
 		return service.Result[DoctorReport]{}, fmt.Errorf("run doctor: %w", err)
 	}
-	return service.Result[DoctorReport]{Data: item, Meta: meta}, nil
+	return service.Result[DoctorReport]{Data: item, Meta: s.meta()}, nil
 }
 
 // Methods adapts the typed reads to the existing run-scoped tool proxy.
 func (s *Service) Methods() []proxy.Method {
-	method := func(name, scope string, handle func(context.Context, contracts.Request, service.Access) (interface{}, error)) proxy.Method {
+	method := func(name string, handle func(context.Context, contracts.Request, service.Access) (interface{}, error)) proxy.Method {
 		return proxy.Method{
-			Name: name, Scope: scope,
-			Meta: func() contracts.Meta {
-				return service.ContractMeta(service.NewMeta(s.options.ProfileID, s.options.Stale(), s.capability(name)))
-			},
-			Targets: func(raw json.RawMessage) ([]string, error) {
-				if name != UserGet {
-					return nil, nil
-				}
-				var input struct {
-					UserIDs []string `json:"user_ids"`
-				}
-				if err := json.Unmarshal(raw, &input); err != nil {
-					return nil, err
-				}
-				return userTargets(input.UserIDs), nil
-			},
+			Name: name,
+			Meta: func() contracts.Meta { return service.ContractMeta(s.meta()) },
 			Handle: func(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {
-				value, err := handle(ctx, request, service.ProviderAccess(item, s.capability(name)))
+				value, err := handle(ctx, request, service.ProviderAccess(item))
 				if err != nil {
 					return nil, proxy.Failure(contracts.CodePolicyDenied, err.Error())
 				}
@@ -244,15 +179,15 @@ func (s *Service) Methods() []proxy.Method {
 		}
 	}
 	return []proxy.Method{
-		method(ProfileGet, s.capability(ProfileGet).Scope, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
+		method(ProfileGet, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
 			result, err := s.Profile(ctx, access)
 			return result.Data, err
 		}),
-		method(UserMe, s.capability(UserMe).Scope, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
+		method(UserMe, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
 			result, err := s.Self(ctx, access)
 			return result.Data, err
 		}),
-		method(UserGet, s.capability(UserGet).Scope, func(ctx context.Context, request contracts.Request, access service.Access) (interface{}, error) {
+		method(UserGet, func(ctx context.Context, request contracts.Request, access service.Access) (interface{}, error) {
 			var input struct {
 				UserIDs []string `json:"user_ids"`
 			}
@@ -262,21 +197,13 @@ func (s *Service) Methods() []proxy.Method {
 			result, err := s.Users(ctx, access, input.UserIDs)
 			return result.Data, err
 		}),
-		method(DaemonGet, s.capability(DaemonGet).Scope, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
+		method(DaemonGet, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
 			result, err := s.Daemon(ctx, access)
 			return result.Data, err
 		}),
-		method(DoctorGet, s.capability(DoctorGet).Scope, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
+		method(DoctorGet, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
 			result, err := s.Doctor(ctx, access)
 			return result.Data, err
 		}),
 	}
-}
-
-func userTargets(ids []string) []string {
-	targets := make([]string, 0, len(ids))
-	for _, id := range ids {
-		targets = append(targets, grant.UserTarget(id))
-	}
-	return targets
 }

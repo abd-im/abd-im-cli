@@ -152,16 +152,6 @@ func TestOpenIMClientRedactsServerErrors(t *testing.T) {
 	}
 }
 
-func TestVerifiedCapabilitiesCoverSocialReadSurface(t *testing.T) {
-	capabilities := VerifiedCapabilities("sdk-test")
-	for _, method := range []string{FriendListMethod, FriendGetMethod, FriendSearchMethod, BlackListMethod, BlackGetMethod} {
-		item, ok := capabilities[method]
-		if !ok || item.Method != method || item.Scope != scope(method) || item.Status != "available" || item.SDKVersion != "sdk-test" {
-			t.Fatalf("capability %q = %+v, exists=%t", method, item, ok)
-		}
-	}
-}
-
 func socialDecodeRequest(t *testing.T, request *http.Request, output any) bool {
 	t.Helper()
 	defer request.Body.Close()

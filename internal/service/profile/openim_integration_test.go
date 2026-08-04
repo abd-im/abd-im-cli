@@ -38,32 +38,32 @@ func TestOpenIMProfileReadsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := New(source, Options{ProfileID: "integration", Capabilities: VerifiedCapabilities(open_im_sdk.GetSdkVersion())})
+	reader, err := New(source, Options{ProfileID: "integration"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	profile, err := reader.Profile(ctx, service.OwnerAccess(reader.capability(ProfileGet)))
+	profile, err := reader.Profile(ctx, service.OwnerAccess())
 	if err != nil || profile.Data.ID != "integration" {
 		t.Fatalf("profile.get = %#v, %v", profile, err)
 	}
 	assertProfileIntegrationMeta(t, profile.Meta, ProfileGet)
-	self, err := reader.Self(ctx, service.OwnerAccess(reader.capability(UserMe)))
+	self, err := reader.Self(ctx, service.OwnerAccess())
 	if err != nil || self.Data.ID != userID {
 		t.Fatalf("user.me = %#v, %v", self, err)
 	}
 	assertProfileIntegrationMeta(t, self.Meta, UserMe)
-	users, err := reader.Users(ctx, service.OwnerAccess(reader.capability(UserGet)), []string{userID})
+	users, err := reader.Users(ctx, service.OwnerAccess(), []string{userID})
 	if err != nil || len(users.Data) != 1 || users.Data[0].ID != userID {
 		t.Fatalf("user.get = %#v, %v", users, err)
 	}
 	assertProfileIntegrationMeta(t, users.Meta, UserGet)
-	daemon, err := reader.Daemon(ctx, service.OwnerAccess(reader.capability(DaemonGet)))
+	daemon, err := reader.Daemon(ctx, service.OwnerAccess())
 	if err != nil || daemon.Data.State != "ready" {
 		t.Fatalf("daemon.status = %#v, %v", daemon, err)
 	}
 	assertProfileIntegrationMeta(t, daemon.Meta, DaemonGet)
-	doctor, err := reader.Doctor(ctx, service.OwnerAccess(reader.capability(DoctorGet)))
+	doctor, err := reader.Doctor(ctx, service.OwnerAccess())
 	if err != nil || !doctor.Data.OK {
 		t.Fatalf("doctor.get = %#v, %v", doctor, err)
 	}
@@ -81,7 +81,7 @@ func profileIntegrationEnv(t *testing.T, name string) string {
 
 func assertProfileIntegrationMeta(t *testing.T, meta service.Meta, method string) {
 	t.Helper()
-	if meta.Schema != service.SchemaVersion || meta.Stale || meta.Capability.Method != method || meta.Capability.Status != "available" || meta.Capability.SDKVersion != open_im_sdk.GetSdkVersion() {
+	if meta.Schema != service.SchemaVersion || meta.Stale || meta.ProfileID != "integration" {
 		t.Fatalf("%s response metadata is invalid", method)
 	}
 }

@@ -17,12 +17,9 @@ var ErrClosed = errors.New("run tool proxy is closed")
 // Method is one statically registered typed tool. There is intentionally no
 // endpoint, command, SQL, or SDK-function field that a provider could override.
 type Method struct {
-	Name    string
-	Scope   string
-	Allowed func() bool
-	Meta    func() contracts.Meta
-	Targets func(json.RawMessage) ([]string, error)
-	Handle  func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error)
+	Name   string
+	Meta   func() contracts.Meta
+	Handle func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error)
 }
 
 // Proxy is a private in-memory contract implementation for one run.
@@ -45,8 +42,8 @@ func New(grants *grant.Store, runID, profileID string, methods []Method) (*Proxy
 	}
 	registered := make(map[string]Method, len(methods))
 	for _, method := range methods {
-		if method.Name == "" || method.Scope == "" || method.Handle == nil {
-			return nil, errors.New("typed method name, scope, and handler are required")
+		if method.Name == "" || method.Handle == nil {
+			return nil, errors.New("typed method name and handler are required")
 		}
 		if _, exists := registered[method.Name]; exists {
 			return nil, fmt.Errorf("duplicate typed method %q", method.Name)
@@ -75,23 +72,7 @@ func (p *Proxy) Call(ctx context.Context, request contracts.Request) (contracts.
 	if !exists {
 		return failed(request.RequestID, contracts.CodePolicyDenied, "method is not an exposed typed tool"), nil
 	}
-	if method.Allowed != nil && !method.Allowed() {
-		return failed(request.RequestID, contracts.CodePolicyDenied, "capability is not available"), nil
-	}
-	targets := []string(nil)
-	if method.Targets != nil {
-		var err error
-		targets, err = method.Targets(request.Params)
-		if err != nil {
-			return failed(request.RequestID, contracts.CodeInvalidArgument, "invalid typed method parameters"), nil
-		}
-		for _, target := range targets {
-			if target == "" {
-				return failed(request.RequestID, contracts.CodeInvalidArgument, "typed method target is required"), nil
-			}
-		}
-	}
-	access, err := p.grants.Authorize(request.Grant, p.runID, p.profileID, method.Name, method.Scope, targets)
+	access, err := p.grants.Authorize(request.Grant, p.runID, p.profileID, method.Name)
 	if err != nil {
 		return grantFailure(request.RequestID, err), nil
 	}
@@ -152,7 +133,7 @@ func (p *Proxy) Close(context.Context) error {
 
 func grantFailure(requestID string, err error) contracts.Response {
 	code := contracts.CodeGrantInvalid
-	if errors.Is(err, grant.ErrMethodDenied) || errors.Is(err, grant.ErrScopeDenied) || errors.Is(err, grant.ErrTargetDenied) || errors.Is(err, grant.ErrRateLimited) {
+	if errors.Is(err, grant.ErrMethodDenied) || errors.Is(err, grant.ErrRateLimited) {
 		code = contracts.CodePolicyDenied
 	}
 	return failed(requestID, code, "grant does not authorize typed tool call")

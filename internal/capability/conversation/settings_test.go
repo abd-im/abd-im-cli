@@ -9,36 +9,26 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
 
-func TestConversationSettingsRequireManifestAndTypedConversationTarget(t *testing.T) {
-	manifest, err := capability.New([]capability.Entry{
-		{Method: SetPinnedMethod, Scope: SetPinnedScope, Status: capability.Gated},
-		{Method: SetReceiveOptionMethod, Scope: SetReceiveOptionScope, Status: capability.Available},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestConversationSettings(t *testing.T) {
+
 	sender := &fakeSettingsSender{}
-	pinned, err := NewSetPinned(manifest, newSettingsGuard(t), sender)
+	pinned, err := NewSetPinned(newSettingsGuard(t), sender)
 	if err != nil {
 		t.Fatal(err)
 	}
-	receive, err := NewSetReceiveOption(manifest, newSettingsGuard(t), sender)
+	receive, err := NewSetReceiveOption(newSettingsGuard(t), sender)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tool, credential := newSettingsTool(t, pinned, receive, "run-1")
 
-	if response := callSetting(t, tool, credential, "pinned-gated", SetPinnedMethod, SetPinnedInput{ConversationID: "conversation-1", Pinned: true}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.pinnedCalls != 0 {
-		t.Fatalf("gated pinned setting = %+v, calls=%d", response, sender.pinnedCalls)
-	}
-	if response := callSetting(t, tool, credential, "receive-other-target", SetReceiveOptionMethod, SetReceiveOptionInput{ConversationID: "conversation-2", Option: ReceiveOptionReceive}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.optionCalls != 0 {
-		t.Fatalf("outside receive target = %+v, calls=%d", response, sender.optionCalls)
+	if response := callSetting(t, tool, credential, "pinned", SetPinnedMethod, SetPinnedInput{ConversationID: "conversation-1", Pinned: true}); !response.OK || sender.pinnedCalls != 1 {
+		t.Fatalf("pinned setting = %+v, calls=%d", response, sender.pinnedCalls)
 	}
 	if response := callSetting(t, tool, credential, "receive-allowed", SetReceiveOptionMethod, SetReceiveOptionInput{ConversationID: "conversation-1", Option: ReceiveOptionReceiveNoNotify}); !response.OK || sender.optionCalls != 1 || sender.option != (SetReceiveOptionInput{ConversationID: "conversation-1", Option: ReceiveOptionReceiveNoNotify}) {
 		t.Fatalf("allowed receive setting = %+v, sender=%+v", response, sender)
@@ -46,16 +36,10 @@ func TestConversationSettingsRequireManifestAndTypedConversationTarget(t *testin
 }
 
 func TestConversationSettingsIdempotencyAndUnknownOutcomeFailClosed(t *testing.T) {
-	manifest, err := capability.New([]capability.Entry{
-		{Method: SetPinnedMethod, Scope: SetPinnedScope, Status: capability.Available},
-		{Method: SetReceiveOptionMethod, Scope: SetReceiveOptionScope, Status: capability.Available},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	sender := &fakeSettingsSender{}
-	pinned, _ := NewSetPinned(manifest, newSettingsGuard(t), sender)
-	receive, _ := NewSetReceiveOption(manifest, newSettingsGuard(t), sender)
+	pinned, _ := NewSetPinned(newSettingsGuard(t), sender)
+	receive, _ := NewSetReceiveOption(newSettingsGuard(t), sender)
 	tool, credential := newSettingsTool(t, pinned, receive, "run-1")
 
 	first := callSetting(t, tool, credential, "same", SetPinnedMethod, SetPinnedInput{ConversationID: "conversation-1", Pinned: true})
@@ -124,11 +108,7 @@ func newSettingsTool(t *testing.T, pinned *SetPinnedHandler, receive *SetReceive
 		ProfileID: "work",
 		Principal: "provider",
 		Methods:   []string{SetPinnedMethod, SetReceiveOptionMethod},
-		Scopes:    []string{SetPinnedScope, SetReceiveOptionScope},
-		TargetAllowlists: map[string][]string{
-			SetPinnedMethod:        {grant.ConversationTarget("conversation-1")},
-			SetReceiveOptionMethod: {grant.ConversationTarget("conversation-1")},
-		},
+
 		ExpiresAt:  time.Now().Add(time.Hour),
 		RateBudget: 10,
 	})

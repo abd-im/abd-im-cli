@@ -8,7 +8,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -31,34 +30,22 @@ type Revoker interface {
 }
 
 type RevokeHandler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	revoker  Revoker
+	guard   *operation.Guard
+	revoker Revoker
 }
 
-func NewRevoke(manifest *capability.Manifest, guard *operation.Guard, revoker Revoker) (*RevokeHandler, error) {
-	if manifest == nil || guard == nil || revoker == nil {
-		return nil, errors.New("manifest, operation guard, and message revoker are required")
+func NewRevoke(guard *operation.Guard, revoker Revoker) (*RevokeHandler, error) {
+	if guard == nil || revoker == nil {
+		return nil, errors.New("operation guard and message revoker are required")
 	}
-	return &RevokeHandler{manifest: manifest, guard: guard, revoker: revoker}, nil
+	return &RevokeHandler{guard: guard, revoker: revoker}, nil
 }
 
 func (h *RevokeHandler) ProxyMethod() proxy.Method {
 	return proxy.Method{
-		Name:    RevokeMethod,
-		Scope:   RevokeScope,
-		Allowed: func() bool { return h.manifest.Allows(RevokeMethod, RevokeScope) },
-		Targets: revokeTargets,
-		Handle:  h.handle,
+		Name:   RevokeMethod,
+		Handle: h.handle,
 	}
-}
-
-func revokeTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseRevoke(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.ConversationTarget(input.ConversationID), grant.MessageTarget(input.MessageID)}, nil
 }
 
 func (h *RevokeHandler) handle(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {

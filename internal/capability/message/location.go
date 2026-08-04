@@ -9,7 +9,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -37,37 +36,22 @@ type LocationSender interface {
 
 // LocationHandler exposes the grant-scoped message.send_location action.
 type LocationHandler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	sender   LocationSender
+	guard  *operation.Guard
+	sender LocationSender
 }
 
-func NewLocation(manifest *capability.Manifest, guard *operation.Guard, sender LocationSender) (*LocationHandler, error) {
-	if manifest == nil || guard == nil || sender == nil {
-		return nil, errors.New("manifest, operation guard, and location sender are required")
+func NewLocation(guard *operation.Guard, sender LocationSender) (*LocationHandler, error) {
+	if guard == nil || sender == nil {
+		return nil, errors.New("operation guard and location sender are required")
 	}
-	return &LocationHandler{manifest: manifest, guard: guard, sender: sender}, nil
+	return &LocationHandler{guard: guard, sender: sender}, nil
 }
 
 func (h *LocationHandler) ProxyMethod() proxy.Method {
 	return proxy.Method{
-		Name:    LocationMethod,
-		Scope:   LocationScope,
-		Allowed: func() bool { return h.manifest.Allows(LocationMethod, LocationScope) },
-		Targets: locationTargets,
-		Handle:  h.handle,
+		Name:   LocationMethod,
+		Handle: h.handle,
 	}
-}
-
-func locationTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseLocation(raw)
-	if err != nil {
-		return nil, err
-	}
-	if input.RecipientID != "" {
-		return []string{grant.UserTarget(input.RecipientID)}, nil
-	}
-	return []string{grant.GroupTarget(input.GroupID)}, nil
 }
 
 func (h *LocationHandler) handle(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {

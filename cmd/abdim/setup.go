@@ -38,14 +38,27 @@ func runSetup(ctx context.Context, args []string, input io.Reader, output, promp
 }
 
 func runSetupWith(ctx context.Context, args []string, input io.Reader, output, prompt io.Writer, roots commandRoots, profileName string, dependencies setupDependencies) int {
-	if len(args) != 0 {
-		return writeTextError(output, "setup accepts no arguments")
+	agent, specified, err := setupAgent(args)
+	if err != nil {
+		return writeTextError(output, err.Error())
 	}
-	if _, err := exec.LookPath("codex"); err != nil {
-		return writeTextError(output, "Codex is not installed or is unavailable on PATH")
+	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, profileName)
+	if err != nil {
+		return writeTextError(output, err.Error())
 	}
-	if _, err := currentCodexHome(); err != nil {
-		return writeTextError(output, "current user Codex login is unavailable")
+	inboundToolsEnabled := false
+	if existing, loadErr := profile.Load(paths.ConfigFile); loadErr == nil {
+		inboundToolsEnabled = existing.InboundToolsEnabled
+		if !specified {
+			agent = existing.Agent
+		}
+	}
+	launch, err := agentLaunch(agent)
+	if err != nil {
+		return writeTextError(output, err.Error())
+	}
+	if _, err := exec.LookPath(launch.command); err != nil {
+		return writeTextError(output, launch.command+" is not installed or is unavailable on PATH")
 	}
 	account, areaCode, password, err := promptAccount(input, prompt)
 	if err != nil {
@@ -60,14 +73,6 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 		return writeTextError(output, err.Error())
 	}
 
-	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, profileName)
-	if err != nil {
-		return writeTextError(output, err.Error())
-	}
-	inboundToolsEnabled := false
-	if existing, loadErr := profile.Load(paths.ConfigFile); loadErr == nil {
-		inboundToolsEnabled = existing.InboundToolsEnabled
-	}
 	if err := paths.EnsurePrivate(); err != nil {
 		return writeTextError(output, err.Error())
 	}
@@ -84,6 +89,7 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 		Name:                profileName,
 		CredentialRef:       credentialRef,
 		InboundToolsEnabled: inboundToolsEnabled,
+		Agent:               agent,
 		Deployment: profile.Deployment{
 			UserID:     userID,
 			APIAddr:    connector.ABDAPIAddr,
@@ -101,6 +107,17 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 
 	fmt.Fprintf(output, "Setup complete. abdim is running (pid %d).\n", status.PID)
 	return 0
+}
+
+func setupAgent(args []string) (string, bool, error) {
+	if len(args) == 0 {
+		return profile.DefaultAgent, false, nil
+	}
+	if len(args) != 2 || args[0] != "--agent" {
+		return "", false, errors.New("setup accepts only --agent codex|hermes|openclaw")
+	}
+	agent, err := profile.NormalizeAgent(args[1])
+	return agent, true, err
 }
 
 func promptAccount(input io.Reader, prompt io.Writer) (account, areaCode, password string, err error) {

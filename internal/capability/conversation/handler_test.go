@@ -10,14 +10,13 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
 
-func TestMarkReadRequiresManifestGrantAndWindowBoundaries(t *testing.T) {
-	manifest, _ := capability.New([]capability.Entry{{Method: Method, Scope: Scope, Status: capability.Gated}})
+func TestMarkReadRequiresWindowBoundaries(t *testing.T) {
+
 	resolver := &fakeResolver{boundaries: map[string]Boundary{
 		"after":   {ConversationID: "conversation-1", MessageID: "after", ServerSeq: 10},
 		"inside":  {ConversationID: "conversation-1", MessageID: "inside", ServerSeq: 11},
@@ -25,7 +24,7 @@ func TestMarkReadRequiresManifestGrantAndWindowBoundaries(t *testing.T) {
 		"outside": {ConversationID: "conversation-1", MessageID: "outside", ServerSeq: 13},
 	}}
 	sender := &fakeSender{}
-	handler, grants, credential := newHandler(t, manifest, resolver, sender, grant.MessageWindow{
+	handler, grants, credential := newHandler(t, resolver, sender, grant.MessageWindow{
 		ConversationID: "conversation-1", AfterMessageID: "after", BeforeMessageID: "before",
 	})
 	tool, _ := proxy.New(grants, "run-1", "work", []proxy.Method{handler.ProxyMethod()})
@@ -37,14 +36,6 @@ func TestMarkReadRequiresManifestGrantAndWindowBoundaries(t *testing.T) {
 		})
 		return response
 	}
-	if response := call("gated", "conversation-1", "inside"); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
-		t.Fatalf("gated mark read = %+v, calls=%d", response, sender.calls)
-	}
-	manifest, _ = capability.New([]capability.Entry{{Method: Method, Scope: Scope, Status: capability.Available}})
-	handler, _, _ = newHandler(t, manifest, resolver, sender, grant.MessageWindow{
-		ConversationID: "conversation-1", AfterMessageID: "after", BeforeMessageID: "before",
-	})
-	tool, _ = proxy.New(grants, "run-1", "work", []proxy.Method{handler.ProxyMethod()})
 	if response := call("other-conversation", "conversation-2", "inside"); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
 		t.Fatalf("other conversation = %+v, calls=%d", response, sender.calls)
 	}
@@ -63,13 +54,13 @@ func TestMarkReadRequiresManifestGrantAndWindowBoundaries(t *testing.T) {
 }
 
 func TestMarkReadRequiresFiniteWindowAndTrustedBoundary(t *testing.T) {
-	manifest, _ := capability.New([]capability.Entry{{Method: Method, Scope: Scope, Status: capability.Available}})
+
 	resolver := &fakeResolver{boundaries: map[string]Boundary{
 		"after":  {ConversationID: "conversation-1", MessageID: "after", ServerSeq: 10},
 		"inside": {ConversationID: "conversation-1", MessageID: "inside", ServerSeq: 11},
 	}}
 	sender := &fakeSender{}
-	handler, grants, credential := newHandler(t, manifest, resolver, sender, grant.MessageWindow{ConversationID: "conversation-1", AfterMessageID: "after"})
+	handler, grants, credential := newHandler(t, resolver, sender, grant.MessageWindow{ConversationID: "conversation-1", AfterMessageID: "after"})
 	tool, _ := proxy.New(grants, "run-1", "work", []proxy.Method{handler.ProxyMethod()})
 	raw, _ := json.Marshal(Input{ConversationID: "conversation-1", UpToMessageID: "inside"})
 	response, _ := tool.Call(context.Background(), contracts.Request{
@@ -81,7 +72,7 @@ func TestMarkReadRequiresFiniteWindowAndTrustedBoundary(t *testing.T) {
 	}
 
 	resolver.boundaries["inside"] = Boundary{ConversationID: "conversation-2", MessageID: "inside", ServerSeq: 11}
-	handler, grants, credential = newHandler(t, manifest, resolver, sender, grant.MessageWindow{
+	handler, grants, credential = newHandler(t, resolver, sender, grant.MessageWindow{
 		ConversationID: "conversation-1", AfterMessageID: "after", BeforeMessageID: "inside",
 	})
 	tool, _ = proxy.New(grants, "run-1", "work", []proxy.Method{handler.ProxyMethod()})
@@ -96,7 +87,7 @@ func TestMarkReadRequiresFiniteWindowAndTrustedBoundary(t *testing.T) {
 }
 
 func TestMarkReadIdempotencyAndUnknownOutcomeFailClosed(t *testing.T) {
-	manifest, _ := capability.New([]capability.Entry{{Method: Method, Scope: Scope, Status: capability.Available}})
+
 	resolver := &fakeResolver{boundaries: map[string]Boundary{
 		"after":    {ConversationID: "conversation-1", MessageID: "after", ServerSeq: 10},
 		"inside-1": {ConversationID: "conversation-1", MessageID: "inside-1", ServerSeq: 11},
@@ -104,7 +95,7 @@ func TestMarkReadIdempotencyAndUnknownOutcomeFailClosed(t *testing.T) {
 		"before":   {ConversationID: "conversation-1", MessageID: "before", ServerSeq: 13},
 	}}
 	sender := &fakeSender{}
-	handler, grants, credential := newHandler(t, manifest, resolver, sender, grant.MessageWindow{
+	handler, grants, credential := newHandler(t, resolver, sender, grant.MessageWindow{
 		ConversationID: "conversation-1", AfterMessageID: "after", BeforeMessageID: "before",
 	})
 	tool, _ := proxy.New(grants, "run-1", "work", []proxy.Method{handler.ProxyMethod()})
@@ -137,7 +128,7 @@ func TestMarkReadIdempotencyAndUnknownOutcomeFailClosed(t *testing.T) {
 	}
 }
 
-func newHandler(t *testing.T, manifest *capability.Manifest, resolver BoundaryResolver, sender Sender, window grant.MessageWindow) (*Handler, *grant.Store, string) {
+func newHandler(t *testing.T, resolver BoundaryResolver, sender Sender, window grant.MessageWindow) (*Handler, *grant.Store, string) {
 	t.Helper()
 	store, err := control.Open(filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
@@ -148,21 +139,20 @@ func newHandler(t *testing.T, manifest *capability.Manifest, resolver BoundaryRe
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := New(manifest, guard, resolver, sender)
+	handler, err := New(guard, resolver, sender)
 	if err != nil {
 		t.Fatal(err)
 	}
 	grants := grant.NewStore()
 	_, credential, err := grants.Issue(grant.Policy{
-		RunID:            "run-1",
-		ProfileID:        "work",
-		Principal:        "provider",
-		Methods:          []string{Method},
-		Scopes:           []string{Scope},
-		TargetAllowlists: map[string][]string{Method: {grant.ConversationTarget("conversation-1")}},
-		MessageWindow:    window,
-		ExpiresAt:        time.Now().Add(time.Hour),
-		RateBudget:       10,
+		RunID:     "run-1",
+		ProfileID: "work",
+		Principal: "provider",
+		Methods:   []string{Method},
+
+		MessageWindow: window,
+		ExpiresAt:     time.Now().Add(time.Hour),
+		RateBudget:    10,
 	})
 	if err != nil {
 		t.Fatal(err)

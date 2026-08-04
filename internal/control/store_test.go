@@ -82,23 +82,6 @@ func TestStorePersistsOnlyControlMetadata(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PutOperation() error = %v", err)
 	}
-	expiresAt := now.Add(time.Hour)
-	if err := store.PutGrant(ctx, Grant{
-		ID:                  "grant-1",
-		ProfileID:           "work",
-		RunID:               "run-1",
-		Principal:           "provider",
-		Scopes:              []string{"message.history"},
-		TargetAllowlists:    map[string][]string{"message.history": {"conversation:conversation-1"}},
-		MessageWindow:       MessageWindow{ConversationID: "conversation-1", AfterMessageID: "message-0", BeforeMessageID: "message-2"},
-		AttachmentByteLimit: 1024,
-		RateLimit:           10,
-		ApprovalPolicy:      "none",
-		ExpiresAt:           expiresAt,
-	}); err != nil {
-		t.Fatalf("PutGrant() error = %v", err)
-	}
-
 	event, err := store.EventByDedupKey(ctx, "work", "sdk-callback-1")
 	if err != nil {
 		t.Fatalf("EventByDedupKey() error = %v", err)
@@ -123,17 +106,6 @@ func TestStorePersistsOnlyControlMetadata(t *testing.T) {
 	storedRun, err := store.RunByID(ctx, "work", "run-1")
 	if err != nil || storedRun.Status != RunRunning {
 		t.Fatalf("RunByID() = %#v, %v", storedRun, err)
-	}
-
-	grant, err := store.Grant(ctx, "grant-1")
-	if err != nil {
-		t.Fatalf("Grant() error = %v", err)
-	}
-	if len(grant.Scopes) != 1 || grant.Scopes[0] != "message.history" {
-		t.Fatalf("grant scopes = %#v", grant.Scopes)
-	}
-	if grant.MessageWindow.ConversationID != "conversation-1" {
-		t.Fatalf("grant message window = %+v", grant.MessageWindow)
 	}
 
 	rows, err := store.db.QueryContext(ctx, "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -202,39 +174,6 @@ func TestAttachmentMetadataIsRunScopedAndQuotaBound(t *testing.T) {
 	}
 	if err := store.PutAttachment(ctx, Attachment{ID: "../secret", ProfileID: "work", RunID: "run-2", GrantID: "grant-2", Kind: "file", ByteLimit: 10, ExpiresAt: expiresAt}); err == nil {
 		t.Fatal("PutAttachment() accepted a path-like ID")
-	}
-}
-
-func TestGrantReadsLegacyTargetArray(t *testing.T) {
-	ctx := context.Background()
-	store, err := Open(filepath.Join(t.TempDir(), "control.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	now := time.Date(2026, time.August, 1, 10, 0, 0, 0, time.UTC)
-	if err := store.PutGrant(ctx, Grant{
-		ID:               "grant-legacy",
-		ProfileID:        "work",
-		RunID:            "run-legacy",
-		Principal:        "provider",
-		Scopes:           []string{"message.read"},
-		TargetAllowlists: map[string][]string{"message.history": {"conversation:conversation-1"}},
-		ApprovalPolicy:   "none",
-		ExpiresAt:        now.Add(time.Hour),
-		CreatedAt:        now,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE grants SET target_allowlist = ? WHERE id = ?`, `["conversation-1"]`, "grant-legacy"); err != nil {
-		t.Fatal(err)
-	}
-	grant, err := store.Grant(ctx, "grant-legacy")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := grant.TargetAllowlists["legacy"]; len(got) != 1 || got[0] != "conversation-1" {
-		t.Fatalf("legacy targets = %#v", grant.TargetAllowlists)
 	}
 }
 

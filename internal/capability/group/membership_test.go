@@ -11,23 +11,14 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
 
-func TestGroupMembershipRequiresManifestAndMethodScopedGroupUserGrants(t *testing.T) {
+func TestGroupMembershipActions(t *testing.T) {
 	source := &fakeMembershipSource{canLeave: true, canInvite: true, canRemove: true}
-	tool, credential := newMembershipTool(t, membershipManifest(t, capability.Gated), source, "run-gated")
-	if response := callMembership(t, tool, credential, JoinMethod, "gated", JoinInput{GroupID: "group-1"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || source.joinCalls != 0 {
-		t.Fatalf("gated group.join = %+v, source=%+v", response, source)
-	}
-
-	tool, credential = newMembershipTool(t, membershipManifest(t, capability.Available), source, "run-available")
-	if response := callMembership(t, tool, credential, InviteMembersMethod, "outside-user", MembersInput{GroupID: "group-1", UserIDs: []string{"user-outside"}}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || source.inviteCalls != 0 {
-		t.Fatalf("outside group.invite_members = %+v, source=%+v", response, source)
-	}
+	tool, credential := newMembershipTool(t, source, "run-available")
 	if response := callMembership(t, tool, credential, JoinMethod, "join", JoinInput{GroupID: "group-1", Message: "please add me"}); !response.OK || source.joinCalls != 1 || source.join != (JoinInput{GroupID: "group-1", Message: "please add me"}) {
 		t.Fatalf("group.join = %+v, source=%+v", response, source)
 	}
@@ -46,7 +37,7 @@ func TestGroupMembershipRequiresManifestAndMethodScopedGroupUserGrants(t *testin
 
 func TestGroupMembershipFailsClosedForUnverifiedState(t *testing.T) {
 	source := &fakeMembershipSource{}
-	tool, credential := newMembershipTool(t, membershipManifest(t, capability.Available), source, "run-state")
+	tool, credential := newMembershipTool(t, source, "run-state")
 	for _, test := range []struct {
 		method string
 		input  any
@@ -72,7 +63,7 @@ func TestGroupMembershipFailsClosedForUnverifiedState(t *testing.T) {
 
 func TestGroupMembershipValidatesInputAndPreservesUnknownOutcome(t *testing.T) {
 	source := &fakeMembershipSource{canLeave: true, canInvite: true, canRemove: true}
-	tool, credential := newMembershipTool(t, membershipManifest(t, capability.Available), source, "run-unknown")
+	tool, credential := newMembershipTool(t, source, "run-unknown")
 	for _, test := range []struct {
 		method string
 		input  any
@@ -106,36 +97,15 @@ func TestNewMembershipRequiresAllDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := capability.New(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewMembership(nil, guard, &fakeMembershipSource{}); err == nil {
-		t.Fatal("NewMembership(nil manifest) error = nil")
-	}
-	if _, err := NewMembership(manifest, nil, &fakeMembershipSource{}); err == nil {
+	if _, err := NewMembership(nil, &fakeMembershipSource{}); err == nil {
 		t.Fatal("NewMembership(nil guard) error = nil")
 	}
-	if _, err := NewMembership(manifest, guard, nil); err == nil {
+	if _, err := NewMembership(guard, nil); err == nil {
 		t.Fatal("NewMembership(nil source) error = nil")
 	}
 }
 
-func membershipManifest(t *testing.T, status capability.Status) *capability.Manifest {
-	t.Helper()
-	manifest, err := capability.New([]capability.Entry{
-		{Method: JoinMethod, Scope: JoinScope, Status: status},
-		{Method: LeaveMethod, Scope: LeaveScope, Status: status},
-		{Method: InviteMembersMethod, Scope: InviteMembersScope, Status: status},
-		{Method: RemoveMembersMethod, Scope: RemoveMembersScope, Status: status},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return manifest
-}
-
-func newMembershipTool(t *testing.T, manifest *capability.Manifest, source MembershipSource, runID string) (*proxy.Proxy, string) {
+func newMembershipTool(t *testing.T, source MembershipSource, runID string) (*proxy.Proxy, string) {
 	t.Helper()
 	store, err := control.Open(filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
@@ -146,7 +116,7 @@ func newMembershipTool(t *testing.T, manifest *capability.Manifest, source Membe
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewMembership(manifest, guard, source)
+	handler, err := NewMembership(guard, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,13 +126,7 @@ func newMembershipTool(t *testing.T, manifest *capability.Manifest, source Membe
 		ProfileID: "work",
 		Principal: "provider",
 		Methods:   []string{JoinMethod, LeaveMethod, InviteMembersMethod, RemoveMembersMethod},
-		Scopes:    []string{JoinScope, LeaveScope, InviteMembersScope, RemoveMembersScope},
-		TargetAllowlists: map[string][]string{
-			JoinMethod:          {grant.GroupTarget("group-1")},
-			LeaveMethod:         {grant.GroupTarget("group-1")},
-			InviteMembersMethod: {grant.GroupTarget("group-1"), grant.UserTarget("user-1"), grant.UserTarget("user-2")},
-			RemoveMembersMethod: {grant.GroupTarget("group-1"), grant.UserTarget("user-1"), grant.UserTarget("user-2")},
-		},
+
 		ExpiresAt:  time.Now().Add(time.Hour),
 		RateBudget: 40,
 	})

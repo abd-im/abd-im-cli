@@ -1,34 +1,17 @@
 # Setup and Local Runtime
 
-`abdim` supports one local deployment model: the current user runs the daemon,
-the daemon logs in to the fixed ABD OpenIM deployment, and provider runs reuse
-that user's existing Codex login. Do not use `sudo`.
+## Codex
 
-## First Setup
-
-Install and log in to the Codex CLI first. From the repository root, build the
-binary into the current directory and run setup:
+先安装并登录 Codex CLI，确认 `codex` 位于 `PATH`：
 
 ```bash
+codex --version
 go build -o ./abdim ./cmd/abdim
 ./abdim setup
 ```
 
-For a named bot profile, place the global option before the command:
-
-```bash
-./abdim --profile work setup
-```
-
-`setup` prompts for the ABD bot account and password, exchanges them for the
-canonical OpenIM user ID and short-lived IM token, writes the local profile,
-and starts the daemon in the background. Phone accounts default to area code
-`+86`; email accounts do not prompt for an area code.
-
-The password is read without terminal echo and is never persisted. The token is
-stored in a current-user-only `0600` file and is never placed in argv, profile
-TOML, logs, audit records, MCP payloads, or RPC responses. The current ABD
-endpoints and platform are built in:
+`setup` 登录固定 ABD 部署，保存当前用户私有的 profile/token，并启动 daemon。
+不要使用 `sudo`。密码不持久化，token 文件权限为 `0600`。
 
 ```text
 Account login = https://2.alissa.xin/chat/account/login
@@ -37,93 +20,57 @@ OpenIM WS     = wss://2.alissa.xin/msg_gateway
 Platform      = 7
 ```
 
-Setup is complete when the command returns; there is no second account, owner
-ID, or pairing step. A direct message not sent by the bot itself can create a
-run. Inbound tools are disabled by default, so the initial provider MCP tool
-list is empty and the only externally visible effect is the event-bound reply
-to the trigger conversation. Group messages are ignored.
+日常命令：
 
-Without an inbound identity rule, any account that can directly message the bot
-can consume provider capacity and receive generated text. In the default mode
-it cannot query IM state or invoke typed actions.
+```bash
+./abdim status
+./abdim restart
+./abdim stop
+./abdim start
+```
 
-To expose all capability-verified IM tools to direct-message runs, explicitly
-enable them for the profile:
+## IM Tools
+
+默认入站 run 是 reply-only。需要 Codex 查询或修改 IM 数据时显式启用：
 
 ```bash
 ./abdim inbound tools enable
 ./abdim inbound tools status
+./abdim inbound tools disable
 ```
 
-This is a profile-wide high-trust switch: every account that can directly
-message the bot receives the verified typed tool set, including write actions,
-without a per-call confirmation prompt. Target checks, operation idempotency,
-rate and attachment budgets, and the run-private grant remain enforced. Message
-history and quote sources remain limited to messages before the trigger in that
-same direct conversation. Do not enable this mode on a publicly reachable bot.
-Disable it with `./abdim inbound tools disable`.
-
-## Lifecycle
-
-Setup starts the daemon automatically. Normal operation uses only:
+daemon 自动向每个 run 注入 `ABDIM_CLI`、私有 socket、grant 和方法快照。
+Agent 可直接运行：
 
 ```bash
-./abdim status
-./abdim stop
-./abdim start
-./abdim restart
-./abdim inbound tools status
+"$ABDIM_CLI" commands
+printf '%s' '{"conversation_id":"conversation-1","limit":20}' \
+  | "$ABDIM_CLI" message history --params-stdin
 ```
 
-Use `--profile work` before the command for a non-default profile. The daemon is
-a detached child of the invoked `abdim` binary and runs as the current user.
-It resolves `codex` from that user's `PATH`, reads the existing login from
-`$CODEX_HOME` (default `~/.codex`), and writes diagnostics to the profile's
-private `logs/daemon.log`. No root account, system service, external provider
-configuration, or foreground daemon command is supported.
+不需要配置额外工具服务。命令、文件和网络能力由 Codex app-server 正常提供；
+IM 调用仍必须经过 `abdim` 的 run grant。启用 tools 后会对所有能私聊该 bot 的
+账号生效，因此当前版本只适合受控 bot 账号。
 
-Each Codex run receives a fresh private `CODEX_HOME`. It copies only login and
-non-MCP model/provider configuration, removes source MCP and history data, and
-installs one fixed run-private `abdim` MCP bridge. The adapter rejects command
-and file approvals and removes the run directory on close. This is a trusted
-current-user model, not an operating-system sandbox: a malicious process with
-the same UID may access other files owned by that user.
+## Other Agents
 
-Local management CLI commands and `./abdim mcp serve` connect to the
-already-running daemon. They never initialize the SDK or open its data
-directory themselves. In architecture and method names, "owner" means this
-current local OS user; it is not a configured IM identity.
-
-## MCP
-
-IM-triggered Codex runs need no manual MCP configuration. The daemon creates a
-fresh run-private MCP server automatically. Its `enabled_tools` list is empty
-by default and contains every capability-verified typed IM method after
-`./abdim inbound tools enable`.
-
-A trusted local Codex client can separately register the management MCP:
+profile 仍接受固定 ID：
 
 ```bash
-codex mcp add abdim-work -- \
-  /absolute/path/to/abdim --profile work mcp serve
+./abdim setup --agent hermes
+./abdim setup --agent openclaw
 ```
 
-This local management MCP exposes typed reads, diagnostics, run cancellation,
-and operation diagnostics. It does not expose provider action tools; those are
-available only inside an enabled, run-private inbound MCP grant.
+它们分别使用 `hermes acp` 和 `openclaw acp`。这部分是后续接入点；当前主路径和
+真实集成验证只保证 Codex app-server。
 
-## Capability Gate
+## Runtime Files
 
-A typed source is marked `available` only after the complete controlled
-SDK/server integration workflow passes for the fixed compatibility tuple. The
-daemon does not read the SDK chat database. Profile, conversation, message,
-social, group, and action sources use authenticated server APIs through the
-daemon-owned SDK context; unsupported mappings remain `not_validated`.
-Capability status records implementation evidence, not admission: inbound
-discovery remains empty while tools are disabled and includes only `available`
-methods while tools are enabled.
+```text
+<config-dir>/abdim/profiles/<profile>.toml
+<data-dir>/abdim/profiles/<profile>/{sdk,control.db,attachments,logs}/
+<runtime-dir>/abdim/<profile>/{daemon.sock,daemon.lock,runs/}
+```
 
-Remote side effects use method-scoped targets and durable operation identities.
-Network or undecodable response failures remain `unknown`; neither the daemon
-nor provider retries them with a new idempotency key. `conversation.unread`
-remains `not_validated` because the current server API does not expose it.
+owner CLI 连接已运行 daemon，不自行初始化 SDK。Agent 和 daemon 运行在同一 OS
+用户下，所以应只选择可信的本机 Agent。

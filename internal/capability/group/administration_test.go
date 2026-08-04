@@ -11,23 +11,14 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
 
-func TestGroupAdministrationRequiresManifestAndMethodScopedTargets(t *testing.T) {
+func TestGroupAdministrationActions(t *testing.T) {
 	source := &fakeAdministrationSource{canSetInfo: true, canSetMute: true, canSetMemberMute: true, canTransferOwner: true}
-	tool, credential := newAdministrationTool(t, administrationManifest(t, capability.Gated), source, "run-gated")
-	if response := callAdministration(t, tool, credential, SetInfoMethod, "gated", validSetInfoInput()); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || source.setInfoCalls != 0 {
-		t.Fatalf("gated group.set_info = %+v, source=%+v", response, source)
-	}
-
-	tool, credential = newAdministrationTool(t, administrationManifest(t, capability.Available), source, "run-available")
-	if response := callAdministration(t, tool, credential, SetMemberMuteMethod, "outside-user", SetMemberMuteInput{GroupID: "group-1", UserID: "user-outside", Muted: boolPointer(true), DurationSeconds: uint32Pointer(60)}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || source.setMemberMuteCalls != 0 {
-		t.Fatalf("outside group.set_member_mute = %+v, source=%+v", response, source)
-	}
+	tool, credential := newAdministrationTool(t, source, "run-available")
 	if response := callAdministration(t, tool, credential, SetInfoMethod, "info", validSetInfoInput()); !response.OK || source.setInfoCalls != 1 || source.setInfo.GroupID != "group-1" || source.setInfo.Name == nil || *source.setInfo.Name != "project" {
 		t.Fatalf("group.set_info = %+v, source=%+v", response, source)
 	}
@@ -44,7 +35,7 @@ func TestGroupAdministrationRequiresManifestAndMethodScopedTargets(t *testing.T)
 
 func TestGroupAdministrationFailsClosedForUnverifiedState(t *testing.T) {
 	source := &fakeAdministrationSource{}
-	tool, credential := newAdministrationTool(t, administrationManifest(t, capability.Available), source, "run-state")
+	tool, credential := newAdministrationTool(t, source, "run-state")
 	for _, test := range []struct {
 		method string
 		input  any
@@ -71,7 +62,7 @@ func TestGroupAdministrationFailsClosedForUnverifiedState(t *testing.T) {
 
 func TestGroupAdministrationValidatesInputAndPreservesUnknownOutcome(t *testing.T) {
 	source := &fakeAdministrationSource{canSetInfo: true, canSetMute: true, canSetMemberMute: true, canTransferOwner: true}
-	tool, credential := newAdministrationTool(t, administrationManifest(t, capability.Available), source, "run-validation")
+	tool, credential := newAdministrationTool(t, source, "run-validation")
 	for _, test := range []struct {
 		method string
 		input  any
@@ -101,7 +92,7 @@ func TestGroupAdministrationValidatesInputAndPreservesUnknownOutcome(t *testing.
 
 func TestGroupAdministrationScopesOperationIDsByMethod(t *testing.T) {
 	source := &fakeAdministrationSource{canSetInfo: true, canSetMute: true, canSetMemberMute: true, canTransferOwner: true}
-	tool, credential := newAdministrationTool(t, administrationManifest(t, capability.Available), source, "run-ids")
+	tool, credential := newAdministrationTool(t, source, "run-ids")
 	if response := callAdministration(t, tool, credential, SetInfoMethod, "same-key", validSetInfoInput()); !response.OK {
 		t.Fatalf("group.set_info = %+v", response)
 	}
@@ -120,33 +111,15 @@ func TestNewAdministrationRequiresAllDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := administrationManifest(t, capability.Available)
-	if _, err := NewAdministration(nil, guard, &fakeAdministrationSource{}); err == nil {
-		t.Fatal("NewAdministration(nil manifest) error = nil")
-	}
-	if _, err := NewAdministration(manifest, nil, &fakeAdministrationSource{}); err == nil {
+	if _, err := NewAdministration(nil, &fakeAdministrationSource{}); err == nil {
 		t.Fatal("NewAdministration(nil guard) error = nil")
 	}
-	if _, err := NewAdministration(manifest, guard, nil); err == nil {
+	if _, err := NewAdministration(guard, nil); err == nil {
 		t.Fatal("NewAdministration(nil source) error = nil")
 	}
 }
 
-func administrationManifest(t *testing.T, status capability.Status) *capability.Manifest {
-	t.Helper()
-	manifest, err := capability.New([]capability.Entry{
-		{Method: SetInfoMethod, Scope: SetInfoScope, Status: status},
-		{Method: SetMuteMethod, Scope: SetMuteScope, Status: status},
-		{Method: SetMemberMuteMethod, Scope: SetMemberMuteScope, Status: status},
-		{Method: TransferOwnerMethod, Scope: TransferOwnerScope, Status: status},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return manifest
-}
-
-func newAdministrationTool(t *testing.T, manifest *capability.Manifest, source AdministrationSource, runID string) (*proxy.Proxy, string) {
+func newAdministrationTool(t *testing.T, source AdministrationSource, runID string) (*proxy.Proxy, string) {
 	t.Helper()
 	store, err := control.Open(filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
@@ -157,7 +130,7 @@ func newAdministrationTool(t *testing.T, manifest *capability.Manifest, source A
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewAdministration(manifest, guard, source)
+	handler, err := NewAdministration(guard, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,13 +140,7 @@ func newAdministrationTool(t *testing.T, manifest *capability.Manifest, source A
 		ProfileID: "work",
 		Principal: "provider",
 		Methods:   []string{SetInfoMethod, SetMuteMethod, SetMemberMuteMethod, TransferOwnerMethod},
-		Scopes:    []string{SetInfoScope, SetMuteScope, SetMemberMuteScope, TransferOwnerScope},
-		TargetAllowlists: map[string][]string{
-			SetInfoMethod:       {grant.GroupTarget("group-1")},
-			SetMuteMethod:       {grant.GroupTarget("group-1")},
-			SetMemberMuteMethod: {grant.GroupTarget("group-1"), grant.UserTarget("user-1")},
-			TransferOwnerMethod: {grant.GroupTarget("group-1"), grant.UserTarget("user-1")},
-		},
+
 		ExpiresAt:  time.Now().Add(time.Hour),
 		RateBudget: 20,
 	})

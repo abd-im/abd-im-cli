@@ -11,39 +11,23 @@ import (
 	"strings"
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
 const SchemaVersion = "abdim.service/v1"
 
 var (
-	ErrInvalidArgument       = errors.New("invalid service argument")
-	ErrCapabilityUnavailable = errors.New("capability is unavailable")
-	ErrScopeDenied           = errors.New("service scope is denied")
-	ErrTargetDenied          = errors.New("service target is denied")
-	ErrCursorInvalid         = errors.New("invalid cursor")
-	ErrCursorExpired         = errors.New("cursor expired")
+	ErrInvalidArgument = errors.New("invalid service argument")
+	ErrTargetDenied    = errors.New("service target is denied")
+	ErrCursorInvalid   = errors.New("invalid cursor")
+	ErrCursorExpired   = errors.New("cursor expired")
 )
-
-// Capability describes the public verification state of one typed method.
-// The fields are deliberately descriptive so owner diagnostics can explain
-// why a method is not exposed to a provider.
-type Capability struct {
-	Method        string `json:"method"`
-	Scope         string `json:"scope"`
-	Status        string `json:"status"`
-	Reason        string `json:"reason,omitempty"`
-	SDKVersion    string `json:"sdk_version,omitempty"`
-	ServerVersion string `json:"server_version,omitempty"`
-}
 
 // Meta is attached to every successful typed response.
 type Meta struct {
-	ProfileID  string     `json:"profile_id"`
-	Schema     string     `json:"schema"`
-	Stale      bool       `json:"stale"`
-	Capability Capability `json:"capability"`
+	ProfileID string `json:"profile_id"`
+	Schema    string `json:"schema"`
+	Stale     bool   `json:"stale"`
 }
 
 // Result is the typed in-process equivalent of the versioned RPC envelope.
@@ -58,23 +42,14 @@ type PageResult[T any] struct {
 	Meta Meta    `json:"meta"`
 }
 
-func NewMeta(profileID string, stale bool, capability Capability) Meta {
-	return Meta{ProfileID: profileID, Schema: SchemaVersion, Stale: stale, Capability: capability}
+func NewMeta(profileID string, stale bool) Meta {
+	return Meta{ProfileID: profileID, Schema: SchemaVersion, Stale: stale}
 }
 
 // ContractMeta converts a typed service result's metadata into the shared RPC
 // envelope metadata without importing a service package into the transport.
 func ContractMeta(meta Meta) contracts.Meta {
-	return contracts.Meta{
-		ProfileID: meta.ProfileID,
-		Stale:     meta.Stale,
-		Schema:    meta.Schema,
-		Capability: &contracts.Capability{
-			Method: meta.Capability.Method, Scope: meta.Capability.Scope,
-			Status: meta.Capability.Status, Reason: meta.Capability.Reason,
-			SDKVersion: meta.Capability.SDKVersion, ServerVersion: meta.Capability.ServerVersion,
-		},
-	}
+	return contracts.Meta{ProfileID: meta.ProfileID, Stale: meta.Stale, Schema: meta.Schema}
 }
 
 // Page is the common list result. NextCursor is opaque and empty at the end.
@@ -92,46 +67,16 @@ type Item[T any] struct {
 // Access captures the caller's authorization context. Owner callers bypass
 // run grants; provider callers must supply a grant issued for the run.
 type Access struct {
-	Owner      bool
-	Grant      grant.Grant
-	Capability Capability
+	Owner bool
+	Grant grant.Grant
 }
 
-func OwnerAccess(capability Capability) Access {
-	return Access{Owner: true, Capability: capability}
+func OwnerAccess() Access {
+	return Access{Owner: true}
 }
 
-func ProviderAccess(item grant.Grant, capability Capability) Access {
-	return Access{Grant: item, Capability: capability}
-}
-
-// Authorize validates the capability and, for provider calls, the grant's
-// method, scope and target allowlist.
-func (a Access) Authorize(method, scope string, targets ...string) error {
-	if a.Capability.Method != "" && a.Capability.Method != method {
-		return fmt.Errorf("%w: method %q", ErrCapabilityUnavailable, method)
-	}
-	if a.Capability.Scope != "" && a.Capability.Scope != scope {
-		return fmt.Errorf("%w: scope %q", ErrCapabilityUnavailable, scope)
-	}
-	if a.Capability.Status != "" && a.Capability.Status != string(capability.Available) {
-		return fmt.Errorf("%w: %s", ErrCapabilityUnavailable, a.Capability.Status)
-	}
-	if a.Owner {
-		return nil
-	}
-	if !a.Grant.AllowsMethod(method) {
-		return fmt.Errorf("%w: method %q", ErrScopeDenied, method)
-	}
-	if !a.Grant.AllowsScope(scope) {
-		return fmt.Errorf("%w: scope %q", ErrScopeDenied, scope)
-	}
-	for _, target := range targets {
-		if !a.Grant.AllowsTarget(method, target) {
-			return fmt.Errorf("%w: target %q", ErrTargetDenied, target)
-		}
-	}
-	return nil
+func ProviderAccess(item grant.Grant) Access {
+	return Access{Grant: item}
 }
 
 // Cursor is encoded as an opaque, query-bound value. Services should reject a
@@ -182,17 +127,4 @@ func ValidateLimit(limit int) error {
 		return fmt.Errorf("%w: limit must be between 1 and 100", ErrInvalidArgument)
 	}
 	return nil
-}
-
-// CapabilityFromManifest translates the existing capability registry into the
-// richer service metadata shape.
-func CapabilityFromManifest(manifest *capability.Manifest, method, scope string) Capability {
-	if manifest == nil {
-		return Capability{Method: method, Scope: scope, Status: string(capability.NotValidated), Reason: "capability manifest is unavailable"}
-	}
-	entry, ok := manifest.Entry(method)
-	if !ok {
-		return Capability{Method: method, Scope: scope, Status: string(capability.NotValidated), Reason: "method is not registered"}
-	}
-	return Capability{Method: entry.Method, Scope: entry.Scope, Status: string(entry.Status), Reason: entry.Reason}
 }

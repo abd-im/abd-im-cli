@@ -71,10 +71,10 @@ func runInboundToolsWith(ctx context.Context, args []string, output io.Writer, r
 
 func writeInboundToolsStatus(output io.Writer, enabled bool) {
 	if enabled {
-		fmt.Fprintln(output, "Inbound MCP tools are enabled for all direct-message senders.")
+		fmt.Fprintln(output, "Inbound CLI access is enabled for all direct-message senders.")
 		return
 	}
-	fmt.Fprintln(output, "Inbound MCP tools are disabled; direct messages are reply-only.")
+	fmt.Fprintln(output, "Inbound CLI access is disabled; direct messages are reply-only.")
 }
 
 func writeInboundToolsChanged(output io.Writer, enabled bool, pid int) {
@@ -83,8 +83,8 @@ func writeInboundToolsChanged(output io.Writer, enabled bool, pid int) {
 		state = "enabled for all direct-message senders"
 	}
 	if pid > 0 {
-		fmt.Fprintf(output, "Inbound MCP tools %s. abdim restarted (pid %d).\n", state, pid)
+		fmt.Fprintf(output, "Inbound CLI access %s. abdim restarted (pid %d).\n", state, pid)
 		return
 	}
-	fmt.Fprintf(output, "Inbound MCP tools %s. The setting applies on the next start.\n", state)
+	fmt.Fprintf(output, "Inbound CLI access %s. The setting applies on the next start.\n", state)
 }

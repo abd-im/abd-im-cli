@@ -9,7 +9,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -50,39 +49,23 @@ type QuoteSender interface {
 }
 
 type QuoteHandler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	source   QuoteSource
-	sender   QuoteSender
+	guard  *operation.Guard
+	source QuoteSource
+	sender QuoteSender
 }
 
-func NewQuote(manifest *capability.Manifest, guard *operation.Guard, source QuoteSource, sender QuoteSender) (*QuoteHandler, error) {
-	if manifest == nil || guard == nil || source == nil || sender == nil {
-		return nil, errors.New("manifest, operation guard, quote source, and quote sender are required")
+func NewQuote(guard *operation.Guard, source QuoteSource, sender QuoteSender) (*QuoteHandler, error) {
+	if guard == nil || source == nil || sender == nil {
+		return nil, errors.New("operation guard, quote source, and quote sender are required")
 	}
-	return &QuoteHandler{manifest: manifest, guard: guard, source: source, sender: sender}, nil
+	return &QuoteHandler{guard: guard, source: source, sender: sender}, nil
 }
 
 func (h *QuoteHandler) ProxyMethod() proxy.Method {
 	return proxy.Method{
-		Name:    QuoteMethod,
-		Scope:   QuoteScope,
-		Allowed: func() bool { return h.manifest.Allows(QuoteMethod, QuoteScope) },
-		Targets: quoteTargets,
-		Handle:  h.handle,
+		Name:   QuoteMethod,
+		Handle: h.handle,
 	}
-}
-
-func quoteTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseQuote(raw)
-	if err != nil {
-		return nil, err
-	}
-	targets := []string{grant.ConversationTarget(input.ConversationID), grant.MessageTarget(input.MessageID)}
-	if input.RecipientID != "" {
-		return append(targets, grant.UserTarget(input.RecipientID)), nil
-	}
-	return append(targets, grant.GroupTarget(input.GroupID)), nil
 }
 
 func (h *QuoteHandler) handle(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {

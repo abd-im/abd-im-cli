@@ -11,7 +11,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/service"
-	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
@@ -36,12 +35,12 @@ func TestOpenIMMessageReadsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := New(source, Options{ProfileID: "integration", Capabilities: VerifiedCapabilities(open_im_sdk.GetSdkVersion())})
+	reader, err := New(source, Options{ProfileID: "integration"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	owner := service.OwnerAccess(reader.capability(HistoryMethod))
+	owner := service.OwnerAccess()
 	history, err := reader.History(ctx, owner, HistoryInput{ConversationID: conversationID, Limit: 100})
 	if err != nil || len(history.Data.Items) == 0 {
 		t.Fatalf("message.history = %#v, %v", history, err)
@@ -57,14 +56,14 @@ func TestOpenIMMessageReadsIntegration(t *testing.T) {
 		assertMessageIntegrationMeta(t, second.Meta, HistoryMethod)
 	}
 
-	owner = service.OwnerAccess(reader.capability(SearchMethod))
+	owner = service.OwnerAccess()
 	search, err := reader.Search(ctx, owner, SearchInput{ConversationID: conversationID, Query: query, Limit: 100})
 	if err != nil || len(search.Data.Items) == 0 {
 		t.Fatalf("message.search = %#v, %v", search, err)
 	}
 	assertMessageIntegrationMeta(t, search.Meta, SearchMethod)
 
-	owner = service.OwnerAccess(reader.capability(GetMethod))
+	owner = service.OwnerAccess()
 	get, err := reader.Get(ctx, owner, GetInput{ConversationID: conversationID, MessageID: messageID})
 	if err != nil || get.Data.ID != messageID {
 		t.Fatalf("message.get = %#v, %v", get, err)
@@ -72,20 +71,19 @@ func TestOpenIMMessageReadsIntegration(t *testing.T) {
 	assertMessageIntegrationMeta(t, get.Meta, GetMethod)
 
 	item, _, err := grant.NewStore().Issue(grant.Policy{
-		RunID:            "run-integration",
-		ProfileID:        "integration",
-		Principal:        "provider",
-		Methods:          []string{HistoryMethod},
-		Scopes:           []string{ReadScope},
-		TargetAllowlists: map[string][]string{HistoryMethod: {grant.ConversationTarget(conversationID)}},
-		MessageWindow:    grant.MessageWindow{ConversationID: conversationID, AfterMessageID: afterMessageID},
-		ExpiresAt:        time.Now().Add(time.Hour),
-		RateBudget:       1,
+		RunID:     "run-integration",
+		ProfileID: "integration",
+		Principal: "provider",
+		Methods:   []string{HistoryMethod},
+
+		MessageWindow: grant.MessageWindow{ConversationID: conversationID, AfterMessageID: afterMessageID},
+		ExpiresAt:     time.Now().Add(time.Hour),
+		RateBudget:    1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := reader.History(ctx, service.ProviderAccess(item, reader.capability(HistoryMethod)), HistoryInput{ConversationID: conversationID, Limit: 100})
+	provider, err := reader.History(ctx, service.ProviderAccess(item), HistoryInput{ConversationID: conversationID, Limit: 100})
 	if err != nil {
 		t.Fatalf("provider message.history = %v", err)
 	}
@@ -104,7 +102,7 @@ func messageIntegrationEnv(t *testing.T, name string) string {
 
 func assertMessageIntegrationMeta(t *testing.T, meta service.Meta, method string) {
 	t.Helper()
-	if meta.Schema != service.SchemaVersion || meta.Stale || meta.Capability.Method != method || meta.Capability.Status != "available" || meta.Capability.SDKVersion != open_im_sdk.GetSdkVersion() {
+	if meta.Schema != service.SchemaVersion || meta.Stale || meta.ProfileID != "integration" {
 		t.Fatalf("%s response metadata is invalid", method)
 	}
 }

@@ -21,10 +21,3 @@ func TestCursorIsOpaqueAndBoundToItsQuery(t *testing.T) {
 		t.Fatalf("DecodeCursor() malformed error = %v, want ErrCursorInvalid", err)
 	}
 }
-
-func TestCapabilityFromNilManifestIsNotValidated(t *testing.T) {
-	item := CapabilityFromManifest(nil, "message.history", "message.read")
-	if item.Status != "not_validated" || item.Method != "message.history" {
-		t.Fatalf("CapabilityFromManifest(nil) = %+v", item)
-	}
-}

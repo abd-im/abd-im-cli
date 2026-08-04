@@ -9,7 +9,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -75,59 +74,25 @@ type Source interface {
 
 // Handler exposes the fixed friend lifecycle methods to one run-scoped proxy.
 type Handler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	source   Source
+	guard  *operation.Guard
+	source Source
 }
 
-func New(manifest *capability.Manifest, guard *operation.Guard, source Source) (*Handler, error) {
-	if manifest == nil || guard == nil || source == nil {
-		return nil, errors.New("manifest, operation guard, and friend source are required")
+func New(guard *operation.Guard, source Source) (*Handler, error) {
+	if guard == nil || source == nil {
+		return nil, errors.New("operation guard and friend source are required")
 	}
-	return &Handler{manifest: manifest, guard: guard, source: source}, nil
+	return &Handler{guard: guard, source: source}, nil
 }
 
-// ProxyMethods returns only the fixed friend methods. Their exact target is
-// derived from the input before grant authorization reaches the handler.
+// ProxyMethods returns only the fixed friend methods.
 func (h *Handler) ProxyMethods() []proxy.Method {
 	return []proxy.Method{
-		{Name: RequestMethod, Scope: RequestScope, Allowed: func() bool { return h.manifest.Allows(RequestMethod, RequestScope) }, Targets: requestTargets, Handle: h.request},
-		{Name: RespondMethod, Scope: RespondScope, Allowed: func() bool { return h.manifest.Allows(RespondMethod, RespondScope) }, Targets: respondTargets, Handle: h.respond},
-		{Name: DeleteMethod, Scope: DeleteScope, Allowed: func() bool { return h.manifest.Allows(DeleteMethod, DeleteScope) }, Targets: deleteTargets, Handle: h.delete},
-		{Name: SetRemarkMethod, Scope: SetRemarkScope, Allowed: func() bool { return h.manifest.Allows(SetRemarkMethod, SetRemarkScope) }, Targets: setRemarkTargets, Handle: h.setRemark},
+		{Name: RequestMethod, Handle: h.request},
+		{Name: RespondMethod, Handle: h.respond},
+		{Name: DeleteMethod, Handle: h.delete},
+		{Name: SetRemarkMethod, Handle: h.setRemark},
 	}
-}
-
-func requestTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseRequest(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.UserTarget(input.UserID)}, nil
-}
-
-func respondTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseRespond(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.UserTarget(input.UserID)}, nil
-}
-
-func deleteTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseDelete(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.UserTarget(input.UserID)}, nil
-}
-
-func setRemarkTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseSetRemark(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.UserTarget(input.UserID)}, nil
 }
 
 func (h *Handler) request(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {

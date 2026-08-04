@@ -151,30 +151,6 @@ func (operation Operation) validate() error {
 	}
 }
 
-// MessageWindow identifies the only message range a grant can read. It never
-// includes message text.
-type MessageWindow struct {
-	ConversationID  string `json:"conversation_id"`
-	AfterMessageID  string `json:"after_message_id,omitempty"`
-	BeforeMessageID string `json:"before_message_id,omitempty"`
-}
-
-// Grant defines the authorization issued to one provider run.
-type Grant struct {
-	ID                  string
-	ProfileID           string
-	RunID               string
-	Principal           string
-	Scopes              []string
-	TargetAllowlists    map[string][]string
-	MessageWindow       MessageWindow
-	AttachmentByteLimit int64
-	RateLimit           int64
-	ApprovalPolicy      string
-	ExpiresAt           time.Time
-	CreatedAt           time.Time
-}
-
 // Attachment records a daemon-owned file reference without retaining its
 // contents, original name, or local filesystem path.
 type Attachment struct {
@@ -198,37 +174,6 @@ func (attachment Attachment) validate() error {
 	}
 	if strings.TrimSpace(attachment.Kind) == "" || attachment.SizeBytes < 0 || attachment.ByteLimit <= 0 || attachment.ExpiresAt.IsZero() {
 		return errors.New("attachment kind, non-negative size, positive byte limit, and expiry are required")
-	}
-	return nil
-}
-
-func (grant Grant) validate() error {
-	if strings.TrimSpace(grant.ID) == "" || strings.TrimSpace(grant.ProfileID) == "" || strings.TrimSpace(grant.RunID) == "" {
-		return errors.New("grant ID, profile ID, and run ID are required")
-	}
-	if strings.TrimSpace(grant.Principal) == "" || len(grant.Scopes) == 0 {
-		return errors.New("grant principal and at least one scope are required")
-	}
-	for _, scope := range grant.Scopes {
-		if strings.TrimSpace(scope) == "" {
-			return errors.New("grant scopes must not be empty")
-		}
-	}
-	for method, targets := range grant.TargetAllowlists {
-		if strings.TrimSpace(method) == "" {
-			return errors.New("grant target method must not be empty")
-		}
-		for _, target := range targets {
-			if strings.TrimSpace(target) == "" {
-				return errors.New("grant targets must not be empty")
-			}
-		}
-	}
-	if grant.AttachmentByteLimit < 0 || grant.RateLimit < 0 {
-		return errors.New("grant limits must not be negative")
-	}
-	if strings.TrimSpace(grant.ApprovalPolicy) == "" || grant.ExpiresAt.IsZero() {
-		return errors.New("grant approval policy and expiry are required")
 	}
 	return nil
 }

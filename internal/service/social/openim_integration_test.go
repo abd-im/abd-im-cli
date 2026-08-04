@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/service"
-	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
@@ -34,40 +33,40 @@ func TestOpenIMSocialReadsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := New(source, Options{ProfileID: "integration", Capabilities: VerifiedCapabilities(open_im_sdk.GetSdkVersion())})
+	reader, err := New(source, Options{ProfileID: "integration"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	owner := service.OwnerAccess(reader.capability(FriendListMethod))
+	owner := service.OwnerAccess()
 	friends, err := reader.Friends(ctx, owner, ListInput{Limit: 100})
 	if err != nil || !containsFriend(friends.Data.Items, friendID) {
 		t.Fatalf("friend.list = %#v, %v", friends, err)
 	}
 	assertSocialIntegrationMeta(t, friends.Meta, FriendListMethod)
 
-	owner = service.OwnerAccess(reader.capability(FriendGetMethod))
+	owner = service.OwnerAccess()
 	friend, err := reader.Friend(ctx, owner, GetInput{UserID: friendID})
 	if err != nil || friend.Data.UserID != friendID {
 		t.Fatalf("friend.get = %#v, %v", friend, err)
 	}
 	assertSocialIntegrationMeta(t, friend.Meta, FriendGetMethod)
 
-	owner = service.OwnerAccess(reader.capability(FriendSearchMethod))
+	owner = service.OwnerAccess()
 	search, err := reader.SearchFriends(ctx, owner, SearchInput{Query: friendQuery, Limit: 100})
 	if err != nil || len(search.Data.Items) == 0 {
 		t.Fatalf("friend.search = %#v, %v", search, err)
 	}
 	assertSocialIntegrationMeta(t, search.Meta, FriendSearchMethod)
 
-	owner = service.OwnerAccess(reader.capability(BlackListMethod))
+	owner = service.OwnerAccess()
 	blacklist, err := reader.Blacklist(ctx, owner, ListInput{Limit: 100})
 	if err != nil || !containsBlack(blacklist.Data.Items, blackID) {
 		t.Fatalf("blacklist.list = %#v, %v", blacklist, err)
 	}
 	assertSocialIntegrationMeta(t, blacklist.Meta, BlackListMethod)
 
-	owner = service.OwnerAccess(reader.capability(BlackGetMethod))
+	owner = service.OwnerAccess()
 	black, err := reader.Black(ctx, owner, GetInput{UserID: blackID})
 	if err != nil || black.Data.UserID != blackID {
 		t.Fatalf("blacklist.get = %#v, %v", black, err)
@@ -86,7 +85,7 @@ func socialIntegrationEnv(t *testing.T, name string) string {
 
 func assertSocialIntegrationMeta(t *testing.T, meta service.Meta, method string) {
 	t.Helper()
-	if meta.Schema != service.SchemaVersion || meta.Stale || meta.Capability.Method != method || meta.Capability.Scope != scope(method) || meta.Capability.Status != "available" || meta.Capability.SDKVersion != open_im_sdk.GetSdkVersion() {
+	if meta.Schema != service.SchemaVersion || meta.Stale || meta.ProfileID != "integration" {
 		t.Fatalf("%s response metadata is invalid", method)
 	}
 }

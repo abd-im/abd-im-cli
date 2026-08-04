@@ -10,21 +10,20 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
 
-func TestSendLocationRequiresManifestAndExplicitTarget(t *testing.T) {
-	manifest, _ := capability.New([]capability.Entry{{Method: LocationMethod, Scope: LocationScope, Status: capability.Gated}})
+func TestSendLocation(t *testing.T) {
+
 	sender := &fakeLocationSender{}
 	guard := newMessageGuard(t)
-	handler, _ := NewLocation(manifest, guard, sender)
+	handler, _ := NewLocation(guard, sender)
 	grants := grant.NewStore()
 	_, credential, _ := grants.Issue(grant.Policy{
-		RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{LocationMethod}, Scopes: []string{LocationScope},
-		TargetAllowlists: map[string][]string{LocationMethod: {grant.UserTarget("user-1")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3,
+		RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{LocationMethod},
+		ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3,
 	})
 	call := func(key string, input LocationInput) contracts.Response {
 		raw, _ := json.Marshal(input)
@@ -33,28 +32,20 @@ func TestSendLocationRequiresManifestAndExplicitTarget(t *testing.T) {
 		return response
 	}
 	allowed := LocationInput{Description: "office", Longitude: 120.1, Latitude: 30.2, RecipientID: "user-1"}
-	if response := call("gated", allowed); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
-		t.Fatalf("gated location = %+v, calls=%d", response, sender.calls)
-	}
-	manifest, _ = capability.New([]capability.Entry{{Method: LocationMethod, Scope: LocationScope, Status: capability.Available}})
-	handler, _ = NewLocation(manifest, guard, sender)
-	if response := call("outside", LocationInput{Longitude: 120.1, Latitude: 30.2, RecipientID: "user-2"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
-		t.Fatalf("outside location = %+v, calls=%d", response, sender.calls)
-	}
 	if response := call("allowed", allowed); !response.OK || sender.calls != 1 || sender.description != "office" || sender.recipientID != "user-1" {
 		t.Fatalf("allowed location = %+v, sender=%+v", response, sender)
 	}
 }
 
 func TestSendCustomBoundsPayloadAndFailsClosedOnUnknownOutcome(t *testing.T) {
-	manifest, _ := capability.New([]capability.Entry{{Method: CustomMethod, Scope: CustomScope, Status: capability.Available}})
+
 	sender := &fakeCustomSender{err: operation.ErrOutcomeUnknown}
 	guard := newMessageGuard(t)
-	handler, _ := NewCustom(manifest, guard, sender)
+	handler, _ := NewCustom(guard, sender)
 	grants := grant.NewStore()
 	_, credential, _ := grants.Issue(grant.Policy{
-		RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{CustomMethod}, Scopes: []string{CustomScope},
-		TargetAllowlists: map[string][]string{CustomMethod: {grant.GroupTarget("group-1")}}, ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3,
+		RunID: "run-1", ProfileID: "work", Principal: "provider", Methods: []string{CustomMethod},
+		ExpiresAt: time.Now().Add(time.Hour), RateBudget: 3,
 	})
 	tool, _ := proxy.New(grants, "run-1", "work", []proxy.Method{handler.ProxyMethod()})
 	call := func(key string, input CustomInput) contracts.Response {

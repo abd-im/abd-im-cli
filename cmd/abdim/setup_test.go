@@ -69,11 +69,31 @@ func TestRunSetupPersistsTokenFreeProfileAndStartsDaemon(t *testing.T) {
 		t.Fatalf("setup output = %q, started=%t", output.String(), started)
 	}
 	item, err := profile.Load(paths.ConfigFile)
-	if err != nil || item.Deployment.UserID != "bot-user" || !item.InboundToolsEnabled {
+	if err != nil || item.Deployment.UserID != "bot-user" || !item.InboundToolsEnabled || item.Agent != "codex" {
 		t.Fatalf("profile = %#v, %v", item, err)
 	}
 	profileContents, _ := os.ReadFile(paths.ConfigFile)
 	if strings.Contains(string(profileContents), token) || strings.Contains(string(profileContents), "pairing") || strings.Contains(string(profileContents), "owner_user_id") {
 		t.Fatalf("profile leaked setup secret: %s", profileContents)
+	}
+}
+
+func TestSetupAgentAcceptsOnlyAllowlistedProviderID(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "codex"},
+		{[]string{"--agent", "codex"}, "codex"},
+		{[]string{"--agent", "hermes"}, "hermes"},
+		{[]string{"--agent", "openclaw"}, "openclaw"},
+	} {
+		got, _, err := setupAgent(test.args)
+		if err != nil || got != test.want {
+			t.Errorf("setupAgent(%v) = %q, %v", test.args, got, err)
+		}
+	}
+	if _, _, err := setupAgent([]string{"--agent", "custom --flag"}); err == nil {
+		t.Fatal("setupAgent accepted arbitrary command")
 	}
 }

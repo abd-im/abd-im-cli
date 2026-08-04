@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/service"
-	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
@@ -33,40 +32,40 @@ func TestOpenIMGroupReadsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSDKSource() error = %v", err)
 	}
-	reader, err := New(source, Options{ProfileID: "integration", Capabilities: VerifiedCapabilities(open_im_sdk.GetSdkVersion())})
+	reader, err := New(source, Options{ProfileID: "integration"})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	owner := service.OwnerAccess(reader.capability(ListMethod))
+	owner := service.OwnerAccess()
 	list, err := reader.List(ctx, owner, ListInput{Limit: 10})
 	if err != nil {
 		t.Fatalf("group.list error = %v", err)
 	}
 	assertIntegrationMeta(t, list.Meta, ListMethod)
 
-	owner = service.OwnerAccess(reader.capability(GetMethod))
+	owner = service.OwnerAccess()
 	get, err := reader.Get(ctx, owner, GetInput{GroupID: groupID})
 	if err != nil || get.Data.ID != groupID {
 		t.Fatalf("group.get failed")
 	}
 	assertIntegrationMeta(t, get.Meta, GetMethod)
 
-	owner = service.OwnerAccess(reader.capability(SearchMethod))
+	owner = service.OwnerAccess()
 	search, err := reader.Search(ctx, owner, SearchInput{Query: groupID, Limit: 10})
 	if err != nil {
 		t.Fatalf("group.search error = %v", err)
 	}
 	assertIntegrationMeta(t, search.Meta, SearchMethod)
 
-	owner = service.OwnerAccess(reader.capability(MembersListMethod))
+	owner = service.OwnerAccess()
 	members, err := reader.Members(ctx, owner, MembersInput{GroupID: groupID, Limit: 10})
 	if err != nil {
 		t.Fatalf("group.members.list error = %v", err)
 	}
 	assertIntegrationMeta(t, members.Meta, MembersListMethod)
 
-	owner = service.OwnerAccess(reader.capability(MembersSearchMethod))
+	owner = service.OwnerAccess()
 	memberSearch, err := reader.SearchMembers(ctx, owner, MembersSearchInput{GroupID: groupID, Query: memberQuery, Limit: 10})
 	if err != nil {
 		t.Fatalf("group.members.search error = %v", err)
@@ -85,7 +84,7 @@ func integrationEnv(t *testing.T, name string) string {
 
 func assertIntegrationMeta(t *testing.T, meta service.Meta, method string) {
 	t.Helper()
-	if meta.Schema != service.SchemaVersion || meta.Stale || meta.Capability.Method != method || meta.Capability.Status != "available" || meta.Capability.SDKVersion != open_im_sdk.GetSdkVersion() {
+	if meta.Schema != service.SchemaVersion || meta.Stale || meta.ProfileID != "integration" {
 		t.Fatalf("%s response metadata is invalid", method)
 	}
 }

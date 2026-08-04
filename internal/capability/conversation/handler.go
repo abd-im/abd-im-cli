@@ -9,7 +9,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -56,35 +55,23 @@ type Sender interface {
 }
 
 type Handler struct {
-	manifest *capability.Manifest
 	guard    *operation.Guard
 	resolver BoundaryResolver
 	sender   Sender
 }
 
-func New(manifest *capability.Manifest, guard *operation.Guard, resolver BoundaryResolver, sender Sender) (*Handler, error) {
-	if manifest == nil || guard == nil || resolver == nil || sender == nil {
-		return nil, errors.New("manifest, operation guard, boundary resolver, and conversation sender are required")
+func New(guard *operation.Guard, resolver BoundaryResolver, sender Sender) (*Handler, error) {
+	if guard == nil || resolver == nil || sender == nil {
+		return nil, errors.New("operation guard, boundary resolver, and conversation sender are required")
 	}
-	return &Handler{manifest: manifest, guard: guard, resolver: resolver, sender: sender}, nil
+	return &Handler{guard: guard, resolver: resolver, sender: sender}, nil
 }
 
 func (h *Handler) ProxyMethod() proxy.Method {
 	return proxy.Method{
-		Name:    Method,
-		Scope:   Scope,
-		Allowed: func() bool { return h.manifest.Allows(Method, Scope) },
-		Targets: targets,
-		Handle:  h.handle,
+		Name:   Method,
+		Handle: h.handle,
 	}
-}
-
-func targets(raw json.RawMessage) ([]string, error) {
-	input, err := parse(raw)
-	if err != nil {
-		return nil, err
-	}
-	return []string{grant.ConversationTarget(input.ConversationID)}, nil
 }
 
 func (h *Handler) handle(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {

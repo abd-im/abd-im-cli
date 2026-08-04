@@ -47,12 +47,8 @@ func TestOwnerRunCancellationUsesLocalRPCAndClosesProviderBoundaryE2E(t *testing
 		t.Fatal(err)
 	}
 	method := proxy.Method{
-		Name:    "message.history",
-		Scope:   "message.read",
-		Allowed: func() bool { return true },
-		Targets: func(json.RawMessage) ([]string, error) {
-			return []string{grant.ConversationTarget("conversation-1")}, nil
-		},
+		Name: "message.history",
+
 		Handle: func(context.Context, contracts.Request, grant.Grant) (json.RawMessage, error) {
 			return json.RawMessage(`{"items":[]}`), nil
 		},
@@ -235,10 +231,25 @@ func assertRunStatus(t *testing.T, store *control.Store, id string, status contr
 	t.Fatalf("run status = %#v, %v; want %q", item, err, status)
 }
 
-type runOperationsSender struct{ deliveries chan reply.Delivery }
+type runOperationsSender struct {
+	deliveries chan reply.Delivery
+	stream     reply.StreamDelivery
+}
 
 func (s *runOperationsSender) Reply(_ context.Context, delivery reply.Delivery) error {
 	s.deliveries <- delivery
+	return nil
+}
+
+func (s *runOperationsSender) StartStream(_ context.Context, delivery reply.StreamDelivery) (reply.StreamRef, error) {
+	s.stream = delivery
+	return reply.StreamRef{ConversationID: delivery.ConversationID, ClientMsgID: delivery.ClientMsgID}, nil
+}
+
+func (s *runOperationsSender) AppendStream(_ context.Context, appendValue reply.StreamAppend) error {
+	if appendValue.End {
+		s.deliveries <- reply.Delivery{EventID: s.stream.EventID, ConversationID: s.stream.ConversationID}
+	}
 	return nil
 }
 

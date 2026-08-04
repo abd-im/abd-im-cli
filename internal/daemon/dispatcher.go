@@ -50,7 +50,7 @@ func NewDispatcher(profileID string, methods []OwnerMethod) (*Dispatcher, error)
 
 // Handle dispatches a validated local request to one registered typed method.
 // It returns public contract failures for all invalid or unsafe results so raw
-// service errors never reach the local socket or owner MCP adapter.
+// service errors never reach the local socket.
 func (d *Dispatcher) Handle(ctx context.Context, request contracts.Request) (contracts.Response, error) {
 	if err := request.Validate(); err != nil {
 		return dispatcherFailure(request.RequestID, contracts.CodeInvalidArgument, "invalid owner request", false), nil

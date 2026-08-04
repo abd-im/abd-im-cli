@@ -9,7 +9,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -25,30 +24,18 @@ type Creator interface {
 	CreateGroup(context.Context, Input) error
 }
 type Handler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	creator  Creator
+	guard   *operation.Guard
+	creator Creator
 }
 
-func New(manifest *capability.Manifest, guard *operation.Guard, creator Creator) (*Handler, error) {
-	if manifest == nil || guard == nil || creator == nil {
-		return nil, errors.New("manifest, operation guard, and group creator are required")
+func New(guard *operation.Guard, creator Creator) (*Handler, error) {
+	if guard == nil || creator == nil {
+		return nil, errors.New("operation guard and group creator are required")
 	}
-	return &Handler{manifest, guard, creator}, nil
+	return &Handler{guard, creator}, nil
 }
 func (h *Handler) ProxyMethod() proxy.Method {
-	return proxy.Method{Name: Method, Scope: Scope, Allowed: func() bool { return h.manifest.Allows(Method, Scope) }, Targets: memberIDs, Handle: h.handle}
-}
-func memberIDs(raw json.RawMessage) ([]string, error) {
-	input, err := parse(raw)
-	if err != nil {
-		return nil, err
-	}
-	targets := make([]string, 0, len(input.MemberIDs))
-	for _, id := range input.MemberIDs {
-		targets = append(targets, grant.UserTarget(id))
-	}
-	return targets, nil
+	return proxy.Method{Name: Method, Handle: h.handle}
 }
 func (h *Handler) handle(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {
 	input, err := parse(request.Params)

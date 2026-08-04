@@ -9,14 +9,13 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
 
-func TestMessageSendAllowlistAndIdempotencyE2E(t *testing.T) {
+func TestMessageSendIdempotencyE2E(t *testing.T) {
 	store, err := control.Open(filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -25,10 +24,6 @@ func TestMessageSendAllowlistAndIdempotencyE2E(t *testing.T) {
 
 	sender := &e2eTextSender{}
 	tool, credential := newMessageSendTool(t, store, sender, "run-confirmed")
-	if response := callMessageSend(t, tool, credential, "outside", messagecapability.Input{Text: "outside", RecipientID: "user-outside"}); response.OK || response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
-		t.Fatalf("outside recipient response/calls = %+v/%d", response, sender.calls)
-	}
-
 	input := messagecapability.Input{Text: "hello", RecipientID: "user-allowed"}
 	first := callMessageSend(t, tool, credential, "confirmed", input)
 	if !first.OK || sender.calls != 1 || sender.recipientID != "user-allowed" {
@@ -83,15 +78,12 @@ func TestUnknownMessageSendSurvivesRecoveryWithoutRetryE2E(t *testing.T) {
 
 func newMessageSendTool(t *testing.T, store *control.Store, sender messagecapability.Sender, runID string) (*proxy.Proxy, string) {
 	t.Helper()
-	manifest, err := capability.New([]capability.Entry{{Method: messagecapability.Method, Scope: messagecapability.Scope, Status: capability.Available}})
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	guard, err := operation.NewGuard(store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := messagecapability.New(manifest, guard, sender)
+	handler, err := messagecapability.New(guard, sender)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,10 +93,7 @@ func newMessageSendTool(t *testing.T, store *control.Store, sender messagecapabi
 		ProfileID: "work",
 		Principal: "provider",
 		Methods:   []string{messagecapability.Method},
-		Scopes:    []string{messagecapability.Scope},
-		TargetAllowlists: map[string][]string{
-			messagecapability.Method: {grant.UserTarget("user-allowed"), grant.GroupTarget("group-allowed")},
-		},
+
 		ExpiresAt:  time.Now().Add(time.Hour),
 		RateBudget: 10,
 	})

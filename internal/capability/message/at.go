@@ -8,7 +8,6 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
@@ -34,39 +33,22 @@ type AtSender interface {
 
 // AtHandler exposes the grant-scoped message.send_at action.
 type AtHandler struct {
-	manifest *capability.Manifest
-	guard    *operation.Guard
-	sender   AtSender
+	guard  *operation.Guard
+	sender AtSender
 }
 
-func NewAt(manifest *capability.Manifest, guard *operation.Guard, sender AtSender) (*AtHandler, error) {
-	if manifest == nil || guard == nil || sender == nil {
-		return nil, errors.New("manifest, operation guard, and message at sender are required")
+func NewAt(guard *operation.Guard, sender AtSender) (*AtHandler, error) {
+	if guard == nil || sender == nil {
+		return nil, errors.New("operation guard and message at sender are required")
 	}
-	return &AtHandler{manifest: manifest, guard: guard, sender: sender}, nil
+	return &AtHandler{guard: guard, sender: sender}, nil
 }
 
 func (h *AtHandler) ProxyMethod() proxy.Method {
 	return proxy.Method{
-		Name:    AtMethod,
-		Scope:   AtScope,
-		Allowed: func() bool { return h.manifest.Allows(AtMethod, AtScope) },
-		Targets: atTargets,
-		Handle:  h.handle,
+		Name:   AtMethod,
+		Handle: h.handle,
 	}
-}
-
-func atTargets(raw json.RawMessage) ([]string, error) {
-	input, err := parseAt(raw)
-	if err != nil {
-		return nil, err
-	}
-	targets := make([]string, 0, 1+len(input.MentionUserIDs))
-	targets = append(targets, grant.GroupTarget(input.GroupID))
-	for _, userID := range input.MentionUserIDs {
-		targets = append(targets, grant.UserTarget(userID))
-	}
-	return targets, nil
 }
 
 func (h *AtHandler) handle(ctx context.Context, request contracts.Request, _ grant.Grant) (json.RawMessage, error) {

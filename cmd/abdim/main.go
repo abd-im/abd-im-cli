@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -16,36 +15,31 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/abd-im/abd-im-cli/internal/agent/access"
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
-	"github.com/abd-im/abd-im-cli/internal/agent/provider"
+	acpprovider "github.com/abd-im/abd-im-cli/internal/agent/provider/acp"
 	codexprovider "github.com/abd-im/abd-im-cli/internal/agent/provider/codex"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
 	runmanager "github.com/abd-im/abd-im-cli/internal/agent/run"
 	"github.com/abd-im/abd-im-cli/internal/bridge"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	blacklistcapability "github.com/abd-im/abd-im-cli/internal/capability/blacklist"
 	conversationcapability "github.com/abd-im/abd-im-cli/internal/capability/conversation"
 	friendcapability "github.com/abd-im/abd-im-cli/internal/capability/friend"
 	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
 	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/cli"
+	"github.com/abd-im/abd-im-cli/internal/commands"
 	"github.com/abd-im/abd-im-cli/internal/connector"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/daemon"
 	"github.com/abd-im/abd-im-cli/internal/events"
 	"github.com/abd-im/abd-im-cli/internal/ipc"
-	mcpowner "github.com/abd-im/abd-im-cli/internal/mcp/owner"
-	mcpstdio "github.com/abd-im/abd-im-cli/internal/mcp/stdio"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 	"github.com/abd-im/abd-im-cli/internal/profile"
 	"github.com/abd-im/abd-im-cli/internal/reply"
-	conversationservice "github.com/abd-im/abd-im-cli/internal/service/conversation"
-	groupservice "github.com/abd-im/abd-im-cli/internal/service/group"
-	messageservice "github.com/abd-im/abd-im-cli/internal/service/message"
 	operationsservice "github.com/abd-im/abd-im-cli/internal/service/operations"
 	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
-	socialservice "github.com/abd-im/abd-im-cli/internal/service/social"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
@@ -81,6 +75,7 @@ func runWithIOStreams(args []string, input io.Reader, output, prompt io.Writer, 
 	requestID := "cli"
 	format := cli.OutputJSON
 	var timeout time.Duration
+	profileSet := false
 	for len(args) > 0 && strings.HasPrefix(args[0], "--") {
 		switch args[0] {
 		case "--profile":
@@ -88,6 +83,7 @@ func runWithIOStreams(args []string, input io.Reader, output, prompt io.Writer, 
 				return writeInvalidArgument(output, requestID, "--profile requires a value")
 			}
 			profileName, args = args[1], args[2:]
+			profileSet = true
 		case "--request-id":
 			if len(args) < 2 {
 				return writeInvalidArgument(output, requestID, "--request-id requires a value")
@@ -121,6 +117,17 @@ func runWithIOStreams(args []string, input io.Reader, output, prompt io.Writer, 
 		defer cancel()
 	}
 
+	agentContext, agentMode, err := access.FromEnvironment(os.Getenv)
+	if err != nil {
+		return writeInvalidArgument(output, requestID, err.Error())
+	}
+	if agentMode {
+		if profileSet && profileName != agentContext.ProfileID {
+			return writeInvalidArgument(output, requestID, "--profile cannot override the Agent run profile")
+		}
+		return runTypedCommand(ctx, args, input, output, format, requestID, agentContext.ProfileID, agentContext.Socket, agentContext.Grant, commands.Run(agentContext.AllowedMethods))
+	}
+
 	if len(args) >= 1 && args[0] == "setup" {
 		return runSetup(ctx, args[1:], input, output, prompt, roots, profileName)
 	}
@@ -145,30 +152,41 @@ func runWithIOStreams(args []string, input io.Reader, output, prompt io.Writer, 
 	if len(args) == 1 && args[0] == "__serve" {
 		return runDaemonServe(ctx, output, roots, profileName, requestID, format)
 	}
-	if len(args) == 2 && args[0] == "mcp" && args[1] == "serve" {
-		return runOwnerMCP(ctx, input, output, roots, profileName, requestID)
-	}
-	if len(args) >= 3 && args[0] == "mcp" && args[1] == "provider" && args[2] == "bridge" {
-		return runProviderMCPBridge(args[3:], input, output)
-	}
-	method, consumed := ownerMethod(args)
-	if method == "" {
-		return writeInvalidArgument(output, requestID, "unsupported owner command")
-	}
-	params, err := ownerParams(args[consumed:], input)
-	if err != nil {
-		return writeInvalidArgument(output, requestID, err.Error())
-	}
 	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, profileName)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	response, err := ipc.Call(ctx, paths.Socket, contracts.Request{
-		APIVersion: contracts.APIVersionV1,
-		RequestID:  requestID,
-		ProfileID:  profileName,
-		Method:     method,
-		Params:     params,
+	return runTypedCommand(ctx, args, input, output, format, requestID, profileName, paths.Socket, "", commands.Owner())
+}
+
+func runTypedCommand(ctx context.Context, args []string, input io.Reader, output io.Writer, format cli.Output, requestID, profileID, socket, credential string, catalog []commands.Command) int {
+	if len(args) == 1 && args[0] == "commands" {
+		payload, err := json.Marshal(catalog)
+		if err != nil {
+			return writeLocalErrorForFormat(output, format, requestID, err)
+		}
+		response := contracts.Response{APIVersion: contracts.APIVersionV1, RequestID: requestID, OK: true, Data: payload, Meta: &contracts.Meta{ProfileID: profileID}}
+		if err := cli.WriteResponse(output, format, response); err != nil {
+			return 1
+		}
+		return 0
+	}
+	method, consumed := commands.Resolve(args, catalog)
+	if method == "" {
+		return writeInvalidArgument(output, requestID, "unsupported command")
+	}
+	params, err := commandParams(args[consumed:], input)
+	if err != nil {
+		return writeInvalidArgument(output, requestID, err.Error())
+	}
+	response, err := ipc.Call(ctx, socket, contracts.Request{
+		APIVersion:     contracts.APIVersionV1,
+		RequestID:      requestID,
+		ProfileID:      profileID,
+		Method:         method,
+		Params:         params,
+		Grant:          credential,
+		IdempotencyKey: commandIdempotencyKey(params),
 	})
 	if err != nil {
 		response = cli.ErrorResponse(requestID, contracts.CodeDaemonUnavailable, errors.New("daemon is unavailable"))
@@ -179,8 +197,8 @@ func runWithIOStreams(args []string, input io.Reader, output, prompt io.Writer, 
 	return cli.ExitCode(response)
 }
 
-// runDaemonServe composes the fixed daemon path with the current user's local
-// Codex CLI. Each run receives a fresh private MCP configuration.
+// runDaemonServe composes the fixed daemon path with the profile's allowlisted
+// Agent. Each run receives a fresh private abdim CLI context.
 func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, profileName, requestID string, format cli.Output) int {
 	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, profileName)
 	if err != nil {
@@ -196,13 +214,13 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	if err := item.Deployment.Validate(); err != nil {
 		return writeInvalidArgument(output, requestID, "profile deployment is not configured")
 	}
-	codexExecutable, err := exec.LookPath("codex")
+	launch, err := agentLaunch(item.Agent)
 	if err != nil {
-		return writeInvalidArgument(output, requestID, "Codex executable is unavailable on PATH")
+		return writeInvalidArgument(output, requestID, err.Error())
 	}
-	sourceCodexHome, err := currentCodexHome()
+	agentExecutable, err := exec.LookPath(launch.command)
 	if err != nil {
-		return writeInvalidArgument(output, requestID, "current user Codex login is unavailable")
+		return writeInvalidArgument(output, requestID, "configured Agent is unavailable on PATH")
 	}
 
 	credentials, err := profile.NewFileStore(roots.dataDir)
@@ -312,129 +330,63 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	evidenceGate, err := capability.NewEvidenceGate([]capability.Compatibility{capability.SingleCodexOpenIMCompatibility})
+	groupCreate, err := groupcapability.New(groupOperations, groupCreator)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	runtimeCompatibility := capability.Compatibility{
-		Provider:    "codex",
-		MCPProtocol: mcpstdio.ProtocolVersion,
-		SDKVersion:  open_im_sdk.GetSdkVersion(),
-		ServerAPI:   capability.SingleCodexOpenIMCompatibility.ServerAPI,
-	}
-	newManifest := func(entries []capability.Entry) (*capability.Manifest, error) {
-		return evidenceGate.Manifest(runtimeCompatibility, entries)
-	}
-	groupManifest, err := newManifest([]capability.Entry{
-		{Method: groupcapability.Method, Scope: groupcapability.Scope, Status: capability.Available},
-		{Method: groupcapability.JoinMethod, Scope: groupcapability.JoinScope, Status: capability.Available},
-		{Method: groupcapability.LeaveMethod, Scope: groupcapability.LeaveScope, Status: capability.Available},
-		{Method: groupcapability.InviteMembersMethod, Scope: groupcapability.InviteMembersScope, Status: capability.Available},
-		{Method: groupcapability.RemoveMembersMethod, Scope: groupcapability.RemoveMembersScope, Status: capability.Available},
-		{Method: groupcapability.SetInfoMethod, Scope: groupcapability.SetInfoScope, Status: capability.Available},
-		{Method: groupcapability.SetMuteMethod, Scope: groupcapability.SetMuteScope, Status: capability.Available},
-		{Method: groupcapability.SetMemberMuteMethod, Scope: groupcapability.SetMemberMuteScope, Status: capability.Available},
-		{Method: groupcapability.TransferOwnerMethod, Scope: groupcapability.TransferOwnerScope, Status: capability.Available},
-	})
+	groupMembership, err := groupcapability.NewMembership(groupOperations, groupMembershipActions)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	groupCreate, err := groupcapability.New(groupManifest, groupOperations, groupCreator)
+	groupAdministration, err := groupcapability.NewAdministration(groupOperations, groupAdministrationActions)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	groupMembership, err := groupcapability.NewMembership(groupManifest, groupOperations, groupMembershipActions)
+	messageSend, err := messagecapability.New(groupOperations, messageSender)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	groupAdministration, err := groupcapability.NewAdministration(groupManifest, groupOperations, groupAdministrationActions)
+	messageAt, err := messagecapability.NewAt(groupOperations, messageAtSender)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	messageManifest, err := newManifest([]capability.Entry{
-		{Method: messagecapability.Method, Scope: messagecapability.Scope, Status: capability.Available},
-		{Method: messagecapability.AtMethod, Scope: messagecapability.AtScope, Status: capability.Available},
-		{Method: messagecapability.QuoteMethod, Scope: messagecapability.QuoteScope, Status: capability.Available},
-		{Method: messagecapability.LocationMethod, Scope: messagecapability.LocationScope, Status: capability.Available},
-		{Method: messagecapability.CustomMethod, Scope: messagecapability.CustomScope, Status: capability.Available},
-		{Method: messagecapability.RevokeMethod, Scope: messagecapability.RevokeScope, Status: capability.Available},
-		{Method: messagecapability.ImageMethod, Scope: messagecapability.ImageScope, Status: capability.Available},
-		{Method: messagecapability.FileMethod, Scope: messagecapability.FileScope, Status: capability.Available},
-		{Method: messagecapability.SoundMethod, Scope: messagecapability.SoundScope, Status: capability.Available},
-		{Method: messagecapability.VideoMethod, Scope: messagecapability.VideoScope, Status: capability.Available},
-	})
+	messageQuote, err := messagecapability.NewQuote(groupOperations, messageQuoteSource, messageQuoteSource)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	messageSend, err := messagecapability.New(messageManifest, groupOperations, messageSender)
+	messageLocation, err := messagecapability.NewLocation(groupOperations, messageLocationSender)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	messageAt, err := messagecapability.NewAt(messageManifest, groupOperations, messageAtSender)
+	messageCustom, err := messagecapability.NewCustom(groupOperations, messageCustomSender)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	messageQuote, err := messagecapability.NewQuote(messageManifest, groupOperations, messageQuoteSource, messageQuoteSource)
+	messageRevoke, err := messagecapability.NewRevoke(groupOperations, messageRevokeSource)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	messageLocation, err := messagecapability.NewLocation(messageManifest, groupOperations, messageLocationSender)
+	messageMedia, err := messagecapability.NewMedia(groupOperations, messageAttachments, messageMediaSender)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	messageCustom, err := messagecapability.NewCustom(messageManifest, groupOperations, messageCustomSender)
+	conversationMarkRead, err := conversationcapability.New(groupOperations, conversationMarkReadSource, conversationMarkReadSource)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	messageRevoke, err := messagecapability.NewRevoke(messageManifest, groupOperations, messageRevokeSource)
+	conversationPinned, err := conversationcapability.NewSetPinned(groupOperations, conversationSettingsSource)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	messageMedia, err := messagecapability.NewMedia(messageManifest, groupOperations, messageAttachments, messageMediaSender)
+	conversationReceiveOption, err := conversationcapability.NewSetReceiveOption(groupOperations, conversationSettingsSource)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	conversationManifest, err := newManifest([]capability.Entry{
-		{Method: conversationcapability.Method, Scope: conversationcapability.Scope, Status: capability.Available},
-		{Method: conversationcapability.SetPinnedMethod, Scope: conversationcapability.SetPinnedScope, Status: capability.Available},
-		{Method: conversationcapability.SetReceiveOptionMethod, Scope: conversationcapability.SetReceiveOptionScope, Status: capability.Available},
-	})
+	friendHandler, err := friendcapability.New(groupOperations, friendActions)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	conversationMarkRead, err := conversationcapability.New(conversationManifest, groupOperations, conversationMarkReadSource, conversationMarkReadSource)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	conversationPinned, err := conversationcapability.NewSetPinned(conversationManifest, groupOperations, conversationSettingsSource)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	conversationReceiveOption, err := conversationcapability.NewSetReceiveOption(conversationManifest, groupOperations, conversationSettingsSource)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	friendManifest, err := newManifest([]capability.Entry{
-		{Method: friendcapability.RequestMethod, Scope: friendcapability.RequestScope, Status: capability.Available},
-		{Method: friendcapability.RespondMethod, Scope: friendcapability.RespondScope, Status: capability.Available},
-		{Method: friendcapability.DeleteMethod, Scope: friendcapability.DeleteScope, Status: capability.Available},
-		{Method: friendcapability.SetRemarkMethod, Scope: friendcapability.SetRemarkScope, Status: capability.Available},
-	})
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	friendHandler, err := friendcapability.New(friendManifest, groupOperations, friendActions)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	blacklistManifest, err := newManifest([]capability.Entry{
-		{Method: blacklistcapability.AddMethod, Scope: blacklistcapability.AddScope, Status: capability.Available},
-		{Method: blacklistcapability.RemoveMethod, Scope: blacklistcapability.RemoveScope, Status: capability.Available},
-	})
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	blacklistHandler, err := blacklistcapability.New(blacklistManifest, groupOperations, blacklistActions)
+	blacklistHandler, err := blacklistcapability.New(groupOperations, blacklistActions)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -455,28 +407,13 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	services, err := daemon.NewOwnerServicesWithVerifiedProfileConversationMessageGroupAndSocial(
-		item.Name,
-		profileSource, profileservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()),
-		conversationSource, conversationservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()),
-		messageSource, messageservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()),
-		groupSource, groupservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()),
-		socialSource, socialservice.VerifiedCapabilities(open_im_sdk.GetSdkVersion()),
+	services, err := daemon.NewOwnerServices(
+		item.Name, profileSource, conversationSource, messageSource, groupSource, socialSource,
 	)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	codex, err := codexprovider.New(codexprovider.Config{
-		Executable:      codexExecutable,
-		WorkingDir:      paths.RunsDir,
-		SourceCodexHome: sourceCodexHome,
-		Environment:     codexEnvironment(),
-		BridgeCommand:   executablePath(),
-	})
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	singleProvider, err := provider.New(codex)
+	agent, err := newAgentProvider(item.Agent, agentExecutable, launch.args, paths.RunsDir)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -487,7 +424,7 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	if err := runTracker.Recover(ctx, item.Name); err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	runs, err := runmanager.NewManager(runmanager.Config{Provider: singleProvider, MaxQueue: 2, Deadline: 2 * time.Minute, Observer: runTracker})
+	runs, err := runmanager.NewManager(runmanager.Config{Provider: agent, MaxQueue: 2, Deadline: 2 * time.Minute, Observer: runTracker})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -567,11 +504,9 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 
 func directMessagePolicy(userID string, toolsEnabled bool, methods []proxy.Method) daemon.Policy {
 	methodNames := make([]string, 0, len(methods))
-	targets := make(map[string][]string, len(methods))
 	if toolsEnabled {
 		for _, method := range methods {
 			methodNames = append(methodNames, method.Name)
-			targets[method.Name] = []string{grant.AnyTarget}
 		}
 	}
 	return daemon.PolicyFunc(func(_ context.Context, inbound daemon.InboundContext) (daemon.Decision, bool, error) {
@@ -582,7 +517,6 @@ func directMessagePolicy(userID string, toolsEnabled bool, methods []proxy.Metho
 		decision := daemon.Decision{Principal: "openim:" + senderID, RateBudget: 1}
 		if toolsEnabled {
 			decision.Methods = methodNames
-			decision.TargetAllowlists = targets
 			decision.HistoryBeforeTrigger = true
 			decision.AttachmentByteLimit = 32 * 1024 * 1024
 			decision.RateBudget = 64
@@ -591,30 +525,80 @@ func directMessagePolicy(userID string, toolsEnabled bool, methods []proxy.Metho
 	})
 }
 
-func currentCodexHome() (string, error) {
-	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
-	if home == "" {
-		userHome, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		home = filepath.Join(userHome, ".codex")
-	}
-	if !filepath.IsAbs(home) {
-		return "", errors.New("CODEX_HOME must be absolute")
-	}
-	info, err := os.Stat(filepath.Join(home, "auth.json"))
-	if err != nil || !info.Mode().IsRegular() {
-		return "", errors.New("Codex auth.json is unavailable")
-	}
-	return filepath.Clean(home), nil
+type agentLaunchSpec struct {
+	command string
+	args    []string
 }
 
-func codexEnvironment() []string {
-	return []string{
+func agentLaunch(agent string) (agentLaunchSpec, error) {
+	agent, err := profile.NormalizeAgent(agent)
+	if err != nil {
+		return agentLaunchSpec{}, err
+	}
+	switch agent {
+	case "codex":
+		return agentLaunchSpec{command: "codex"}, nil
+	case "hermes":
+		return agentLaunchSpec{command: "hermes", args: []string{"acp"}}, nil
+	case "openclaw":
+		return agentLaunchSpec{command: "openclaw", args: []string{"acp"}}, nil
+	default:
+		return agentLaunchSpec{}, profile.ErrInvalidAgent
+	}
+}
+
+func agentEnvironment(agent string) []string {
+	result := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"TERM=dumb",
 	}
+	if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
+		result = append(result, "HOME="+home)
+	}
+	if agent == "codex" {
+		result = append(result, "NO_BROWSER=1")
+		if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); filepath.IsAbs(home) {
+			result = append(result, "CODEX_HOME="+filepath.Clean(home))
+		}
+	}
+	return result
+}
+
+func newAgentProvider(agent, executable string, args []string, workingDir string) (contracts.Provider, error) {
+	if agent == "codex" {
+		codexHome, err := currentCodexHome()
+		if err != nil {
+			return nil, err
+		}
+		return codexprovider.New(codexprovider.Config{
+			Executable:      executable,
+			WorkingDir:      workingDir,
+			SourceCodexHome: codexHome,
+			Environment:     agentEnvironment(agent),
+			CLICommand:      executablePath(),
+		})
+	}
+	return acpprovider.New(acpprovider.Config{
+		Executable:  executable,
+		Args:        args,
+		WorkingDir:  workingDir,
+		Environment: agentEnvironment(agent),
+		CLICommand:  executablePath(),
+	})
+}
+
+func currentCodexHome() (string, error) {
+	if value := strings.TrimSpace(os.Getenv("CODEX_HOME")); value != "" {
+		if !filepath.IsAbs(value) {
+			return "", errors.New("CODEX_HOME must be absolute")
+		}
+		return filepath.Clean(value), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(home) {
+		return "", errors.New("resolve current user Codex home")
+	}
+	return filepath.Join(home, ".codex"), nil
 }
 
 func serviceMethods(services daemon.OwnerServices) []proxy.Method {
@@ -647,49 +631,6 @@ func writeDaemonServeFailure(output io.Writer, format cli.Output, requestID stri
 	return cli.ExitCode(response)
 }
 
-func runOwnerMCP(ctx context.Context, input io.Reader, output io.Writer, roots commandRoots, profileName, requestID string) int {
-	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, profileName)
-	if err != nil {
-		return writeLocalError(output, requestID, err)
-	}
-	server, err := mcpowner.New(profileName, func(callCtx context.Context, request contracts.Request) (contracts.Response, error) {
-		return ipc.Call(callCtx, paths.Socket, request)
-	}, mcpowner.DefaultTools())
-	if err != nil {
-		return writeLocalError(output, requestID, err)
-	}
-	if err := server.Serve(ctx, input, output); err != nil && !errors.Is(err, context.Canceled) {
-		return 1
-	}
-	return 0
-}
-
-// runProviderMCPBridge is only launched from the run-private Codex config.
-// It transports raw MCP JSON-RPC and deliberately has no profile, owner RPC,
-// SDK, or arbitrary-command arguments.
-func runProviderMCPBridge(args []string, input io.Reader, output io.Writer) int {
-	if len(args) != 2 || args[0] != "--socket" || !filepath.IsAbs(args[1]) {
-		return 2
-	}
-	connection, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: args[1], Net: "unix"})
-	if err != nil {
-		return 1
-	}
-	defer connection.Close()
-	inputDone := make(chan struct{})
-	go func() {
-		_, _ = io.Copy(connection, input)
-		_ = connection.CloseWrite()
-		close(inputDone)
-	}()
-	_, err = io.Copy(output, connection)
-	<-inputDone
-	if err != nil {
-		return 1
-	}
-	return 0
-}
-
 func executablePath() string {
 	path, err := os.Executable()
 	if err != nil || !filepath.IsAbs(path) {
@@ -698,47 +639,40 @@ func executablePath() string {
 	return path
 }
 
-func ownerMethod(args []string) (string, int) {
-	methods := make(map[string]struct{}, len(mcpowner.DefaultTools()))
-	for _, tool := range mcpowner.DefaultTools() {
-		methods[tool.Method] = struct{}{}
-	}
-	for index, argument := range args {
-		if strings.HasPrefix(argument, "--") {
-			break
-		}
-		method := strings.Join(args[:index+1], ".")
-		if _, exists := methods[method]; exists {
-			return method, index + 1
-		}
-	}
-	return "", 0
-}
-
-func ownerParams(args []string, input io.Reader) (json.RawMessage, error) {
+func commandParams(args []string, input io.Reader) (json.RawMessage, error) {
 	if len(args) == 0 {
 		return json.RawMessage(`{}`), nil
 	}
 	if len(args) != 1 || args[0] != "--params-stdin" {
-		return nil, errors.New("owner query only accepts --params-stdin")
+		return nil, errors.New("command only accepts --params-stdin")
 	}
 	if input == nil {
-		return nil, errors.New("owner query parameters are required")
+		return nil, errors.New("command parameters are required")
 	}
 	const maxParamsBytes = 1 << 20
 	payload, err := io.ReadAll(io.LimitReader(input, maxParamsBytes+1))
 	if err != nil {
-		return nil, errors.New("read owner query parameters")
+		return nil, errors.New("read command parameters")
 	}
 	if len(payload) > maxParamsBytes {
-		return nil, errors.New("owner query parameters are too large")
+		return nil, errors.New("command parameters are too large")
 	}
 	payload = []byte(strings.TrimSpace(string(payload)))
 	var object map[string]json.RawMessage
 	if len(payload) == 0 || json.Unmarshal(payload, &object) != nil || object == nil {
-		return nil, errors.New("owner query parameters must be a JSON object")
+		return nil, errors.New("command parameters must be a JSON object")
 	}
 	return json.RawMessage(payload), nil
+}
+
+func commandIdempotencyKey(params json.RawMessage) string {
+	var values map[string]json.RawMessage
+	if json.Unmarshal(params, &values) != nil {
+		return ""
+	}
+	var key string
+	_ = json.Unmarshal(values["idempotency_key"], &key)
+	return key
 }
 
 func writeInvalidArgument(output io.Writer, requestID, message string) int {

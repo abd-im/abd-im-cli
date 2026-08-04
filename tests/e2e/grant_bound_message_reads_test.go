@@ -15,10 +15,7 @@ import (
 
 func TestProviderGrantBoundMessageReadsE2E(t *testing.T) {
 	source := &grantBoundMessageSource{}
-	reader, err := message.New(source, message.Options{
-		ProfileID:    "work",
-		Capabilities: message.VerifiedCapabilities("sdk-test"),
-	})
+	reader, err := message.New(source, message.Options{ProfileID: "work"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,17 +68,12 @@ func TestProviderGrantBoundMessageReadsE2E(t *testing.T) {
 }
 
 func messageGrant(runID string, methods []string, rateBudget int) grant.Policy {
-	targets := make(map[string][]string, len(methods))
-	for _, method := range methods {
-		targets[method] = []string{grant.ConversationTarget("conversation-1")}
-	}
 	return grant.Policy{
-		RunID:            runID,
-		ProfileID:        "work",
-		Principal:        "provider",
-		Methods:          methods,
-		Scopes:           []string{message.ReadScope},
-		TargetAllowlists: targets,
+		RunID:     runID,
+		ProfileID: "work",
+		Principal: "provider",
+		Methods:   methods,
+
 		MessageWindow: grant.MessageWindow{
 			ConversationID:  "conversation-1",
 			AfterMessageID:  "message-trigger",

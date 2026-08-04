@@ -10,17 +10,13 @@ import (
 
 	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/capability"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/operation"
 )
 
-func TestSendQuoteRequiresManifestTypedTargetAndMessageWindow(t *testing.T) {
-	manifest, err := capability.New([]capability.Entry{{Method: QuoteMethod, Scope: QuoteScope, Status: capability.Gated}})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestSendQuoteRequiresMessageWindow(t *testing.T) {
+
 	store, err := control.Open(filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +33,7 @@ func TestSendQuoteRequiresManifestTypedTargetAndMessageWindow(t *testing.T) {
 		{ID: "message-3", ConversationID: "conversation-1"},
 	}}
 	sender := &fakeQuoteSender{}
-	handler, err := NewQuote(manifest, guard, source, sender)
+	handler, err := NewQuote(guard, source, sender)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,16 +43,7 @@ func TestSendQuoteRequiresManifestTypedTargetAndMessageWindow(t *testing.T) {
 		ProfileID: "work",
 		Principal: "provider",
 		Methods:   []string{QuoteMethod},
-		Scopes:    []string{QuoteScope},
-		TargetAllowlists: map[string][]string{
-			QuoteMethod: {
-				grant.UserTarget("user-1"),
-				grant.GroupTarget("group-1"),
-				grant.ConversationTarget("conversation-1"),
-				grant.MessageTarget("message-1"),
-				grant.MessageTarget("message-2"),
-			},
-		},
+
 		MessageWindow: grant.MessageWindow{
 			ConversationID:  "conversation-1",
 			AfterMessageID:  "message-0",
@@ -93,25 +80,6 @@ func TestSendQuoteRequiresManifestTypedTargetAndMessageWindow(t *testing.T) {
 		return response
 	}
 	allowed := QuoteInput{Text: "quote", RecipientID: "user-1", ConversationID: "conversation-1", MessageID: "message-1"}
-	if response := call("gated", allowed); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
-		t.Fatalf("gated quote = %+v, calls=%d", response, sender.calls)
-	}
-
-	manifest, err = capability.New([]capability.Entry{{Method: QuoteMethod, Scope: QuoteScope, Status: capability.Available}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler, err = NewQuote(manifest, guard, source, sender)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tool, err = proxy.New(grants, "run-1", "work", []proxy.Method{handler.ProxyMethod()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response := call("outside-target", QuoteInput{Text: "quote", RecipientID: "user-2", ConversationID: "conversation-1", MessageID: "message-1"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
-		t.Fatalf("outside target quote = %+v, calls=%d", response, sender.calls)
-	}
 	if response := call("before-window", QuoteInput{Text: "quote", RecipientID: "user-1", ConversationID: "conversation-1", MessageID: "message-0"}); response.Error == nil || response.Error.Code != contracts.CodePolicyDenied || sender.calls != 0 {
 		t.Fatalf("before window quote = %+v, calls=%d", response, sender.calls)
 	}
@@ -137,13 +105,10 @@ func TestSendQuoteIdempotencyAndUnknownOutcomeFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := capability.New([]capability.Entry{{Method: QuoteMethod, Scope: QuoteScope, Status: capability.Available}})
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	source := &fakeQuoteSource{references: []QuoteReference{{ID: "message-1", ConversationID: "conversation-1"}}}
 	sender := &fakeQuoteSender{}
-	handler, err := NewQuote(manifest, guard, source, sender)
+	handler, err := NewQuote(guard, source, sender)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +128,7 @@ func TestSendQuoteIdempotencyAndUnknownOutcomeFailClosed(t *testing.T) {
 	}
 
 	unknownSender := &fakeQuoteSender{err: operation.ErrOutcomeUnknown}
-	unknownHandler, err := NewQuote(manifest, guard, source, unknownSender)
+	unknownHandler, err := NewQuote(guard, source, unknownSender)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,11 +151,8 @@ func TestSendQuoteFailsClosedWhenSourceReturnsWrongConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := capability.New([]capability.Entry{{Method: QuoteMethod, Scope: QuoteScope, Status: capability.Available}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler, err := NewQuote(manifest, guard, &fakeQuoteSource{references: []QuoteReference{{ID: "message-1", ConversationID: "conversation-other"}}}, &fakeQuoteSender{})
+
+	handler, err := NewQuote(guard, &fakeQuoteSource{references: []QuoteReference{{ID: "message-1", ConversationID: "conversation-other"}}}, &fakeQuoteSender{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,14 +171,7 @@ func newQuoteTool(t *testing.T, handler *QuoteHandler, runID string) (*proxy.Pro
 		ProfileID: "work",
 		Principal: "provider",
 		Methods:   []string{QuoteMethod},
-		Scopes:    []string{QuoteScope},
-		TargetAllowlists: map[string][]string{
-			QuoteMethod: {
-				grant.UserTarget("user-1"),
-				grant.ConversationTarget("conversation-1"),
-				grant.MessageTarget("message-1"),
-			},
-		},
+
 		MessageWindow: grant.MessageWindow{ConversationID: "conversation-1"},
 		ExpiresAt:     time.Now().Add(time.Hour),
 		RateBudget:    10,

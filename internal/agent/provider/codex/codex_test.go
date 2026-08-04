@@ -15,7 +15,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/testkit"
 )
 
-func TestAdapterRunsFixedAppServerTurnAndDeclinesApprovals(t *testing.T) {
+func TestAdapterRunsFixedAppServerTurn(t *testing.T) {
 	capture := filepath.Join(t.TempDir(), "prompt.txt")
 	adapter := newAdapter(t, capture, false)
 	session, err := adapter.Start(context.Background(), startRequest())
@@ -64,9 +64,9 @@ func TestAdapterCancellationReapsBlockedServer(t *testing.T) {
 	}
 }
 
-func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
+func TestAdapterCreatesRunPrivateCLIConfiguration(t *testing.T) {
 	adapter := newAdapter(t, "", false)
-	if err := os.WriteFile(filepath.Join(adapter.sourceCodexHome, "config.toml"), []byte("model = 'gpt-test'\nmodel_provider = 'OpenIM'\n\n[model_providers.OpenIM]\nbase_url = 'https://api.example.test/v1'\nsupports_websockets = true\n\n[mcp_servers.owner]\ncommand = 'must-not-inherit'\n\n[projects.'/workspace']\nhook = 'must-not-inherit'\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(adapter.sourceCodexHome, "config.toml"), []byte("model = 'gpt-test'\nmodel_provider = 'OpenIM'\n\n[model_providers.OpenIM]\nbase_url = 'https://api.example.test/v1'\nsupports_websockets = true\n\n[projects.'/workspace']\nhook = 'must-not-inherit'\n"), 0o600); err != nil {
 		t.Fatalf("write source Codex config: %v", err)
 	}
 	request := startRequest()
@@ -81,15 +81,15 @@ func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read run config: %v", err)
 	}
-	if strings.Contains(string(config), "must-not-inherit") || !strings.Contains(string(config), "model_provider = 'OpenIM'") || !strings.Contains(string(config), "base_url = 'https://api.example.test/v1'") || strings.Contains(string(config), "supports_websockets = true") || !strings.Contains(string(config), "supports_websockets = false") || !strings.Contains(string(config), "[mcp_servers.abdim]") || !strings.Contains(string(config), "enabled_tools = [\"abdim.message.history\"]") || !strings.Contains(string(config), "default_tools_approval_mode = \"auto\"") {
-		t.Fatalf("run MCP config = %s", config)
+	if strings.Contains(string(config), "must-not-inherit") || !strings.Contains(string(config), "model_provider = 'OpenIM'") || !strings.Contains(string(config), "base_url = 'https://api.example.test/v1'") || strings.Contains(string(config), "supports_websockets = true") || !strings.Contains(string(config), "supports_websockets = false") || !strings.Contains(string(config), "[shell_environment_policy]") || !strings.Contains(string(config), "ABDIM_AGENT_GRANT") {
+		t.Fatalf("run CLI config = %s", config)
 	}
 	info, err := os.Stat(configPath)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("run config mode = %v, %v", info.Mode(), err)
 	}
-	if info, err := os.Stat(filepath.Join(runRoot, "mcp.sock")); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("run MCP socket mode = %v, %v", info.Mode(), err)
+	if info, err := os.Stat(filepath.Join(runRoot, "work", ".abdim.sock")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("run CLI socket mode = %v, %v", info.Mode(), err)
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -100,13 +100,13 @@ func TestAdapterCreatesRunPrivateMCPConfiguration(t *testing.T) {
 }
 
 func TestNewRequiresCurrentUserCompositionInputs(t *testing.T) {
-	if _, err := New(Config{Environment: []string{"PATH=/bin"}, BridgeCommand: os.Args[0]}); err == nil {
+	if _, err := New(Config{Environment: []string{"PATH=/bin"}, CLICommand: os.Args[0]}); err == nil {
 		t.Fatal("New() accepted an empty working directory")
 	}
-	if _, err := New(Config{Executable: "/bin/true", WorkingDir: t.TempDir(), SourceCodexHome: t.TempDir(), BridgeCommand: os.Args[0]}); err == nil {
+	if _, err := New(Config{Executable: "/bin/true", WorkingDir: t.TempDir(), SourceCodexHome: t.TempDir(), CLICommand: os.Args[0]}); err == nil {
 		t.Fatal("New() accepted an inherited environment")
 	}
-	if _, err := New(Config{Executable: "/bin/true", WorkingDir: t.TempDir(), Environment: []string{"PATH=/bin"}, BridgeCommand: os.Args[0]}); err == nil || !strings.Contains(err.Error(), "source CODEX_HOME") {
+	if _, err := New(Config{Executable: "/bin/true", WorkingDir: t.TempDir(), Environment: []string{"PATH=/bin"}, CLICommand: os.Args[0]}); err == nil || !strings.Contains(err.Error(), "source CODEX_HOME") {
 		t.Fatalf("New() accepted no source CODEX_HOME: %v", err)
 	}
 }
@@ -120,6 +120,14 @@ func TestAdapterPreservesAppServerStartError(t *testing.T) {
 	adapter.config.Executable = script
 	if _, err := adapter.Start(context.Background(), startRequest()); err == nil || !strings.Contains(err.Error(), "start Codex app-server:") {
 		t.Fatalf("Start() error = %v, want app-server start cause", err)
+	}
+}
+
+func TestPermissionApprovalOnlyEchoesSupportedPermissions(t *testing.T) {
+	result := permissionApproval(json.RawMessage(`{"permissions":{"network":{"enabled":true},"fileSystem":{"read":["/tmp"]},"other":true}}`))
+	permissions, ok := result["permissions"].(map[string]any)
+	if !ok || len(permissions) != 2 || permissions["network"] == nil || permissions["fileSystem"] == nil || result["scope"] != "turn" {
+		t.Fatalf("permissionApproval() = %#v", result)
 	}
 }
 
@@ -144,7 +152,7 @@ func newAdapter(t *testing.T, capture string, block bool) *Adapter {
 	if block {
 		environment = append(environment, "FAKE_CODEX_BLOCK=1")
 	}
-	adapter, err := New(Config{Executable: script, WorkingDir: root, SourceCodexHome: home, Environment: environment, BridgeCommand: os.Args[0], InitializeTimeout: time.Second})
+	adapter, err := New(Config{Executable: script, WorkingDir: root, SourceCodexHome: home, Environment: environment, CLICommand: os.Args[0], InitializeTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

@@ -19,18 +19,7 @@ const (
 	HistoryMethod = "message.history"
 	SearchMethod  = "message.search"
 	GetMethod     = "message.get"
-	ReadScope     = "message.read"
 )
-
-// VerifiedCapabilities returns the fixed message reads covered by the
-// controlled SDK/server integration gate.
-func VerifiedCapabilities(sdkVersion string) map[string]service.Capability {
-	capabilities := make(map[string]service.Capability, 3)
-	for _, method := range []string{HistoryMethod, SearchMethod, GetMethod} {
-		capabilities[method] = service.Capability{Method: method, Scope: ReadScope, Status: "available", SDKVersion: sdkVersion}
-	}
-	return capabilities
-}
 
 type Message struct {
 	ID             string    `json:"id"`
@@ -72,9 +61,8 @@ type Source interface {
 }
 
 type Options struct {
-	ProfileID    string
-	Stale        func() bool
-	Capabilities map[string]service.Capability
+	ProfileID string
+	Stale     func() bool
 }
 
 type Service struct {
@@ -92,29 +80,12 @@ func New(source Source, options Options) (*Service, error) {
 	if options.Stale == nil {
 		options.Stale = func() bool { return false }
 	}
-	if options.Capabilities == nil {
-		options.Capabilities = map[string]service.Capability{}
-	}
 	return &Service{source: source, options: options}, nil
 }
 
-func (s *Service) capability(method string) service.Capability {
-	if item, ok := s.options.Capabilities[method]; ok {
-		return item
-	}
-	return service.Capability{Method: method, Scope: ReadScope, Status: "not_validated", Reason: "method has no verified capability entry"}
-}
-
-func (s *Service) authorize(access service.Access, method, conversationID string) (service.Meta, error) {
+func (s *Service) authorize(access service.Access, conversationID string) (service.Meta, error) {
 	if strings.TrimSpace(conversationID) == "" {
 		return service.Meta{}, fmt.Errorf("%w: conversation ID is required", service.ErrInvalidArgument)
-	}
-	capability := s.capability(method)
-	if capability.Status != "available" {
-		return service.Meta{}, fmt.Errorf("%w: %s", service.ErrCapabilityUnavailable, capability.Status)
-	}
-	if err := access.Authorize(method, capability.Scope, grant.ConversationTarget(conversationID)); err != nil {
-		return service.Meta{}, err
 	}
 	if !access.Owner {
 		window := access.Grant.MessageWindow
@@ -122,7 +93,7 @@ func (s *Service) authorize(access service.Access, method, conversationID string
 			return service.Meta{}, fmt.Errorf("%w: grant message window", service.ErrTargetDenied)
 		}
 	}
-	return service.NewMeta(s.options.ProfileID, s.options.Stale(), capability), nil
+	return service.NewMeta(s.options.ProfileID, s.options.Stale()), nil
 }
 
 func (s *Service) History(ctx context.Context, access service.Access, input HistoryInput) (service.PageResult[Message], error) {
@@ -134,7 +105,7 @@ func (s *Service) History(ctx context.Context, access service.Access, input Hist
 	if err != nil {
 		return service.PageResult[Message]{}, err
 	}
-	meta, err := s.authorize(access, HistoryMethod, input.ConversationID)
+	meta, err := s.authorize(access, input.ConversationID)
 	if err != nil {
 		return service.PageResult[Message]{}, err
 	}
@@ -168,7 +139,7 @@ func (s *Service) Search(ctx context.Context, access service.Access, input Searc
 	if err != nil {
 		return service.PageResult[Message]{}, err
 	}
-	meta, err := s.authorize(access, SearchMethod, input.ConversationID)
+	meta, err := s.authorize(access, input.ConversationID)
 	if err != nil {
 		return service.PageResult[Message]{}, err
 	}
@@ -194,7 +165,7 @@ func (s *Service) Get(ctx context.Context, access service.Access, input GetInput
 	if strings.TrimSpace(input.MessageID) == "" {
 		return service.Result[Message]{}, fmt.Errorf("%w: message ID is required", service.ErrInvalidArgument)
 	}
-	meta, err := s.authorize(access, GetMethod, input.ConversationID)
+	meta, err := s.authorize(access, input.ConversationID)
 	if err != nil {
 		return service.Result[Message]{}, err
 	}
@@ -295,10 +266,10 @@ func makePage(items []Message, offset, limit int, query string) (service.Page[Me
 }
 
 func (s *Service) Methods() []proxy.Method {
-	wrap := func(name string, targets func(json.RawMessage) ([]string, error), handle func(context.Context, contracts.Request, grant.Grant) (interface{}, error)) proxy.Method {
-		return proxy.Method{Name: name, Scope: s.capability(name).Scope, Meta: func() contracts.Meta {
-			return service.ContractMeta(service.NewMeta(s.options.ProfileID, s.options.Stale(), s.capability(name)))
-		}, Targets: targets, Handle: func(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {
+	wrap := func(name string, handle func(context.Context, contracts.Request, grant.Grant) (interface{}, error)) proxy.Method {
+		return proxy.Method{Name: name, Meta: func() contracts.Meta {
+			return service.ContractMeta(service.NewMeta(s.options.ProfileID, s.options.Stale()))
+		}, Handle: func(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {
 			value, err := handle(ctx, request, item)
 			if err != nil {
 				return nil, proxy.Failure(contracts.CodePolicyDenied, err.Error())
@@ -306,50 +277,29 @@ func (s *Service) Methods() []proxy.Method {
 			return json.Marshal(value)
 		}}
 	}
-	historyTargets := func(raw json.RawMessage) ([]string, error) {
-		var input HistoryInput
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return nil, err
-		}
-		return []string{grant.ConversationTarget(input.ConversationID)}, nil
-	}
-	searchTargets := func(raw json.RawMessage) ([]string, error) {
-		var input SearchInput
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return nil, err
-		}
-		return []string{grant.ConversationTarget(input.ConversationID)}, nil
-	}
-	getTargets := func(raw json.RawMessage) ([]string, error) {
-		var input GetInput
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return nil, err
-		}
-		return []string{grant.ConversationTarget(input.ConversationID)}, nil
-	}
 	return []proxy.Method{
-		wrap(HistoryMethod, historyTargets, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
+		wrap(HistoryMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
 			var input HistoryInput
 			if err := json.Unmarshal(request.Params, &input); err != nil {
 				return nil, service.ErrInvalidArgument
 			}
-			result, err := s.History(ctx, service.ProviderAccess(item, s.capability(HistoryMethod)), input)
+			result, err := s.History(ctx, service.ProviderAccess(item), input)
 			return result.Data, err
 		}),
-		wrap(SearchMethod, searchTargets, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
+		wrap(SearchMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
 			var input SearchInput
 			if err := json.Unmarshal(request.Params, &input); err != nil {
 				return nil, service.ErrInvalidArgument
 			}
-			result, err := s.Search(ctx, service.ProviderAccess(item, s.capability(SearchMethod)), input)
+			result, err := s.Search(ctx, service.ProviderAccess(item), input)
 			return result.Data, err
 		}),
-		wrap(GetMethod, getTargets, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
+		wrap(GetMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
 			var input GetInput
 			if err := json.Unmarshal(request.Params, &input); err != nil {
 				return nil, service.ErrInvalidArgument
 			}
-			result, err := s.Get(ctx, service.ProviderAccess(item, s.capability(GetMethod)), input)
+			result, err := s.Get(ctx, service.ProviderAccess(item), input)
 			return result.Data, err
 		}),
 	}

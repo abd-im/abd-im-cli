@@ -15,8 +15,7 @@ import (
 )
 
 // OwnerServices is the complete typed read surface registered for one owner
-// dispatcher. The concrete services own capability checks and data access;
-// this adapter only decodes their fixed inputs and preserves their metadata.
+// dispatcher. This adapter only decodes fixed inputs and preserves metadata.
 type OwnerServices struct {
 	Profile      *profileservice.Service
 	Conversation *conversationservice.Service
@@ -100,12 +99,6 @@ func conversationOwnerMethods(reader *conversationservice.Service) []OwnerMethod
 				return OwnerResult{}, err
 			}
 			return ownerPageResult(reader.Search(ctx, ownerAccess(), input))
-		}),
-		ownerMethod(conversationservice.UnreadMethod, func(ctx context.Context, raw json.RawMessage) (OwnerResult, error) {
-			if err := decodeOwnerParams(raw, &struct{}{}); err != nil {
-				return OwnerResult{}, err
-			}
-			return ownerResult(reader.Unread(ctx, ownerAccess()))
 		}),
 	}
 }
@@ -231,7 +224,7 @@ func decodeOwnerParams(raw json.RawMessage, output any) error {
 	return nil
 }
 
-func ownerAccess() service.Access { return service.OwnerAccess(service.Capability{}) }
+func ownerAccess() service.Access { return service.OwnerAccess() }
 
 func ownerResult[T any](value service.Result[T], err error) (OwnerResult, error) {
 	if err != nil {
@@ -253,9 +246,7 @@ func ownerServiceFailure(err error) error {
 		return MethodFailure(contracts.CodeInvalidArgument, "invalid typed service parameters", false)
 	case errors.Is(err, service.ErrCursorExpired):
 		return MethodFailure(contracts.CodeCursorExpired, "typed service cursor has expired", false)
-	case errors.Is(err, service.ErrCapabilityUnavailable):
-		return MethodFailure(contracts.CodeConnectionUnavailable, "typed service capability is unavailable", true)
-	case errors.Is(err, service.ErrScopeDenied), errors.Is(err, service.ErrTargetDenied):
+	case errors.Is(err, service.ErrTargetDenied):
 		return MethodFailure(contracts.CodeInternal, "typed service failed", false)
 	default:
 		return MethodFailure(contracts.CodeInternal, "typed service failed", false)

@@ -4,7 +4,6 @@ package control
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -508,58 +507,6 @@ func (s *Store) ReplySlotByEvent(ctx context.Context, profileID, eventID string)
 	return slot, nil
 }
 
-// PutGrant records the constraints issued to one provider run.
-func (s *Store) PutGrant(ctx context.Context, grant Grant) error {
-	if err := grant.validate(); err != nil {
-		return err
-	}
-	scopes, err := json.Marshal(grant.Scopes)
-	if err != nil {
-		return fmt.Errorf("encode grant scopes: %w", err)
-	}
-	targets, err := json.Marshal(grant.TargetAllowlists)
-	if err != nil {
-		return fmt.Errorf("encode grant targets: %w", err)
-	}
-	window, err := json.Marshal(grant.MessageWindow)
-	if err != nil {
-		return fmt.Errorf("encode grant message window: %w", err)
-	}
-	if grant.CreatedAt.IsZero() {
-		grant.CreatedAt = time.Now()
-	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO grants (
-			id, profile_id, run_id, principal, scopes, target_allowlist, message_window,
-			attachment_byte_limit, rate_limit, approval_policy, expires_at, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		grant.ID, grant.ProfileID, grant.RunID, grant.Principal, string(scopes), string(targets), string(window),
-		grant.AttachmentByteLimit, grant.RateLimit, grant.ApprovalPolicy, encodeTime(grant.ExpiresAt), encodeTime(grant.CreatedAt))
-	if isUniqueViolation(err) {
-		return fmt.Errorf("%w: grant %q", ErrConflict, grant.ID)
-	}
-	if err != nil {
-		return fmt.Errorf("put grant: %w", err)
-	}
-	return nil
-}
-
-// Grant returns a persisted provider grant.
-func (s *Store) Grant(ctx context.Context, id string) (Grant, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, profile_id, run_id, principal, scopes, target_allowlist, message_window,
-			attachment_byte_limit, rate_limit, approval_policy, expires_at, created_at
-		FROM grants WHERE id = ?`, id)
-	grant, err := scanGrant(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Grant{}, fmt.Errorf("%w: grant %q", ErrNotFound, id)
-	}
-	if err != nil {
-		return Grant{}, fmt.Errorf("get grant: %w", err)
-	}
-	return grant, nil
-}
-
 // PutAttachment reserves quota and records attachment metadata. It never
 // stores the attachment's contents, original name, or filesystem path.
 func (s *Store) PutAttachment(ctx context.Context, attachment Attachment) (err error) {
@@ -755,39 +702,6 @@ func scanReplySlot(row scanner) (ReplySlot, error) {
 		return ReplySlot{}, err
 	}
 	return slot, nil
-}
-
-func scanGrant(row scanner) (Grant, error) {
-	var grant Grant
-	var scopes, targets, window, expiresAt, createdAt string
-	if err := row.Scan(
-		&grant.ID, &grant.ProfileID, &grant.RunID, &grant.Principal,
-		&scopes, &targets, &window, &grant.AttachmentByteLimit, &grant.RateLimit,
-		&grant.ApprovalPolicy, &expiresAt, &createdAt,
-	); err != nil {
-		return Grant{}, err
-	}
-	if err := json.Unmarshal([]byte(scopes), &grant.Scopes); err != nil {
-		return Grant{}, fmt.Errorf("decode grant scopes: %w", err)
-	}
-	if err := json.Unmarshal([]byte(targets), &grant.TargetAllowlists); err != nil {
-		var legacyTargets []string
-		if legacyErr := json.Unmarshal([]byte(targets), &legacyTargets); legacyErr != nil {
-			return Grant{}, fmt.Errorf("decode grant targets: %w", err)
-		}
-		grant.TargetAllowlists = map[string][]string{"legacy": legacyTargets}
-	}
-	if err := json.Unmarshal([]byte(window), &grant.MessageWindow); err != nil {
-		return Grant{}, fmt.Errorf("decode grant message window: %w", err)
-	}
-	var err error
-	if grant.ExpiresAt, err = decodeTime(expiresAt); err != nil {
-		return Grant{}, err
-	}
-	if grant.CreatedAt, err = decodeTime(createdAt); err != nil {
-		return Grant{}, err
-	}
-	return grant, nil
 }
 
 func scanAttachment(row scanner) (Attachment, error) {

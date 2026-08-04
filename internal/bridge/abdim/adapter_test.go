@@ -229,6 +229,38 @@ func TestAdapterRepliesOnlyToEventBoundRecipient(t *testing.T) {
 	}
 }
 
+func TestAdapterStartsAndAppendsEventBoundStream(t *testing.T) {
+	user := &fakeUserContext{streamConversationID: "si_user-1_user-2"}
+	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
+	if err := adapter.InitSDK(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.InitResources(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := adapter.StartStream(context.Background(), reply.StreamDelivery{
+		ProfileID: "work", EventID: "event-1", RecipientID: "user-2",
+		ConversationID: "si_user-1_user-2", ClientMsgID: "stream-1", Type: "text", Content: "hello",
+	})
+	if err != nil || ref.ConversationID != "si_user-1_user-2" || ref.ClientMsgID != "stream-1" {
+		t.Fatalf("StartStream() = %#v, %v", ref, err)
+	}
+	if err := adapter.AppendStream(context.Background(), reply.StreamAppend{
+		ProfileID: "work", EventID: "event-1", ConversationID: ref.ConversationID,
+		ClientMsgID: ref.ClientMsgID, StartIndex: 0, Packets: []string{" world"}, End: true,
+	}); err != nil {
+		t.Fatalf("AppendStream() error = %v", err)
+	}
+	if user.streamType != "text" || user.streamContent != "hello" || user.streamClientMsgID != "stream-1" ||
+		len(user.streamAppends) != 1 || user.streamAppends[0].packets[0] != " world" || !user.streamAppends[0].end {
+		t.Fatalf("stream start/append = %#v / %#v", user, user.streamAppends)
+	}
+}
+
 func TestAdapterSendsTextToOneExplicitTarget(t *testing.T) {
 	user := &fakeUserContext{}
 	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
@@ -386,34 +418,47 @@ func testConfig(t *testing.T) Config {
 }
 
 type fakeUserContext struct {
-	listener            open_im_sdk_callback.OnConnListener
-	messageListener     open_im_sdk_callback.OnAdvancedMsgListener
-	loginErr            error
-	loginCalled         bool
-	loginTokenSet       bool
-	loginContext        context.Context
-	connectOnLogin      bool
-	logoutCalled        bool
-	uninitialized       bool
-	logoutContext       context.Context
-	replyCallback       open_im_sdk_callback.SendMsgCallBack
-	replyContext        context.Context
-	replyText           string
-	replyRecipient      string
-	replyGroup          string
-	atMentionUserIDs    []string
-	quotedMessage       *sdk_struct.MsgStruct
-	locationDescription string
-	longitude           float64
-	latitude            float64
-	customData          string
-	customExtension     string
-	customDescription   string
-	mediaKind           string
-	mediaPath           string
-	thumbnailPath       string
-	mediaType           string
-	mediaDuration       int64
+	listener             open_im_sdk_callback.OnConnListener
+	messageListener      open_im_sdk_callback.OnAdvancedMsgListener
+	loginErr             error
+	loginCalled          bool
+	loginTokenSet        bool
+	loginContext         context.Context
+	connectOnLogin       bool
+	logoutCalled         bool
+	uninitialized        bool
+	logoutContext        context.Context
+	replyCallback        open_im_sdk_callback.SendMsgCallBack
+	replyContext         context.Context
+	replyText            string
+	replyRecipient       string
+	replyGroup           string
+	atMentionUserIDs     []string
+	quotedMessage        *sdk_struct.MsgStruct
+	locationDescription  string
+	longitude            float64
+	latitude             float64
+	customData           string
+	customExtension      string
+	customDescription    string
+	mediaKind            string
+	mediaPath            string
+	thumbnailPath        string
+	mediaType            string
+	mediaDuration        int64
+	streamConversationID string
+	streamType           string
+	streamContent        string
+	streamClientMsgID    string
+	streamAppends        []fakeStreamAppend
+}
+
+type fakeStreamAppend struct {
+	conversationID string
+	clientMsgID    string
+	startIndex     int64
+	packets        []string
+	end            bool
 }
 
 func (f *fakeUserContext) InitSDK(_ *sdk_struct.IMConfig, listener open_im_sdk_callback.OnConnListener) bool {
@@ -444,6 +489,26 @@ func (f *fakeUserContext) SendTextMessage(ctx context.Context, callback open_im_
 	f.replyRecipient = recipientID
 	f.replyGroup = groupID
 	callback.OnSuccess(`{}`)
+	return nil
+}
+
+func (f *fakeUserContext) StartStreamMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, streamType, content, clientMsgID, recipientID, groupID string) (string, error) {
+	f.replyCallback = callback
+	f.replyContext = ctx
+	f.replyRecipient = recipientID
+	f.replyGroup = groupID
+	f.streamType = streamType
+	f.streamContent = content
+	f.streamClientMsgID = clientMsgID
+	callback.OnSuccess(`{}`)
+	return f.streamConversationID, nil
+}
+
+func (f *fakeUserContext) AppendStreamMessage(_ context.Context, conversationID, clientMsgID string, startIndex int64, packets []string, end bool) error {
+	f.streamAppends = append(f.streamAppends, fakeStreamAppend{
+		conversationID: conversationID, clientMsgID: clientMsgID, startIndex: startIndex,
+		packets: append([]string(nil), packets...), end: end,
+	})
 	return nil
 }
 

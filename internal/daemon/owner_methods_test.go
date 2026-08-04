@@ -21,8 +21,8 @@ func TestOwnerMethodsRegisterAndCallAllTypedReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OwnerMethods() error = %v", err)
 	}
-	if len(methods) != 22 {
-		t.Fatalf("OwnerMethods() count = %d, want 22", len(methods))
+	if len(methods) != 21 {
+		t.Fatalf("OwnerMethods() count = %d, want 21", len(methods))
 	}
 	dispatcher, err := NewDispatcher("work", methods)
 	if err != nil {
@@ -37,7 +37,7 @@ func TestOwnerMethodsRegisterAndCallAllTypedReads(t *testing.T) {
 	if err := json.Unmarshal(profile.Data, &profileData); err != nil {
 		t.Fatalf("decode profile.get data: %v", err)
 	}
-	if !profile.OK || profileData.ID != "work" || profileData.Name != "Work" || profile.Meta == nil || profile.Meta.Schema != service.SchemaVersion || profile.Meta.Capability == nil || profile.Meta.Capability.Method != profileservice.ProfileGet {
+	if !profile.OK || profileData.ID != "work" || profileData.Name != "Work" || profile.Meta == nil || profile.Meta.Schema != service.SchemaVersion {
 		t.Fatalf("profile.get response = %+v", profile)
 	}
 
@@ -49,7 +49,7 @@ func TestOwnerMethodsRegisterAndCallAllTypedReads(t *testing.T) {
 	if err := json.Unmarshal(group.Data, &groupData); err != nil {
 		t.Fatalf("decode group.get data: %v", err)
 	}
-	if !group.OK || groupData.ID != "group-1" || groupData.Name != "Group" || group.Meta == nil || group.Meta.Capability == nil || group.Meta.Capability.Method != groupservice.GetMethod {
+	if !group.OK || groupData.ID != "group-1" || groupData.Name != "Group" || group.Meta == nil || group.Meta.Schema != service.SchemaVersion {
 		t.Fatalf("group.get response = %+v", group)
 	}
 
@@ -90,65 +90,13 @@ func TestOwnerMethodsRequireEveryTypedService(t *testing.T) {
 
 func newOwnerServices(t *testing.T, groups groupservice.Source) OwnerServices {
 	t.Helper()
-	profiles, err := profileservice.New(ownerProfileSource{}, profileservice.Options{
-		ProfileID:    "work",
-		Capabilities: profileCapabilities(),
-	})
+	services, err := NewOwnerServices(
+		"work", ownerProfileSource{}, ownerConversationSource{}, ownerMessageSource{}, groups, ownerSocialSource{},
+	)
 	if err != nil {
-		t.Fatalf("profile.New() error = %v", err)
+		t.Fatalf("NewOwnerServices() error = %v", err)
 	}
-	conversations, err := conversationservice.New(ownerConversationSource{}, conversationservice.Options{
-		ProfileID:    "work",
-		Capabilities: readCapabilities([]string{conversationservice.ListMethod, conversationservice.GetMethod, conversationservice.SearchMethod, conversationservice.UnreadMethod}, conversationservice.ReadScope),
-	})
-	if err != nil {
-		t.Fatalf("conversation.New() error = %v", err)
-	}
-	messages, err := messageservice.New(ownerMessageSource{}, messageservice.Options{
-		ProfileID:    "work",
-		Capabilities: readCapabilities([]string{messageservice.HistoryMethod, messageservice.SearchMethod, messageservice.GetMethod}, messageservice.ReadScope),
-	})
-	if err != nil {
-		t.Fatalf("message.New() error = %v", err)
-	}
-	groupReader, err := groupservice.New(groups, groupservice.Options{
-		ProfileID:    "work",
-		Capabilities: readCapabilities([]string{groupservice.ListMethod, groupservice.GetMethod, groupservice.SearchMethod, groupservice.MembersListMethod, groupservice.MembersSearchMethod}, groupservice.ReadScope),
-	})
-	if err != nil {
-		t.Fatalf("group.New() error = %v", err)
-	}
-	social, err := socialservice.New(ownerSocialSource{}, socialservice.Options{
-		ProfileID: "work",
-		Capabilities: map[string]service.Capability{
-			socialservice.FriendListMethod:   {Method: socialservice.FriendListMethod, Scope: socialservice.FriendReadScope, Status: "available"},
-			socialservice.FriendGetMethod:    {Method: socialservice.FriendGetMethod, Scope: socialservice.FriendReadScope, Status: "available"},
-			socialservice.FriendSearchMethod: {Method: socialservice.FriendSearchMethod, Scope: socialservice.FriendReadScope, Status: "available"},
-			socialservice.BlackListMethod:    {Method: socialservice.BlackListMethod, Scope: socialservice.BlackReadScope, Status: "available"},
-			socialservice.BlackGetMethod:     {Method: socialservice.BlackGetMethod, Scope: socialservice.BlackReadScope, Status: "available"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("social.New() error = %v", err)
-	}
-	return OwnerServices{Profile: profiles, Conversation: conversations, Message: messages, Group: groupReader, Social: social}
-}
-
-func profileCapabilities() map[string]service.Capability {
-	methods := []string{profileservice.ProfileGet, profileservice.UserMe, profileservice.UserGet, profileservice.DaemonGet, profileservice.DoctorGet}
-	capabilities := make(map[string]service.Capability, len(methods))
-	for _, method := range methods {
-		capabilities[method] = service.Capability{Method: method, Scope: method + ".read", Status: "available"}
-	}
-	return capabilities
-}
-
-func readCapabilities(methods []string, scope string) map[string]service.Capability {
-	capabilities := make(map[string]service.Capability, len(methods))
-	for _, method := range methods {
-		capabilities[method] = service.Capability{Method: method, Scope: scope, Status: "available"}
-	}
-	return capabilities
+	return services
 }
 
 type ownerProfileSource struct{}
@@ -180,7 +128,6 @@ func (ownerConversationSource) Get(context.Context, string) (conversationservice
 func (ownerConversationSource) Search(context.Context, string) ([]conversationservice.Conversation, error) {
 	return []conversationservice.Conversation{{ID: "conversation-1"}}, nil
 }
-func (ownerConversationSource) Unread(context.Context) (int, error) { return 0, nil }
 
 type ownerMessageSource struct{}
 
