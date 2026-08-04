@@ -878,6 +878,9 @@ func messageText(message sdk_struct.MsgStruct) string {
 	if message.AtTextElem != nil {
 		return message.AtTextElem.Text
 	}
+	if message.StreamElem != nil {
+		return message.StreamElem.Content + strings.Join(message.StreamElem.Packets, "")
+	}
 	var text sdk_struct.TextElem
 	if json.Unmarshal([]byte(message.Content), &text) == nil {
 		return text.Content

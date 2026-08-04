@@ -177,6 +177,15 @@ func TestAdapterNormalizesMessageCallbacksWithoutBody(t *testing.T) {
 	}
 }
 
+func TestMessageTextIncludesCompleteStream(t *testing.T) {
+	message := sdk_struct.MsgStruct{StreamElem: &sdk_struct.StreamMsgElem{
+		Content: "hello", Packets: []string{" ", "world"}, End: true,
+	}}
+	if got := messageText(message); got != "hello world" {
+		t.Fatalf("messageText() = %q", got)
+	}
+}
+
 func TestNewRejectsIncompleteSDKConfiguration(t *testing.T) {
 	config := testConfig(t)
 	config.Token = nil

@@ -73,9 +73,13 @@ func TestLiveInboundReply(t *testing.T) {
 	if err := adapter.Login(ctx); err != nil {
 		t.Fatalf("log in sender: %v", err)
 	}
+	prompt := strings.TrimSpace(os.Getenv("ABDIM_E2E_PROMPT"))
+	if prompt == "" {
+		prompt = "ABDIM live verification: reply with a short confirmation."
+	}
 	if err := adapter.Reply(ctx, reply.Delivery{
 		RecipientID: recipientID,
-		Text:        "ABDIM live verification: reply with a short confirmation.",
+		Text:        prompt,
 	}); err != nil {
 		t.Fatalf("send inbound test message: %v", err)
 	}

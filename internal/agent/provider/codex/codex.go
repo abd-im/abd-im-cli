@@ -471,14 +471,6 @@ func (s *session) handleNotification(method string, raw json.RawMessage) {
 		return
 	}
 	switch method {
-	case "item/agentMessage/delta":
-		delta, _ := params["delta"].(string)
-		if delta != "" {
-			s.mu.Lock()
-			text := turn.text + delta
-			s.mu.Unlock()
-			s.deliver(turn, text)
-		}
 	case "item/completed":
 		item, _ := params["item"].(map[string]any)
 		itemType, _ := item["type"].(string)

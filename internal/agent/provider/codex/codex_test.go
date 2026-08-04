@@ -23,12 +23,22 @@ func TestAdapterRunsFixedAppServerTurn(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	defer session.Close(context.Background())
-	result, err := session.Turn(context.Background(), contracts.TurnRequest{RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "inbound body marker"})
+	var outputs []string
+	result, err := session.Turn(context.Background(), contracts.TurnRequest{
+		RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "inbound body marker",
+		Output: func(_ context.Context, output contracts.TurnOutput) error {
+			outputs = append(outputs, output.Text)
+			return nil
+		},
+	})
 	if err != nil {
 		t.Fatalf("Turn() error = %v", err)
 	}
 	if result.FinalText != "final reply" || result.SessionRef != "thread-1" {
 		t.Fatalf("Turn() result = %#v", result)
+	}
+	if len(outputs) != 1 || outputs[0] != "final reply" {
+		t.Fatalf("Turn() outputs = %#v", outputs)
 	}
 	prompt, err := os.ReadFile(capture)
 	if err != nil || string(prompt) != "inbound body marker" {
@@ -210,6 +220,7 @@ func TestCodexHelperProcess(t *testing.T) {
 				_ = os.WriteFile(os.Getenv("FAKE_CODEX_STARTED"), []byte("1"), 0o600)
 				continue
 			}
+			writeHelperNotification("item/agentMessage/delta", map[string]any{"threadId": "thread-1", "delta": "internal commentary"})
 			writeHelperNotification("item/completed", map[string]any{"threadId": "thread-1", "item": map[string]any{"type": "agentMessage", "text": "intermediate reply", "phase": "commentary"}})
 			writeHelperNotification("item/completed", map[string]any{"threadId": "thread-1", "item": map[string]any{"type": "agentMessage", "text": "final reply", "phase": "final_answer"}})
 			writeHelperNotification("turn/completed", map[string]any{"threadId": "thread-1", "turn": map[string]string{"status": "completed"}})
