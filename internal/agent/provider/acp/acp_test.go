@@ -59,6 +59,25 @@ func TestAdapterRunsV1PromptAndStreamsAgentText(t *testing.T) {
 	}
 }
 
+func TestAdapterLoadsStoredSessionAndReportsMissingSession(t *testing.T) {
+	adapter, _ := newTestAdapter(t, "normal")
+	request := startRequest(false)
+	request.SessionRef = "session-1"
+	session, err := adapter.Start(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Start(load) error = %v", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	adapter, _ = newTestAdapter(t, "missing-session")
+	request.SessionRef = "session-missing"
+	if _, err := adapter.Start(context.Background(), request); !errors.Is(err, contracts.ErrSessionNotFound) {
+		t.Fatalf("Start(missing) error = %v, want ErrSessionNotFound", err)
+	}
+}
+
 func TestAdapterRejectsNonV1NegotiatedVersion(t *testing.T) {
 	adapter, _ := newTestAdapter(t, "v2")
 	_, err := adapter.Start(context.Background(), startRequest(false))
@@ -230,6 +249,7 @@ func TestACPHelperProcess(t *testing.T) {
 			writeHelperResponse(message.ID, map[string]any{
 				"protocolVersion": version,
 				"agentCapabilities": map[string]any{
+					"loadSession":         true,
 					"sessionCapabilities": map[string]any{"close": map[string]any{}},
 				},
 				"agentInfo":   map[string]string{"name": "fake-acp-v1", "version": "1.0.0"},
@@ -238,6 +258,12 @@ func TestACPHelperProcess(t *testing.T) {
 		case "session/new":
 			_ = os.WriteFile(os.Getenv("FAKE_ACP_CAPTURE"), message.Params, 0o600)
 			writeHelperResponse(message.ID, map[string]string{"sessionId": sessionID})
+		case "session/load":
+			if scenario == "missing-session" {
+				writeHelperError(message.ID, -32002, "Resource not found")
+				continue
+			}
+			writeHelperResponse(message.ID, map[string]any{})
 		case "session/prompt":
 			promptID = message.ID
 			if scenario == "exit-on-prompt" {
@@ -267,6 +293,11 @@ func TestACPHelperProcess(t *testing.T) {
 
 func writeHelperResponse(id int, result any) {
 	payload, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+	_, _ = os.Stdout.Write(append(payload, '\n'))
+}
+
+func writeHelperError(id, code int, message string) {
+	payload, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}})
 	_, _ = os.Stdout.Write(append(payload, '\n'))
 }
 

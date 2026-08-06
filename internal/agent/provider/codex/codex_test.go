@@ -37,12 +37,31 @@ func TestAdapterRunsFixedAppServerTurn(t *testing.T) {
 	if result.FinalText != "final reply" || result.SessionRef != "thread-1" {
 		t.Fatalf("Turn() result = %#v", result)
 	}
-	if len(outputs) != 1 || outputs[0] != "final reply" {
+	if len(outputs) != 2 || outputs[0] != "final" || outputs[1] != "final reply" {
 		t.Fatalf("Turn() outputs = %#v", outputs)
 	}
 	prompt, err := os.ReadFile(capture)
 	if err != nil || string(prompt) != "inbound body marker" {
 		t.Fatalf("Codex prompt = %q, %v", prompt, err)
+	}
+}
+
+func TestAdapterResumesStoredThreadAndReportsMissingThread(t *testing.T) {
+	adapter := newAdapter(t, "", false)
+	request := startRequest()
+	request.SessionRef = "thread-1"
+	session, err := adapter.Start(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Start(resume) error = %v", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	request.RunID = "run-2"
+	request.SessionRef = "thread-missing"
+	if _, err := adapter.Start(context.Background(), request); !errors.Is(err, contracts.ErrSessionNotFound) {
+		t.Fatalf("Start(missing) error = %v, want ErrSessionNotFound", err)
 	}
 }
 
@@ -86,7 +105,7 @@ func TestAdapterCreatesRunPrivateCLIConfiguration(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	runRoot := filepath.Join(adapter.config.WorkingDir, request.RunID)
-	configPath := filepath.Join(runRoot, "codex", "config.toml")
+	configPath := filepath.Join(adapter.stateDir, "config.toml")
 	config, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("read run config: %v", err)
@@ -106,6 +125,9 @@ func TestAdapterCreatesRunPrivateCLIConfiguration(t *testing.T) {
 	}
 	if _, err := os.Stat(runRoot); !os.IsNotExist(err) {
 		t.Fatalf("run directory still exists after close: %v", err)
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("persistent Codex state was removed after close: %v", err)
 	}
 }
 
@@ -205,6 +227,16 @@ func TestCodexHelperProcess(t *testing.T) {
 			writeHelperResponse(request.ID, map[string]any{"ok": true})
 		case "thread/start":
 			writeHelperResponse(request.ID, map[string]any{"thread": map[string]string{"id": "thread-1"}})
+		case "thread/resume":
+			var params struct {
+				ThreadID string `json:"threadId"`
+			}
+			_ = json.Unmarshal(request.Params, &params)
+			if params.ThreadID == "thread-missing" {
+				writeHelperError(request.ID, -32600, "no rollout found for thread id "+params.ThreadID)
+				continue
+			}
+			writeHelperResponse(request.ID, map[string]any{"thread": map[string]string{"id": params.ThreadID}})
 		case "turn/start":
 			var params struct {
 				Input []struct {
@@ -220,9 +252,13 @@ func TestCodexHelperProcess(t *testing.T) {
 				_ = os.WriteFile(os.Getenv("FAKE_CODEX_STARTED"), []byte("1"), 0o600)
 				continue
 			}
-			writeHelperNotification("item/agentMessage/delta", map[string]any{"threadId": "thread-1", "delta": "internal commentary"})
-			writeHelperNotification("item/completed", map[string]any{"threadId": "thread-1", "item": map[string]any{"type": "agentMessage", "text": "intermediate reply", "phase": "commentary"}})
-			writeHelperNotification("item/completed", map[string]any{"threadId": "thread-1", "item": map[string]any{"type": "agentMessage", "text": "final reply", "phase": "final_answer"}})
+			writeHelperNotification("item/started", map[string]any{"threadId": "thread-1", "item": map[string]any{"id": "commentary-1", "type": "agentMessage", "text": "", "phase": "commentary"}})
+			writeHelperNotification("item/agentMessage/delta", map[string]any{"threadId": "thread-1", "itemId": "commentary-1", "delta": "internal commentary"})
+			writeHelperNotification("item/completed", map[string]any{"threadId": "thread-1", "item": map[string]any{"id": "commentary-1", "type": "agentMessage", "text": "intermediate reply", "phase": "commentary"}})
+			writeHelperNotification("item/started", map[string]any{"threadId": "thread-1", "item": map[string]any{"id": "final-1", "type": "agentMessage", "text": "", "phase": "final_answer"}})
+			writeHelperNotification("item/agentMessage/delta", map[string]any{"threadId": "thread-1", "itemId": "final-1", "delta": "final"})
+			writeHelperNotification("item/agentMessage/delta", map[string]any{"threadId": "thread-1", "itemId": "final-1", "delta": " reply"})
+			writeHelperNotification("item/completed", map[string]any{"threadId": "thread-1", "item": map[string]any{"id": "final-1", "type": "agentMessage", "text": "final reply", "phase": "final_answer"}})
 			writeHelperNotification("turn/completed", map[string]any{"threadId": "thread-1", "turn": map[string]string{"status": "completed"}})
 		case "item/commandExecution/requestApproval":
 			// This request is emitted by the parent adapter, not the fake server.
@@ -233,6 +269,11 @@ func TestCodexHelperProcess(t *testing.T) {
 
 func writeHelperResponse(id int, result any) {
 	payload, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+	_, _ = os.Stdout.Write(append(payload, '\n'))
+}
+
+func writeHelperError(id, code int, message string) {
+	payload, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}})
 	_, _ = os.Stdout.Write(append(payload, '\n'))
 }
 

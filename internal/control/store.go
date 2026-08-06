@@ -380,6 +380,55 @@ func (s *Store) PutRun(ctx context.Context, run Run) error {
 	return nil
 }
 
+// LoadSessionRef returns the provider session mapped to one IM conversation.
+func (s *Store) LoadSessionRef(ctx context.Context, profileID, conversationID, provider string) (string, bool, error) {
+	if strings.TrimSpace(profileID) == "" || strings.TrimSpace(conversationID) == "" || strings.TrimSpace(provider) == "" {
+		return "", false, errors.New("provider session profile, conversation, and provider are required")
+	}
+	var sessionRef string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT session_ref FROM provider_sessions
+		WHERE profile_id = ? AND conversation_id = ? AND provider = ?`, profileID, conversationID, provider).Scan(&sessionRef)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("load provider session: %w", err)
+	}
+	return sessionRef, true, nil
+}
+
+// SaveSessionRef creates or replaces the provider session for a conversation.
+func (s *Store) SaveSessionRef(ctx context.Context, profileID, conversationID, provider, sessionRef string) error {
+	session := ProviderSession{ProfileID: profileID, ConversationID: conversationID, Provider: provider, SessionRef: sessionRef}
+	if err := session.validate(); err != nil {
+		return err
+	}
+	now := encodeTime(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO provider_sessions (profile_id, conversation_id, provider, session_ref, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(profile_id, conversation_id, provider) DO UPDATE SET
+			session_ref = excluded.session_ref,
+			updated_at = excluded.updated_at`, profileID, conversationID, provider, sessionRef, now, now)
+	if err != nil {
+		return fmt.Errorf("save provider session: %w", err)
+	}
+	return nil
+}
+
+// DeleteSessionRef removes a stale provider session mapping.
+func (s *Store) DeleteSessionRef(ctx context.Context, profileID, conversationID, provider string) error {
+	if strings.TrimSpace(profileID) == "" || strings.TrimSpace(conversationID) == "" || strings.TrimSpace(provider) == "" {
+		return errors.New("provider session profile, conversation, and provider are required")
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM provider_sessions WHERE profile_id = ? AND conversation_id = ? AND provider = ?`, profileID, conversationID, provider); err != nil {
+		return fmt.Errorf("delete provider session: %w", err)
+	}
+	return nil
+}
+
 // RunByID returns one profile-scoped run record.
 func (s *Store) RunByID(ctx context.Context, profileID, id string) (Run, error) {
 	row := s.db.QueryRowContext(ctx, `

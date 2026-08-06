@@ -42,8 +42,8 @@ func TestOpenMigratesIdempotently(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&migrations); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrations != 5 {
-		t.Fatalf("migration count = %d, want 5", migrations)
+	if migrations != 6 {
+		t.Fatalf("migration count = %d, want 6", migrations)
 	}
 }
 
@@ -122,6 +122,7 @@ func TestStorePersistsOnlyControlMetadata(t *testing.T) {
 		"reply_slots":       true,
 		"attachments":       true,
 		"runs":              true,
+		"provider_sessions": true,
 	}
 	for rows.Next() {
 		var name, definition string
@@ -139,6 +140,48 @@ func TestStorePersistsOnlyControlMetadata(t *testing.T) {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate schema: %v", err)
+	}
+}
+
+func TestStorePersistsProviderSessionByConversation(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "control.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if ref, found, err := store.LoadSessionRef(ctx, "work", "conversation-1", "codex"); err != nil || found || ref != "" {
+		t.Fatalf("LoadSessionRef(missing) = %q, %v, %v", ref, found, err)
+	}
+	if err := store.SaveSessionRef(ctx, "work", "conversation-1", "codex", "session-1"); err != nil {
+		t.Fatalf("SaveSessionRef(first) error = %v", err)
+	}
+	if err := store.SaveSessionRef(ctx, "work", "conversation-1", "codex", "session-2"); err != nil {
+		t.Fatalf("SaveSessionRef(replace) error = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	store, err = Open(path)
+	if err != nil {
+		t.Fatalf("Open(after close) error = %v", err)
+	}
+	if ref, found, err := store.LoadSessionRef(ctx, "work", "conversation-1", "codex"); err != nil || !found || ref != "session-2" {
+		t.Fatalf("LoadSessionRef() = %q, %v, %v", ref, found, err)
+	}
+	if _, found, err := store.LoadSessionRef(ctx, "work", "conversation-2", "codex"); err != nil || found {
+		t.Fatalf("LoadSessionRef(other conversation) found=%v, error=%v", found, err)
+	}
+	if _, found, err := store.LoadSessionRef(ctx, "work", "conversation-1", "hermes"); err != nil || found {
+		t.Fatalf("LoadSessionRef(other provider) found=%v, error=%v", found, err)
+	}
+	if err := store.DeleteSessionRef(ctx, "work", "conversation-1", "codex"); err != nil {
+		t.Fatalf("DeleteSessionRef() error = %v", err)
+	}
+	if _, found, err := store.LoadSessionRef(ctx, "work", "conversation-1", "codex"); err != nil || found {
+		t.Fatalf("LoadSessionRef(after delete) found=%v, error=%v", found, err)
 	}
 }
 

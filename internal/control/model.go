@@ -84,6 +84,26 @@ type Run struct {
 	UpdatedAt      time.Time
 }
 
+// ProviderSession binds one IM conversation to opaque provider-owned state.
+type ProviderSession struct {
+	ProfileID      string
+	ConversationID string
+	Provider       string
+	SessionRef     string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+func (session ProviderSession) validate() error {
+	if strings.TrimSpace(session.ProfileID) == "" || strings.TrimSpace(session.ConversationID) == "" || strings.TrimSpace(session.Provider) == "" || strings.TrimSpace(session.SessionRef) == "" {
+		return errors.New("provider session profile, conversation, provider, and reference are required")
+	}
+	if len(session.SessionRef) > 1024 {
+		return errors.New("provider session reference must not exceed 1024 bytes")
+	}
+	return nil
+}
+
 func (run Run) validate() error {
 	if strings.TrimSpace(run.ID) == "" || strings.TrimSpace(run.ProfileID) == "" {
 		return errors.New("run ID and profile ID are required")

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,11 +60,20 @@ type Handle struct {
 
 // Config fixes the single provider adapter and queue/turn limits for a daemon.
 type Config struct {
-	Provider contracts.Provider
-	MaxQueue int
-	Deadline time.Duration
-	Observer Observer
-	OnError  func(error)
+	Provider         contracts.Provider
+	Sessions         SessionStore
+	SessionNamespace string
+	MaxQueue         int
+	Deadline         time.Duration
+	Observer         Observer
+	OnError          func(error)
+}
+
+// SessionStore persists the opaque provider state assigned to each IM conversation.
+type SessionStore interface {
+	LoadSessionRef(context.Context, string, string, string) (string, bool, error)
+	SaveSessionRef(context.Context, string, string, string, string) error
+	DeleteSessionRef(context.Context, string, string, string) error
 }
 
 // Observer receives lifecycle facts after a run is accepted. Implementations
@@ -91,14 +101,16 @@ type conversation struct {
 	running bool
 }
 
-// Manager creates one provider session per run. A session receives the run's
-// own proxy and cannot be rebound to a later grant.
+// Manager creates one provider process session per run while resuming the
+// conversation's provider state. Each process receives only its run's proxy.
 type Manager struct {
-	provider contracts.Provider
-	maxQueue int
-	deadline time.Duration
-	observer Observer
-	onError  func(error)
+	provider         contracts.Provider
+	sessions         SessionStore
+	sessionNamespace string
+	maxQueue         int
+	deadline         time.Duration
+	observer         Observer
+	onError          func(error)
 
 	mu            sync.Mutex
 	conversations map[string]*conversation
@@ -116,14 +128,19 @@ func NewManager(config Config) (*Manager, error) {
 	if config.MaxQueue <= 0 || config.Deadline <= 0 {
 		return nil, errors.New("positive queue size and turn deadline are required")
 	}
+	if config.Sessions != nil && strings.TrimSpace(config.SessionNamespace) == "" {
+		return nil, errors.New("session namespace is required with a session store")
+	}
 	return &Manager{
-		provider:      config.Provider,
-		maxQueue:      config.MaxQueue,
-		deadline:      config.Deadline,
-		observer:      config.Observer,
-		onError:       config.OnError,
-		conversations: make(map[string]*conversation),
-		jobs:          make(map[string]*job),
+		provider:         config.Provider,
+		sessions:         config.Sessions,
+		sessionNamespace: config.SessionNamespace,
+		maxQueue:         config.MaxQueue,
+		deadline:         config.Deadline,
+		observer:         config.Observer,
+		onError:          config.OnError,
+		conversations:    make(map[string]*conversation),
+		jobs:             make(map[string]*job),
 	}, nil
 }
 
@@ -261,13 +278,31 @@ func (m *Manager) execute(item *job) {
 
 	turnContext, turnCancel := withTurnDeadline(item.context, m.deadline, item.request.GrantExpiresAt)
 	defer turnCancel()
-	session, err := m.provider.Start(turnContext, contracts.StartRequest{
+	startRequest := contracts.StartRequest{
 		ProfileID:       item.request.ProfileID,
 		RunID:           item.request.ID,
 		GrantCredential: item.request.GrantCredential,
 		AllowedMethods:  append([]string(nil), item.request.AllowedMethods...),
 		Proxy:           item.request.Proxy,
-	})
+	}
+	if m.sessions != nil {
+		sessionRef, _, loadErr := m.sessions.LoadSessionRef(turnContext, item.request.ProfileID, item.request.ConversationID, m.sessionNamespace)
+		if loadErr != nil {
+			m.complete(item, Result{RunID: item.request.ID, Status: StatusFailed, Err: loadErr})
+			m.remove(item.request.ID)
+			return
+		}
+		startRequest.SessionRef = sessionRef
+	}
+	session, err := m.provider.Start(turnContext, startRequest)
+	if errors.Is(err, contracts.ErrSessionNotFound) && startRequest.SessionRef != "" && m.sessions != nil {
+		if deleteErr := m.sessions.DeleteSessionRef(turnContext, item.request.ProfileID, item.request.ConversationID, m.sessionNamespace); deleteErr != nil {
+			err = deleteErr
+		} else {
+			startRequest.SessionRef = ""
+			session, err = m.provider.Start(turnContext, startRequest)
+		}
+	}
 	if err != nil {
 		m.complete(item, Result{RunID: item.request.ID, Status: StatusFailed, Err: err})
 		m.remove(item.request.ID)
@@ -300,6 +335,12 @@ func (m *Manager) execute(item *job) {
 		m.complete(item, Result{RunID: item.request.ID, Status: deadlineStatus(item.request.GrantExpiresAt), Err: turnContext.Err()})
 	} else if err != nil {
 		m.complete(item, Result{RunID: item.request.ID, Status: StatusFailed, Err: err})
+	} else if m.sessions != nil && strings.TrimSpace(result.SessionRef) != "" {
+		if err := m.sessions.SaveSessionRef(turnContext, item.request.ProfileID, item.request.ConversationID, m.sessionNamespace, result.SessionRef); err != nil {
+			m.complete(item, Result{RunID: item.request.ID, Status: StatusFailed, Err: err})
+		} else {
+			m.complete(item, Result{RunID: item.request.ID, Status: StatusCompleted, Turn: result})
+		}
 	} else {
 		m.complete(item, Result{RunID: item.request.ID, Status: StatusCompleted, Turn: result})
 	}

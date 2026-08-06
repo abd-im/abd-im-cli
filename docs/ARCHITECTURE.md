@@ -42,9 +42,9 @@ OpenIM `conversation_id` 是会话隔离键：
 - 回复目标只来自持久化 reply slot，Agent 不能改写目标。
 - run 及其状态持久化，可供未来网页工作区列出、取消和展示历史状态。
 
-当前每个 run 新建一个 provider session；Codex thread 尚未跨多条 IM 消息复用。
-也就是说当前已经区分会话和回复边界，但还没有会话级 Agent 长期上下文。未来网页
-工作区应在现有 conversation/run 标识上增加 thread 复用，不需要改变 IM 工具边界。
+每个 run 仍使用自己的 provider 进程、grant 和工具代理，但 SQLite 按 profile 和
+conversation 和 provider 保存 session ID。后续 run 恢复同一 session；provider 明确报告
+session 不存在时，daemon 删除旧映射并创建新 session。不同 conversation 不共享上下文。
 
 ## 简单权限
 

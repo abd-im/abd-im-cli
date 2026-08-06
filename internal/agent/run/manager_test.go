@@ -51,6 +51,54 @@ func TestManagerSerializesConversationAndCreatesRunPrivateSessions(t *testing.T)
 	}
 }
 
+func TestManagerReusesConversationSessionAndReplacesMissingSession(t *testing.T) {
+	sessions := &memorySessionStore{refs: make(map[string]string)}
+	provider := &sessionRefProvider{}
+	manager, err := NewManager(Config{Provider: provider, Sessions: sessions, SessionNamespace: "codex", MaxQueue: 1, Deadline: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Shutdown(context.Background())
+
+	first, err := manager.Submit(testRequest("run-1", "conversation-1", time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := <-first.Done; result.Status != StatusCompleted || result.Turn.SessionRef != "session-new" {
+		t.Fatalf("first result = %#v", result)
+	}
+	second, err := manager.Submit(testRequest("run-2", "conversation-1", time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := <-second.Done; result.Status != StatusCompleted || result.Turn.SessionRef != "session-new" {
+		t.Fatalf("second result = %#v", result)
+	}
+
+	sessions.refs["work/conversation-2/codex"] = "session-missing"
+	third, err := manager.Submit(testRequest("run-3", "conversation-2", time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := <-third.Done; result.Status != StatusCompleted || result.Turn.SessionRef != "session-new" {
+		t.Fatalf("fallback result = %#v", result)
+	}
+
+	got := provider.sessionRefs()
+	want := []string{"", "session-new", "session-missing", ""}
+	if len(got) != len(want) {
+		t.Fatalf("provider session refs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("provider session refs = %v, want %v", got, want)
+		}
+	}
+	if sessions.refs["work/conversation-2/codex"] != "session-new" {
+		t.Fatalf("replacement session ref = %q", sessions.refs["work/conversation-2/codex"])
+	}
+}
+
 func TestManagerRejectsOverflowAndCancelsGrantExpiry(t *testing.T) {
 	block := make(chan struct{})
 	session := &recordingSession{block: block}
@@ -198,6 +246,60 @@ type recordingProvider struct {
 	starts   int
 	requests []contracts.StartRequest
 	session  *recordingSession
+}
+
+type sessionRefProvider struct {
+	mu       sync.Mutex
+	requests []contracts.StartRequest
+}
+
+func (p *sessionRefProvider) Start(_ context.Context, request contracts.StartRequest) (contracts.Session, error) {
+	p.mu.Lock()
+	p.requests = append(p.requests, request)
+	p.mu.Unlock()
+	if request.SessionRef == "session-missing" {
+		return nil, contracts.ErrSessionNotFound
+	}
+	ref := request.SessionRef
+	if ref == "" {
+		ref = "session-new"
+	}
+	return &sessionRefSession{ref: ref}, nil
+}
+
+func (p *sessionRefProvider) sessionRefs() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	refs := make([]string, 0, len(p.requests))
+	for _, request := range p.requests {
+		refs = append(refs, request.SessionRef)
+	}
+	return refs
+}
+
+type sessionRefSession struct{ ref string }
+
+func (s *sessionRefSession) Turn(_ context.Context, request contracts.TurnRequest) (contracts.TurnResult, error) {
+	return contracts.TurnResult{FinalText: request.RunID, SessionRef: s.ref}, nil
+}
+func (*sessionRefSession) Cancel(context.Context) error { return nil }
+func (*sessionRefSession) Close(context.Context) error  { return nil }
+
+type memorySessionStore struct {
+	refs map[string]string
+}
+
+func (s *memorySessionStore) LoadSessionRef(_ context.Context, profileID, conversationID, provider string) (string, bool, error) {
+	ref, found := s.refs[profileID+"/"+conversationID+"/"+provider]
+	return ref, found, nil
+}
+func (s *memorySessionStore) SaveSessionRef(_ context.Context, profileID, conversationID, provider, sessionRef string) error {
+	s.refs[profileID+"/"+conversationID+"/"+provider] = sessionRef
+	return nil
+}
+func (s *memorySessionStore) DeleteSessionRef(_ context.Context, profileID, conversationID, provider string) error {
+	delete(s.refs, profileID+"/"+conversationID+"/"+provider)
+	return nil
 }
 
 func (p *recordingProvider) Start(_ context.Context, request contracts.StartRequest) (contracts.Session, error) {

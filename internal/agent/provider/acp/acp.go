@@ -156,23 +156,48 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 	}
 	session.mu.Lock()
 	session.supportsClose = initialized.AgentCapabilities.SessionCapabilities.Close != nil
+	session.supportsLoad = initialized.AgentCapabilities.LoadSession
 	session.mu.Unlock()
 
-	created, err := session.connection.NewSession(initializeContext, acpsdk.NewSessionRequest{
-		Cwd: paths.work,
-	})
-	if err != nil {
-		_ = session.Close(context.Background())
-		return nil, errors.New("create ACP session")
+	var sessionID acpsdk.SessionId
+	if request.SessionRef != "" {
+		if !initialized.AgentCapabilities.LoadSession {
+			_ = session.Close(context.Background())
+			return nil, contracts.ErrSessionNotFound
+		}
+		sessionID = acpsdk.SessionId(request.SessionRef)
+		_, err = session.connection.LoadSession(initializeContext, acpsdk.LoadSessionRequest{
+			Cwd: paths.work, McpServers: []acpsdk.McpServer{}, SessionId: sessionID,
+		})
+		if isSessionNotFound(err) {
+			_ = session.Close(context.Background())
+			return nil, contracts.ErrSessionNotFound
+		}
+		if err != nil {
+			_ = session.Close(context.Background())
+			return nil, errors.New("load ACP session")
+		}
+	} else {
+		created, createErr := session.connection.NewSession(initializeContext, acpsdk.NewSessionRequest{Cwd: paths.work})
+		if createErr != nil {
+			_ = session.Close(context.Background())
+			return nil, errors.New("create ACP session")
+		}
+		sessionID = created.SessionId
 	}
-	if strings.TrimSpace(string(created.SessionId)) == "" {
+	if strings.TrimSpace(string(sessionID)) == "" {
 		_ = session.Close(context.Background())
 		return nil, errors.New("ACP Agent returned no session ID")
 	}
 	session.mu.Lock()
-	session.sessionID = created.SessionId
+	session.sessionID = sessionID
 	session.mu.Unlock()
 	return session, nil
+}
+
+func isSessionNotFound(err error) bool {
+	var requestErr *acpsdk.RequestError
+	return errors.As(err, &requestErr) && requestErr.Code == -32002
 }
 
 type turnState struct {
@@ -194,6 +219,7 @@ type session struct {
 
 	mu            sync.Mutex
 	sessionID     acpsdk.SessionId
+	supportsLoad  bool
 	supportsClose bool
 	closed        bool
 	turn          *turnState
@@ -235,7 +261,13 @@ func (s *session) Turn(ctx context.Context, request contracts.TurnRequest) (cont
 	if strings.TrimSpace(finalText) == "" {
 		return contracts.TurnResult{}, errors.New("ACP turn returned no final answer")
 	}
-	return contracts.TurnResult{FinalText: finalText, SessionRef: string(sessionID)}, nil
+	result := contracts.TurnResult{FinalText: finalText}
+	s.mu.Lock()
+	if s.supportsLoad {
+		result.SessionRef = string(sessionID)
+	}
+	s.mu.Unlock()
+	return result, nil
 }
 
 func (s *session) Cancel(ctx context.Context) error {

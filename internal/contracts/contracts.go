@@ -12,7 +12,10 @@ import (
 
 const APIVersionV1 = "v1"
 
-var ErrInvalidContract = errors.New("invalid v1 contract")
+var (
+	ErrInvalidContract = errors.New("invalid v1 contract")
+	ErrSessionNotFound = errors.New("provider session not found")
+)
 
 // Request is the JSON envelope sent over local RPC and run-scoped proxies.
 type Request struct {
@@ -239,6 +242,7 @@ type Provider interface {
 type StartRequest struct {
 	ProfileID       string
 	RunID           string
+	SessionRef      string
 	GrantCredential string
 	// AllowedMethods is the fixed method snapshot selected for this run.
 	AllowedMethods []string

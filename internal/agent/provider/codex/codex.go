@@ -27,6 +27,7 @@ const defaultInitializeTimeout = 30 * time.Second
 type Config struct {
 	Executable        string
 	WorkingDir        string
+	StateDir          string
 	SourceCodexHome   string
 	Environment       []string
 	CLICommand        string
@@ -36,6 +37,7 @@ type Config struct {
 // Adapter starts one Codex app-server process for every restricted run.
 type Adapter struct {
 	config          Config
+	stateDir        string
 	sourceCodexHome string
 }
 
@@ -45,6 +47,12 @@ func New(config Config) (*Adapter, error) {
 	}
 	if strings.TrimSpace(config.WorkingDir) == "" || !filepath.IsAbs(config.WorkingDir) {
 		return nil, errors.New("absolute Codex working directory is required")
+	}
+	if config.StateDir == "" {
+		config.StateDir = filepath.Join(config.WorkingDir, "state")
+	}
+	if !filepath.IsAbs(config.StateDir) {
+		return nil, errors.New("absolute Codex state directory is required")
 	}
 	if strings.TrimSpace(config.SourceCodexHome) == "" || !filepath.IsAbs(config.SourceCodexHome) {
 		return nil, errors.New("absolute source CODEX_HOME is required")
@@ -61,7 +69,7 @@ func New(config Config) (*Adapter, error) {
 	if config.InitializeTimeout <= 0 {
 		config.InitializeTimeout = defaultInitializeTimeout
 	}
-	return &Adapter{config: config, sourceCodexHome: config.SourceCodexHome}, nil
+	return &Adapter{config: config, stateDir: config.StateDir, sourceCodexHome: config.SourceCodexHome}, nil
 }
 
 func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (contracts.Session, error) {
@@ -150,24 +158,20 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 		_ = session.Close(context.Background())
 		return nil, errors.New("notify Codex app-server initialization")
 	}
-	thread, err := session.request(initializeContext, "thread/start", map[string]any{
-		"model":                  nil,
-		"modelProvider":          nil,
-		"profile":                nil,
-		"cwd":                    runPaths.workDir,
-		"approvalPolicy":         "never",
-		"sandbox":                "danger-full-access",
-		"config":                 nil,
-		"baseInstructions":       nil,
-		"developerInstructions":  nil,
-		"compactPrompt":          nil,
-		"includeApplyPatchTool":  false,
-		"experimentalRawEvents":  false,
-		"persistExtendedHistory": false,
-	})
+	method := "thread/start"
+	params := threadParams(runPaths.workDir)
+	if request.SessionRef != "" {
+		method = "thread/resume"
+		params["threadId"] = request.SessionRef
+	}
+	thread, err := session.request(initializeContext, method, params)
+	if err != nil && request.SessionRef != "" && isThreadNotFound(err) {
+		_ = session.Close(context.Background())
+		return nil, contracts.ErrSessionNotFound
+	}
 	if err != nil {
 		_ = session.Close(context.Background())
-		return nil, errors.New("start Codex thread")
+		return nil, errors.New("start or resume Codex thread")
 	}
 	threadID := nestedString(thread, "thread", "id")
 	if threadID == "" {
@@ -180,18 +184,50 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 	return session, nil
 }
 
+func threadParams(workDir string) map[string]any {
+	return map[string]any{
+		"model":                  nil,
+		"modelProvider":          nil,
+		"profile":                nil,
+		"cwd":                    workDir,
+		"approvalPolicy":         "never",
+		"sandbox":                "danger-full-access",
+		"config":                 nil,
+		"baseInstructions":       nil,
+		"developerInstructions":  nil,
+		"compactPrompt":          nil,
+		"includeApplyPatchTool":  false,
+		"experimentalRawEvents":  false,
+		"persistExtendedHistory": false,
+	}
+}
+
 type rpcResult struct {
 	result json.RawMessage
 	err    error
 }
 
+type rpcError struct {
+	code    int
+	message string
+}
+
+func (e *rpcError) Error() string { return "Codex app-server rejected request" }
+
+func isThreadNotFound(err error) bool {
+	var rpcErr *rpcError
+	return errors.As(err, &rpcErr) && rpcErr.code == -32600 && strings.HasPrefix(rpcErr.message, "no rollout found for thread id ")
+}
+
 type turnState struct {
-	ctx    context.Context
-	output contracts.TurnOutputSink
-	done   chan struct{}
-	text   string
-	final  string
-	err    error
+	ctx                context.Context
+	output             contracts.TurnOutputSink
+	done               chan struct{}
+	agentMessagePhases map[string]string
+	agentMessageText   map[string]string
+	text               string
+	final              string
+	err                error
 }
 
 type session struct {
@@ -222,7 +258,10 @@ func (s *session) Turn(ctx context.Context, request contracts.TurnRequest) (cont
 		s.mu.Unlock()
 		return contracts.TurnResult{}, errors.New("Codex session is unavailable")
 	}
-	turn := &turnState{ctx: ctx, output: request.Output, done: make(chan struct{})}
+	turn := &turnState{
+		ctx: ctx, output: request.Output, done: make(chan struct{}),
+		agentMessagePhases: make(map[string]string), agentMessageText: make(map[string]string),
+	}
 	threadID := s.threadID
 	s.turn = turn
 	s.mu.Unlock()
@@ -391,6 +430,7 @@ func (s *session) handle(line string) {
 		Params json.RawMessage `json:"params"`
 		Result json.RawMessage `json:"result"`
 		Error  *struct {
+			Code    int    `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
 	}
@@ -410,7 +450,7 @@ func (s *session) handle(line string) {
 			return
 		}
 		if message.Error != nil {
-			pending <- rpcResult{err: errors.New("Codex app-server rejected request")}
+			pending <- rpcResult{err: &rpcError{code: message.Error.Code, message: message.Error.Message}}
 			return
 		}
 		pending <- rpcResult{result: append(json.RawMessage(nil), message.Result...)}
@@ -471,10 +511,16 @@ func (s *session) handleNotification(method string, raw json.RawMessage) {
 		return
 	}
 	switch method {
+	case "item/started":
+		item, _ := params["item"].(map[string]any)
+		s.rememberAgentMessagePhase(turn, item)
+	case "item/agentMessage/delta":
+		s.deliverAgentMessageDelta(turn, params)
 	case "item/completed":
 		item, _ := params["item"].(map[string]any)
 		itemType, _ := item["type"].(string)
 		phase, _ := item["phase"].(string)
+		s.rememberAgentMessagePhase(turn, item)
 		if itemType == "agentMessage" && phase == "final_answer" {
 			text, _ := item["text"].(string)
 			if text != "" {
@@ -496,6 +542,37 @@ func (s *session) handleNotification(method string, raw json.RawMessage) {
 			s.finishTurn(turn, "", nil)
 		}
 	}
+}
+
+func (s *session) rememberAgentMessagePhase(turn *turnState, item map[string]any) {
+	itemType, _ := item["type"].(string)
+	itemID, _ := item["id"].(string)
+	phase, _ := item["phase"].(string)
+	if itemType != "agentMessage" || itemID == "" || phase == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.turn == turn {
+		turn.agentMessagePhases[itemID] = phase
+	}
+}
+
+func (s *session) deliverAgentMessageDelta(turn *turnState, params map[string]any) {
+	itemID, _ := params["itemId"].(string)
+	delta, _ := params["delta"].(string)
+	if itemID == "" || delta == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.turn != turn || turn.err != nil || turn.agentMessagePhases[itemID] != "final_answer" {
+		s.mu.Unlock()
+		return
+	}
+	text := turn.agentMessageText[itemID] + delta
+	turn.agentMessageText[itemID] = text
+	s.mu.Unlock()
+	s.deliver(turn, text)
 }
 
 func (s *session) deliver(turn *turnState, text string) {
@@ -558,7 +635,7 @@ type runPathSet struct {
 func (a *Adapter) prepareRun(request contracts.StartRequest) (runPathSet, error) {
 	paths := runPathSet{
 		root:    filepath.Join(a.config.WorkingDir, request.RunID),
-		home:    filepath.Join(a.config.WorkingDir, request.RunID, "codex"),
+		home:    a.stateDir,
 		workDir: filepath.Join(a.config.WorkingDir, request.RunID, "work"),
 		socket:  filepath.Join(a.config.WorkingDir, request.RunID, "work", ".abdim.sock"),
 	}

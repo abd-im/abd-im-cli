@@ -413,7 +413,7 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	agent, err := newAgentProvider(item.Agent, agentExecutable, launch.args, paths.RunsDir)
+	agent, err := newAgentProvider(item.Agent, agentExecutable, launch.args, paths.RunsDir, paths.DataDir)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -424,7 +424,10 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	if err := runTracker.Recover(ctx, item.Name); err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	runs, err := runmanager.NewManager(runmanager.Config{Provider: agent, MaxQueue: 2, Deadline: 2 * time.Minute, Observer: runTracker})
+	runs, err := runmanager.NewManager(runmanager.Config{
+		Provider: agent, Sessions: store, SessionNamespace: item.Agent,
+		MaxQueue: 2, Deadline: 2 * time.Minute, Observer: runTracker,
+	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -564,7 +567,7 @@ func agentEnvironment(agent string) []string {
 	return result
 }
 
-func newAgentProvider(agent, executable string, args []string, workingDir string) (contracts.Provider, error) {
+func newAgentProvider(agent, executable string, args []string, workingDir, dataDir string) (contracts.Provider, error) {
 	if agent == "codex" {
 		codexHome, err := currentCodexHome()
 		if err != nil {
@@ -573,6 +576,7 @@ func newAgentProvider(agent, executable string, args []string, workingDir string
 		return codexprovider.New(codexprovider.Config{
 			Executable:      executable,
 			WorkingDir:      workingDir,
+			StateDir:        filepath.Join(dataDir, "codex"),
 			SourceCodexHome: codexHome,
 			Environment:     agentEnvironment(agent),
 			CLICommand:      executablePath(),

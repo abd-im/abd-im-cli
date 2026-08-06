@@ -116,4 +116,18 @@ var migrations = []migration{
 			`CREATE INDEX runs_profile_created_at ON runs(profile_id, created_at)`,
 		},
 	},
+	{
+		version: 6,
+		statements: []string{
+			`CREATE TABLE provider_sessions (
+				profile_id TEXT NOT NULL,
+				conversation_id TEXT NOT NULL,
+				provider TEXT NOT NULL,
+				session_ref TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY(profile_id, conversation_id, provider)
+			)`,
+		},
+	},
 }
