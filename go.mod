@@ -12,8 +12,6 @@ require (
 	modernc.org/sqlite v1.40.1
 )
 
-replace github.com/abd-im/abd-im-sdk-core/v3 => ../abd-im-sdk-core
-
 require (
 	github.com/coder/websocket v1.8.13 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
