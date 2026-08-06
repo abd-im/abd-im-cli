@@ -876,6 +876,9 @@ func messageText(message sdk_struct.MsgStruct) string {
 	if message.AtTextElem != nil {
 		return message.AtTextElem.Text
 	}
+	if message.QuoteElem != nil {
+		return message.QuoteElem.Text
+	}
 	if message.StreamElem != nil {
 		return message.StreamElem.Content + strings.Join(message.StreamElem.Packets, "")
 	}

@@ -187,6 +187,13 @@ func TestMessageTextIncludesCompleteStream(t *testing.T) {
 	}
 }
 
+func TestMessageTextIncludesQuoteReply(t *testing.T) {
+	message := sdk_struct.MsgStruct{QuoteElem: &sdk_struct.QuoteElem{Text: "reply to agent"}}
+	if got := messageText(message); got != "reply to agent" {
+		t.Fatalf("messageText() = %q", got)
+	}
+}
+
 func TestNewRejectsIncompleteSDKConfiguration(t *testing.T) {
 	config := testConfig(t)
 	config.Token = nil
