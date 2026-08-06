@@ -12,6 +12,7 @@ import (
 
 	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/internal/operation"
 	"github.com/abd-im/abd-im-cli/internal/reply"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk_callback"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
@@ -211,7 +212,7 @@ func TestAdapterRejectsLoggerInitializationFailure(t *testing.T) {
 }
 
 func TestAdapterRepliesOnlyToEventBoundRecipient(t *testing.T) {
-	user := &fakeUserContext{}
+	user := &fakeUserContext{streamConversationID: "si_user-1_user-2"}
 	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
 	if err != nil {
 		t.Fatal(err)
@@ -223,11 +224,14 @@ func TestAdapterRepliesOnlyToEventBoundRecipient(t *testing.T) {
 	if err := adapter.InitResources(context.Background()); err != nil {
 		t.Fatalf("InitResources() error = %v", err)
 	}
-	if err := adapter.Reply(context.Background(), reply.Delivery{RecipientID: "user-2", Text: "final response"}); err != nil {
+	if err := adapter.Reply(context.Background(), reply.Delivery{RecipientID: "user-2", OperationID: "reply-1", Text: "final response"}); err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if user.replyRecipient != "user-2" || user.replyGroup != "" || user.replyText != "final response" {
-		t.Fatalf("SDK reply target = recipient=%q group=%q text=%q", user.replyRecipient, user.replyGroup, user.replyText)
+	if user.replyRecipient != "user-2" || user.replyGroup != "" || user.streamType != "text" || user.streamContent != "final response" || user.streamClientMsgID != "reply-1" {
+		t.Fatalf("SDK reply stream = %+v", user)
+	}
+	if len(user.streamAppends) != 1 || user.streamAppends[0].conversationID != "si_user-1_user-2" || user.streamAppends[0].clientMsgID != "reply-1" || user.streamAppends[0].startIndex != 0 || len(user.streamAppends[0].packets) != 0 || !user.streamAppends[0].end {
+		t.Fatalf("SDK reply stream completion = %#v", user.streamAppends)
 	}
 	replyConfig, ok := user.replyContext.Value(ccontext.GlobalConfigKey{}).(*ccontext.GlobalConfig)
 	if !ok || replyConfig == nil || replyConfig.UserID != "user-1" || replyConfig.Token != "token-marker" || replyConfig.IMConfig == nil || replyConfig.IMConfig.ApiAddr != "https://api.example.test" {
@@ -271,7 +275,7 @@ func TestAdapterStartsAndAppendsEventBoundStream(t *testing.T) {
 }
 
 func TestAdapterSendsTextToOneExplicitTarget(t *testing.T) {
-	user := &fakeUserContext{}
+	user := &fakeUserContext{streamConversationID: "si_user-1_user-2"}
 	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
 	if err != nil {
 		t.Fatal(err)
@@ -286,11 +290,35 @@ func TestAdapterSendsTextToOneExplicitTarget(t *testing.T) {
 	if err := adapter.SendText(context.Background(), "outbound text", "user-2", ""); err != nil {
 		t.Fatalf("SendText() error = %v", err)
 	}
-	if user.replyRecipient != "user-2" || user.replyGroup != "" || user.replyText != "outbound text" {
-		t.Fatalf("SDK text target = recipient=%q group=%q text=%q", user.replyRecipient, user.replyGroup, user.replyText)
+	if user.replyRecipient != "user-2" || user.replyGroup != "" || user.streamType != "text" || user.streamContent != "outbound text" || user.streamClientMsgID == "" {
+		t.Fatalf("SDK text stream = %+v", user)
+	}
+	if len(user.streamAppends) != 1 || user.streamAppends[0].conversationID != "si_user-1_user-2" || user.streamAppends[0].clientMsgID != user.streamClientMsgID || user.streamAppends[0].startIndex != 0 || len(user.streamAppends[0].packets) != 0 || !user.streamAppends[0].end {
+		t.Fatalf("SDK text stream completion = %#v", user.streamAppends)
 	}
 	if err := adapter.SendText(context.Background(), "must fail", "user-2", "group-1"); err == nil {
 		t.Fatal("SendText() accepted an ambiguous target")
+	}
+}
+
+func TestAdapterTreatsTextStreamCompletionFailureAsUnknown(t *testing.T) {
+	user := &fakeUserContext{streamConversationID: "si_user-1_user-2", streamAppendErr: errors.New("append failed")}
+	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
+	if err := adapter.InitSDK(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.InitResources(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Reply(context.Background(), reply.Delivery{RecipientID: "user-2", OperationID: "reply-1", Text: "reply"}); !errors.Is(err, reply.ErrOutcomeUnknown) {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	if err := adapter.SendText(context.Background(), "outbound", "user-2", ""); !errors.Is(err, operation.ErrOutcomeUnknown) {
+		t.Fatalf("SendText() error = %v", err)
 	}
 }
 
@@ -460,6 +488,7 @@ type fakeUserContext struct {
 	streamContent        string
 	streamClientMsgID    string
 	streamAppends        []fakeStreamAppend
+	streamAppendErr      error
 }
 
 type fakeStreamAppend struct {
@@ -491,16 +520,6 @@ func (f *fakeUserContext) Login(ctx context.Context, _ string, token string) err
 	return f.loginErr
 }
 
-func (f *fakeUserContext) SendTextMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, text, recipientID, groupID string) error {
-	f.replyCallback = callback
-	f.replyContext = ctx
-	f.replyText = text
-	f.replyRecipient = recipientID
-	f.replyGroup = groupID
-	callback.OnSuccess(`{}`)
-	return nil
-}
-
 func (f *fakeUserContext) StartStreamMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, streamType, content, clientMsgID, recipientID, groupID string) (string, error) {
 	f.replyCallback = callback
 	f.replyContext = ctx
@@ -518,7 +537,7 @@ func (f *fakeUserContext) AppendStreamMessage(_ context.Context, conversationID,
 		conversationID: conversationID, clientMsgID: clientMsgID, startIndex: startIndex,
 		packets: append([]string(nil), packets...), end: end,
 	})
-	return nil
+	return f.streamAppendErr
 }
 
 func (f *fakeUserContext) SendAtMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, text, groupID string, mentionUserIDs []string) error {

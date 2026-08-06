@@ -39,6 +39,23 @@ func TestAccountLoginUsesABDPasswordProtocolWithoutLeakingCredentials(t *testing
 	}
 }
 
+func TestResolveABDEndpointsUsesEnvironmentOverrides(t *testing.T) {
+	values := map[string]string{
+		EnvABDAccountLoginURL: " http://127.0.0.1:10008/account/login ",
+		EnvABDOpenIMAPIAddr:   "http://127.0.0.1:10002",
+		EnvABDOpenIMWSAddr:    "ws://127.0.0.1:10001",
+	}
+	got := ResolveABDEndpoints(func(name string) string { return values[name] })
+	if got.AccountLoginURL != "http://127.0.0.1:10008/account/login" || got.APIAddr != "http://127.0.0.1:10002" || got.WSAddr != "ws://127.0.0.1:10001" {
+		t.Fatalf("ResolveABDEndpoints() = %#v", got)
+	}
+
+	defaults := ResolveABDEndpoints(nil)
+	if defaults.AccountLoginURL != ABDLoginURL || defaults.APIAddr != ABDAPIAddr || defaults.WSAddr != ABDWSAddr {
+		t.Fatalf("ResolveABDEndpoints(nil) = %#v", defaults)
+	}
+}
+
 func TestAccountLoginSupportsEmailAndSanitizesServerFailures(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var payload map[string]any

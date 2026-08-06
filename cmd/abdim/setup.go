@@ -18,15 +18,18 @@ import (
 )
 
 type setupDependencies struct {
-	login func(context.Context, string, string, string) (string, string, error)
-	stop  func(context.Context, commandRoots, string) (bool, error)
-	start func(context.Context, commandRoots, string) (daemonProcessStatus, bool, error)
+	endpoints connector.ABDEndpoints
+	login     func(context.Context, string, string, string) (string, string, error)
+	stop      func(context.Context, commandRoots, string) (bool, error)
+	start     func(context.Context, commandRoots, string) (daemonProcessStatus, bool, error)
 }
 
 func defaultSetupDependencies() setupDependencies {
+	endpoints := connector.ResolveABDEndpoints(os.Getenv)
 	return setupDependencies{
+		endpoints: endpoints,
 		login: func(ctx context.Context, account, areaCode, password string) (string, string, error) {
-			return connector.AccountLogin(ctx, &http.Client{Timeout: 15 * time.Second}, connector.ABDLoginURL, account, areaCode, password)
+			return connector.AccountLogin(ctx, &http.Client{Timeout: 15 * time.Second}, endpoints.AccountLoginURL, account, areaCode, password)
 		},
 		stop:  stopDaemon,
 		start: startDaemon,
@@ -92,8 +95,8 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 		Agent:               agent,
 		Deployment: profile.Deployment{
 			UserID:     userID,
-			APIAddr:    connector.ABDAPIAddr,
-			WSAddr:     connector.ABDWSAddr,
+			APIAddr:    dependencies.endpoints.APIAddr,
+			WSAddr:     dependencies.endpoints.WSAddr,
 			PlatformID: connector.ABDPlatformID,
 		},
 	}

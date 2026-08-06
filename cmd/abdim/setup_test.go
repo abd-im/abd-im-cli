@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/abd-im/abd-im-cli/internal/connector"
 	"github.com/abd-im/abd-im-cli/internal/profile"
 )
 
@@ -49,6 +50,7 @@ func TestRunSetupPersistsTokenFreeProfileAndStartsDaemon(t *testing.T) {
 	const token = "token-marker-must-not-leak"
 	started := false
 	dependencies := setupDependencies{
+		endpoints: connector.ABDEndpoints{APIAddr: "http://127.0.0.1:10002", WSAddr: "ws://127.0.0.1:10001"},
 		login: func(_ context.Context, account, areaCode, password string) (string, string, error) {
 			if account != "15500000000" || areaCode != "+86" || password != "password" {
 				t.Fatalf("login input = %q, %q, %q", account, areaCode, password)
@@ -69,7 +71,7 @@ func TestRunSetupPersistsTokenFreeProfileAndStartsDaemon(t *testing.T) {
 		t.Fatalf("setup output = %q, started=%t", output.String(), started)
 	}
 	item, err := profile.Load(paths.ConfigFile)
-	if err != nil || item.Deployment.UserID != "bot-user" || !item.InboundToolsEnabled || item.Agent != "codex" {
+	if err != nil || item.Deployment.UserID != "bot-user" || item.Deployment.APIAddr != "http://127.0.0.1:10002" || item.Deployment.WSAddr != "ws://127.0.0.1:10001" || !item.InboundToolsEnabled || item.Agent != "codex" {
 		t.Fatalf("profile = %#v, %v", item, err)
 	}
 	profileContents, _ := os.ReadFile(paths.ConfigFile)

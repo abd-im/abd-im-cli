@@ -288,6 +288,8 @@ func messageType(value int32) string {
 	switch value {
 	case pbconstant.Text:
 		return "text"
+	case pbconstant.Stream:
+		return "text"
 	case pbconstant.AtText:
 		return "at_text"
 	case pbconstant.AdvancedText:
@@ -311,6 +313,14 @@ func messageText(contentType int32, content []byte) string {
 		}
 		if json.Unmarshal(content, &value) == nil {
 			return value.Content
+		}
+	case pbconstant.Stream:
+		var value struct {
+			Content string   `json:"content"`
+			Packets []string `json:"packets"`
+		}
+		if json.Unmarshal(content, &value) == nil {
+			return value.Content + strings.Join(value.Packets, "")
 		}
 	case pbconstant.AtText, pbconstant.AdvancedText, pbconstant.Quote:
 		var value struct {

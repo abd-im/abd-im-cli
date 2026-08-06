@@ -10,7 +10,7 @@ go build -o ./abdim ./cmd/abdim
 ./abdim setup
 ```
 
-`setup` 登录固定 ABD 部署，保存当前用户私有的 profile/token，并启动 daemon。
+`setup` 默认登录当前 ABD 部署，保存当前用户私有的 profile/token，并启动 daemon。
 不要使用 `sudo`。密码不持久化，token 文件权限为 `0600`。
 
 ```text
@@ -18,6 +18,16 @@ Account login = https://2.alissa.xin/chat/account/login
 OpenIM API    = https://2.alissa.xin/api
 OpenIM WS     = wss://2.alissa.xin/msg_gateway
 Platform      = 7
+```
+
+可在执行 `setup` 时通过环境变量覆盖服务地址。API 和 WebSocket 地址会保存到
+profile，后续执行 `start` 或 `restart` 时不需要重复传入：
+
+```bash
+ABDIM_ACCOUNT_LOGIN_URL=http://127.0.0.1:10008/account/login \
+ABDIM_OPENIM_API_ADDR=http://127.0.0.1:10002 \
+ABDIM_OPENIM_WS_ADDR=ws://127.0.0.1:10001 \
+./abdim setup
 ```
 
 日常命令：

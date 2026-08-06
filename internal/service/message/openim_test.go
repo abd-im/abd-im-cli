@@ -22,6 +22,7 @@ func TestSDKSourceUsesOnlyServerReadsAndMapsResponses(t *testing.T) {
 	conversationID := "si_user-1_user-2"
 	client := &fakeOpenIMClient{messages: []*sdkws.MsgData{
 		{ServerMsgID: "server-1", ClientMsgID: "client-1", SendID: "user-2", RecvID: "user-1", SessionType: pbconstant.SingleChatType, ContentType: pbconstant.Text, Content: []byte(`{"content":"A matching message"}`), SendTime: 1000},
+		{ServerMsgID: "server-stream", SendID: "user-1", RecvID: "user-2", SessionType: pbconstant.SingleChatType, ContentType: pbconstant.Stream, Content: []byte(`{"type":"text","content":"Streamed","packets":[" message"],"end":true}`), SendTime: 1500},
 		{ServerMsgID: "server-2", SendID: "user-1", RecvID: "user-2", SessionType: pbconstant.SingleChatType, ContentType: pbconstant.File, Content: []byte(`{"fileName":"private.pdf"}`), SendTime: 2000},
 	}}
 	source, err := NewSDKSource(client)
@@ -32,14 +33,15 @@ func TestSDKSourceUsesOnlyServerReadsAndMapsResponses(t *testing.T) {
 	history, err := source.History(context.Background(), HistoryQuery{ConversationID: conversationID, Limit: 100})
 	want := []Message{
 		{ID: "server-1", ConversationID: conversationID, SenderID: "user-2", Type: "text", Text: "A matching message", CreatedAt: time.UnixMilli(1000)},
+		{ID: "server-stream", ConversationID: conversationID, SenderID: "user-1", Type: "text", Text: "Streamed message", CreatedAt: time.UnixMilli(1500)},
 		{ID: "server-2", ConversationID: conversationID, SenderID: "user-1", Type: "unknown", CreatedAt: time.UnixMilli(2000)},
 	}
 	if err != nil || !reflect.DeepEqual(history, want) || client.conversationID != conversationID || client.limit != 100 {
 		t.Fatalf("History() = %#v, %v; request = %q/%d", history, err, client.conversationID, client.limit)
 	}
 
-	search, err := source.Search(context.Background(), HistoryQuery{ConversationID: conversationID, Limit: 100}, "MATCHING")
-	if err != nil || !reflect.DeepEqual(search, want[:1]) {
+	search, err := source.Search(context.Background(), HistoryQuery{ConversationID: conversationID, Limit: 100}, "MESSAGE")
+	if err != nil || !reflect.DeepEqual(search, want[:2]) {
 		t.Fatalf("Search() = %#v, %v", search, err)
 	}
 	get, err := source.Get(context.Background(), conversationID, "server-1")

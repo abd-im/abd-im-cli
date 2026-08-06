@@ -21,7 +21,34 @@ const (
 	ABDAPIAddr          = "https://2.alissa.xin/api"
 	ABDWSAddr           = "wss://2.alissa.xin/msg_gateway"
 	ABDPlatformID int32 = 7
+
+	EnvABDAccountLoginURL = "ABDIM_ACCOUNT_LOGIN_URL"
+	EnvABDOpenIMAPIAddr   = "ABDIM_OPENIM_API_ADDR"
+	EnvABDOpenIMWSAddr    = "ABDIM_OPENIM_WS_ADDR"
 )
+
+type ABDEndpoints struct {
+	AccountLoginURL string
+	APIAddr         string
+	WSAddr          string
+}
+
+func ResolveABDEndpoints(getenv func(string) string) ABDEndpoints {
+	resolve := func(name, fallback string) string {
+		if getenv == nil {
+			return fallback
+		}
+		if value := strings.TrimSpace(getenv(name)); value != "" {
+			return value
+		}
+		return fallback
+	}
+	return ABDEndpoints{
+		AccountLoginURL: resolve(EnvABDAccountLoginURL, ABDLoginURL),
+		APIAddr:         resolve(EnvABDOpenIMAPIAddr, ABDAPIAddr),
+		WSAddr:          resolve(EnvABDOpenIMWSAddr, ABDWSAddr),
+	}
+}
 
 // AccountLogin exchanges an ABD account password for the OpenIM identity used
 // by the daemon. The password is never returned or persisted.

@@ -49,7 +49,6 @@ type userContext interface {
 	InitResources()
 	SetAdvancedMsgListener(open_im_sdk_callback.OnAdvancedMsgListener)
 	Login(context.Context, string, string) error
-	SendTextMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string) error
 	SendAtMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, []string) error
 	SendQuoteMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string, *sdk_struct.MsgStruct) error
 	SendLocationMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, float64, float64, string, string) error
@@ -353,22 +352,36 @@ func (a *Adapter) Reply(ctx context.Context, delivery reply.Delivery) error {
 	if strings.TrimSpace(delivery.Text) == "" || (strings.TrimSpace(delivery.RecipientID) == "" && strings.TrimSpace(delivery.GroupID) == "") || (strings.TrimSpace(delivery.RecipientID) != "" && strings.TrimSpace(delivery.GroupID) != "") {
 		return errors.New("invalid event-bound reply delivery")
 	}
+	return a.sendCompleteTextStream(ctx, delivery.Text, delivery.RecipientID, delivery.GroupID, delivery.OperationID, reply.ErrOutcomeUnknown)
+}
+
+func (a *Adapter) sendCompleteTextStream(ctx context.Context, text, recipientID, groupID, clientMsgID string, outcomeUnknown error) error {
 	user, err := a.currentUser()
 	if err != nil {
 		return err
 	}
+	if clientMsgID == "" {
+		clientMsgID = uuid.NewString()
+	}
 	callback := newSendCallback()
 	config := a.config
-	replyContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
-	if err := user.SendTextMessage(ccontext.WithOperationID(replyContext, uuid.NewString()), callback, delivery.Text, delivery.RecipientID, delivery.GroupID); err != nil {
-		return errors.New("OpenIM reply submission failed")
+	sendContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
+	conversationID, err := user.StartStreamMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), callback, "text", text, clientMsgID, recipientID, groupID)
+	if err != nil {
+		return errors.New("OpenIM text stream submission failed")
 	}
 	select {
 	case err := <-callback.done:
-		return err
+		if err != nil {
+			return err
+		}
 	case <-ctx.Done():
-		return reply.ErrOutcomeUnknown
+		return outcomeUnknown
 	}
+	if err := user.AppendStreamMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), conversationID, clientMsgID, 0, nil, true); err != nil {
+		return outcomeUnknown
+	}
+	return nil
 }
 
 func (a *Adapter) StartStream(ctx context.Context, delivery reply.StreamDelivery) (reply.StreamRef, error) {
@@ -436,22 +449,7 @@ func (a *Adapter) SendText(ctx context.Context, text, recipientID, groupID strin
 	if strings.TrimSpace(text) == "" || len(text) > 4096 || (strings.TrimSpace(recipientID) == "" && strings.TrimSpace(groupID) == "") || (strings.TrimSpace(recipientID) != "" && strings.TrimSpace(groupID) != "") {
 		return errors.New("invalid text message delivery")
 	}
-	user, err := a.currentUser()
-	if err != nil {
-		return err
-	}
-	callback := newSendCallback()
-	config := a.config
-	sendContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
-	if err := user.SendTextMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), callback, text, recipientID, groupID); err != nil {
-		return errors.New("OpenIM message send submission failed")
-	}
-	select {
-	case err := <-callback.done:
-		return err
-	case <-ctx.Done():
-		return operation.ErrOutcomeUnknown
-	}
+	return a.sendCompleteTextStream(ctx, text, recipientID, groupID, "", operation.ErrOutcomeUnknown)
 }
 
 // SendAt delivers a grant-authorized text message that mentions selected
