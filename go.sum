@@ -1,3 +1,5 @@
+github.com/abd-im/abd-im-sdk-core/v3 v3.0.0-20260804151528-2ccc16361ec0 h1:+BOQOslFxZhMdUfjzM+H3rH2WTVvfCv4MYdeNfs/jKc=
+github.com/abd-im/abd-im-sdk-core/v3 v3.0.0-20260804151528-2ccc16361ec0/go.mod h1:qb7CxnY/7F7Jm+KwXljOy2PH1z0UV0ErGCTjBFYEyc4=
 github.com/benbjohnson/clock v1.1.0 h1:Q92kusRqC1XV2MjkWETPvjJVqKetz1OzxZB7mHJLju8=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
 github.com/coder/acp-go-sdk v0.13.5 h1:LI9jq5xon7xslaYlnoktvTVyDlE37yIk2daT7N9ASYk=
