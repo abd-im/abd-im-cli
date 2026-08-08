@@ -131,13 +131,15 @@ func TestAdapterNormalizesMessageCallbacksWithoutBody(t *testing.T) {
 		t.Fatalf("SetEventListener() error = %v", err)
 	}
 	raw, err := json.Marshal(sdk_struct.MsgStruct{
-		ClientMsgID: "client-1",
-		ServerMsgID: "server-1",
-		SessionType: constant.SingleChatType,
-		SendID:      "user-2",
-		RecvID:      "user-1",
-		SendTime:    123,
-		Content:     `{"content":"message-body-marker"}`,
+		ClientMsgID:      "client-1",
+		ServerMsgID:      "server-1",
+		SessionType:      constant.SingleChatType,
+		ContentType:      constant.Text,
+		SenderPlatformID: 5,
+		SendID:           "user-2",
+		RecvID:           "user-1",
+		SendTime:         123,
+		Content:          `{"content":"message-body-marker"}`,
 	})
 	if err != nil {
 		t.Fatalf("marshal callback fixture: %v", err)
@@ -157,15 +159,17 @@ func TestAdapterNormalizesMessageCallbacksWithoutBody(t *testing.T) {
 		t.Fatalf("event transient message text = %q", event.MessageText)
 	}
 	var data struct {
-		ConversationID string `json:"conversation_id"`
-		MessageID      string `json:"message_id"`
-		SenderID       string `json:"sender_id"`
-		SessionType    int32  `json:"session_type"`
+		ConversationID   string `json:"conversation_id"`
+		MessageID        string `json:"message_id"`
+		SenderID         string `json:"sender_id"`
+		SessionType      int32  `json:"session_type"`
+		ContentType      int32  `json:"content_type"`
+		SenderPlatformID int32  `json:"sender_platform_id"`
 	}
 	if err := json.Unmarshal(event.Data, &data); err != nil {
 		t.Fatalf("decode event data: %v", err)
 	}
-	if data.ConversationID != "si_user-1_user-2" || data.MessageID != "server-1" || data.SenderID != "user-2" || data.SessionType != constant.SingleChatType {
+	if data.ConversationID != "si_user-1_user-2" || data.MessageID != "server-1" || data.SenderID != "user-2" || data.SessionType != constant.SingleChatType || data.ContentType != constant.Text || data.SenderPlatformID != 5 {
 		t.Fatalf("event data = %#v", data)
 	}
 	payload, err := json.Marshal(event)
@@ -278,6 +282,38 @@ func TestAdapterStartsAndAppendsEventBoundStream(t *testing.T) {
 	if user.streamType != "text" || user.streamContent != "hello" || user.streamClientMsgID != "stream-1" ||
 		len(user.streamAppends) != 1 || user.streamAppends[0].packets[0] != " world" || !user.streamAppends[0].end {
 		t.Fatalf("stream start/append = %#v / %#v", user, user.streamAppends)
+	}
+}
+
+func TestAdapterPreservesAgentRunStreamTypeAndPacketOrder(t *testing.T) {
+	user := &fakeUserContext{streamConversationID: "sg_group-1"}
+	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
+	if err := adapter.InitSDK(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.InitResources(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := adapter.StartStream(context.Background(), reply.StreamDelivery{
+		ProfileID: "work", EventID: "event-1", GroupID: "group-1", ConversationID: "sg_group-1",
+		ClientMsgID: "run-message-1", Type: reply.AgentRunStreamType, Content: `{"schema":1,"runId":"run-1","status":"running"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packets := []string{`{"version":1,"kind":"run.started","runId":"run-1"}`, `{"version":1,"kind":"run.completed"}`}
+	if err := adapter.AppendStream(context.Background(), reply.StreamAppend{
+		ProfileID: "work", EventID: "event-1", ConversationID: ref.ConversationID,
+		ClientMsgID: ref.ClientMsgID, StartIndex: 0, Packets: packets, End: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if user.streamType != reply.AgentRunStreamType || len(user.streamAppends) != 1 || user.streamAppends[0].startIndex != 0 || strings.Join(user.streamAppends[0].packets, "") != strings.Join(packets, "") || !user.streamAppends[0].end {
+		t.Fatalf("agent stream = type %q appends %#v", user.streamType, user.streamAppends)
 	}
 }
 

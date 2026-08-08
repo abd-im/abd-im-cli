@@ -68,6 +68,31 @@ func TestDirectMessagePolicyExplicitlyEnablesRegisteredTools(t *testing.T) {
 	}
 }
 
+func TestAgentWorkspacePolicyAllowsUserContentButNotAgentStream(t *testing.T) {
+	policy := agentWorkspacePolicy(directMessagePolicy("agent-1", false, nil), "agent-1", false, nil)
+	decision, allowed, err := policy.Decide(context.Background(), daemon.InboundContext{
+		SenderID: "user-1", SenderPlatformID: 5, GroupID: "group-1", SessionType: 3, ContentType: 101, ConversationKind: contracts.ConversationKindAgentWorkspace,
+	})
+	if err != nil || !allowed || decision.Principal != "openim:user-1" {
+		t.Fatalf("workspace policy = %+v, allowed=%t, err=%v", decision, allowed, err)
+	}
+	if _, allowed, err := policy.Decide(context.Background(), daemon.InboundContext{
+		SenderID: "user-1", SenderPlatformID: 5, GroupID: "group-1", SessionType: 3, ContentType: 143, ConversationKind: contracts.ConversationKindAgentWorkspace,
+	}); err != nil || allowed {
+		t.Fatalf("workspace stream allowed=%t err=%v", allowed, err)
+	}
+	if _, allowed, err := policy.Decide(context.Background(), daemon.InboundContext{
+		SenderID: "user-1", SenderPlatformID: 5, GroupID: "group-1", SessionType: 3, ContentType: 102, ConversationKind: contracts.ConversationKindAgentWorkspace,
+	}); err != nil || allowed {
+		t.Fatalf("workspace picture allowed=%t err=%v", allowed, err)
+	}
+	if _, allowed, err := policy.Decide(context.Background(), daemon.InboundContext{
+		SenderID: "agent-1", SenderPlatformID: 5, GroupID: "group-1", SessionType: 3, ContentType: 101, ConversationKind: contracts.ConversationKindAgentWorkspace,
+	}); err != nil || allowed {
+		t.Fatalf("agent-authored workspace message allowed=%t err=%v", allowed, err)
+	}
+}
+
 func TestDaemonSDKConfigUsesProfilePaths(t *testing.T) {
 	paths, err := profile.NewPaths("/config", "/data", "/runtime", "work")
 	if err != nil {

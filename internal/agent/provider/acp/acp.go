@@ -201,10 +201,12 @@ func isSessionNotFound(err error) bool {
 }
 
 type turnState struct {
-	ctx    context.Context
-	output contracts.TurnOutputSink
-	text   string
-	err    error
+	ctx      context.Context
+	output   contracts.TurnOutputSink
+	activity contracts.TurnActivitySink
+	tools    map[string]contracts.TurnActivity
+	text     string
+	err      error
 }
 
 type session struct {
@@ -234,7 +236,7 @@ func (s *session) Turn(ctx context.Context, request contracts.TurnRequest) (cont
 		s.mu.Unlock()
 		return contracts.TurnResult{}, errors.New("ACP session is unavailable")
 	}
-	turn := &turnState{ctx: ctx, output: request.Output}
+	turn := &turnState{ctx: ctx, output: request.Output, activity: request.Activity, tools: make(map[string]contracts.TurnActivity)}
 	s.turn = turn
 	sessionID := s.sessionID
 	s.mu.Unlock()
@@ -341,18 +343,73 @@ func (c *client) SessionUpdate(_ context.Context, notification acpsdk.SessionNot
 	s := c.session
 	s.mu.Lock()
 	turn := s.turn
-	if turn == nil || notification.SessionId != s.sessionID || notification.Update.AgentMessageChunk == nil ||
-		notification.Update.AgentMessageChunk.Content.Text == nil {
+	if turn == nil || notification.SessionId != s.sessionID {
 		s.mu.Unlock()
 		return nil
 	}
-	turn.text += notification.Update.AgentMessageChunk.Content.Text.Text
-	text, output, outputContext := turn.text, turn.output, turn.ctx
-	s.mu.Unlock()
-	if output == nil {
+	if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
+		turn.text += update.Content.Text.Text
+		text, output, outputContext := turn.text, turn.output, turn.ctx
+		s.mu.Unlock()
+		if output == nil {
+			return nil
+		}
+		if err := output(outputContext, contracts.TurnOutput{Text: text}); err != nil {
+			s.mu.Lock()
+			if s.turn == turn && turn.err == nil {
+				turn.err = err
+			}
+			s.mu.Unlock()
+			_ = s.Cancel(context.Background())
+		}
 		return nil
 	}
-	if err := output(outputContext, contracts.TurnOutput{Text: text}); err != nil {
+	if update := notification.Update.ToolCall; update != nil {
+		activity := contracts.TurnActivity{
+			Kind: "tool.started", CallID: string(update.ToolCallId), Name: acpToolName(update.Kind),
+			Summary: boundedACPSummary(update.Title), Status: string(update.Status),
+		}
+		if activity.Status == "" {
+			activity.Status = "running"
+		}
+		turn.tools[activity.CallID] = activity
+		s.mu.Unlock()
+		s.deliverActivity(turn, activity)
+		return nil
+	}
+	if update := notification.Update.ToolCallUpdate; update != nil && update.Status != nil &&
+		(*update.Status == acpsdk.ToolCallStatusCompleted || *update.Status == acpsdk.ToolCallStatusFailed) {
+		activity := turn.tools[string(update.ToolCallId)]
+		activity.Kind = "tool.completed"
+		activity.CallID = string(update.ToolCallId)
+		activity.Status = string(*update.Status)
+		if update.Title != nil {
+			activity.Summary = boundedACPSummary(*update.Title)
+		}
+		if update.Kind != nil {
+			activity.Name = acpToolName(*update.Kind)
+		}
+		turn.tools[activity.CallID] = activity
+		s.mu.Unlock()
+		s.deliverActivity(turn, activity)
+		return nil
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *session) deliverActivity(turn *turnState, activity contracts.TurnActivity) {
+	s.mu.Lock()
+	if s.turn != turn || turn.err != nil {
+		s.mu.Unlock()
+		return
+	}
+	sink, activityContext := turn.activity, turn.ctx
+	s.mu.Unlock()
+	if sink == nil {
+		return
+	}
+	if err := sink(activityContext, activity); err != nil {
 		s.mu.Lock()
 		if s.turn == turn && turn.err == nil {
 			turn.err = err
@@ -360,7 +417,25 @@ func (c *client) SessionUpdate(_ context.Context, notification acpsdk.SessionNot
 		s.mu.Unlock()
 		_ = s.Cancel(context.Background())
 	}
-	return nil
+}
+
+func acpToolName(kind acpsdk.ToolKind) string {
+	if kind == acpsdk.ToolKindExecute {
+		return "terminal"
+	}
+	if kind == "" {
+		return "tool"
+	}
+	return string(kind)
+}
+
+func boundedACPSummary(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) > 500 {
+		value = string(runes[:500])
+	}
+	return value
 }
 
 func (c *client) RequestPermission(_ context.Context, request acpsdk.RequestPermissionRequest) (acpsdk.RequestPermissionResponse, error) {

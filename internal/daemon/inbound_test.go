@@ -125,6 +125,98 @@ func TestInboundStreamsProviderOutputIntoOneEventBoundMessage(t *testing.T) {
 	}
 }
 
+func TestInboundRoutesAgentWorkspaceToStructuredStream(t *testing.T) {
+	harness := newHarness(t, false)
+	defer harness.close(t)
+	harness.inbound.workspaceClassifier = conversationClassifierFunc(func(_ context.Context, groupID string) (contracts.ConversationKind, error) {
+		if groupID != "group-1" {
+			t.Fatalf("classified group = %q", groupID)
+		}
+		return contracts.ConversationKindAgentWorkspace, nil
+	})
+	harness.session.setReplyOnly()
+	harness.session.setOutputUpdates("hel", "hello")
+	event := inboundEvent("sdk-agent-stream", "sg_group-1", "message-trigger")
+	event.Data, _ = json.Marshal(map[string]any{
+		"conversation_id": "sg_group-1", "message_id": "message-trigger", "sender_id": "user-2",
+		"group_id": "group-1", "session_type": 3,
+	})
+	if _, err := harness.inbound.Process(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-harness.sender.deliveries:
+	case <-time.After(time.Second):
+		t.Fatal("structured stream did not finish")
+	}
+	harness.sender.mu.Lock()
+	delivery := harness.sender.stream
+	appends := harness.sender.streamAppendCount
+	ended := harness.sender.streamEnded
+	harness.sender.mu.Unlock()
+	if delivery.Type != reply.AgentRunStreamType || appends != 4 || !ended {
+		t.Fatalf("agent stream type=%q appends=%d ended=%t", delivery.Type, appends, ended)
+	}
+}
+
+func TestInboundEndsAgentWorkspaceStreamWhenProviderFails(t *testing.T) {
+	harness := newHarness(t, false)
+	defer harness.close(t)
+	harness.inbound.workspaceClassifier = conversationClassifierFunc(func(context.Context, string) (contracts.ConversationKind, error) {
+		return contracts.ConversationKindAgentWorkspace, nil
+	})
+	harness.session.setTurnError(errors.New("provider turn failed"))
+	event := inboundEvent("sdk-agent-failed", "sg_group-1", "message-trigger")
+	event.Data, _ = json.Marshal(map[string]any{
+		"conversation_id": "sg_group-1", "message_id": "message-trigger", "sender_id": "user-2",
+		"group_id": "group-1", "session_type": 3,
+	})
+	if _, err := harness.inbound.Process(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-harness.sender.deliveries:
+	case <-time.After(time.Second):
+		t.Fatal("failed agent stream did not finish")
+	}
+	harness.sender.mu.Lock()
+	streamType := harness.sender.stream.Type
+	streamText := harness.sender.streamText
+	ended := harness.sender.streamEnded
+	harness.sender.mu.Unlock()
+	if streamType != reply.AgentRunStreamType || !ended || !strings.Contains(streamText, `"kind":"run.failed"`) {
+		t.Fatalf("failed agent stream type=%q ended=%t content=%q", streamType, ended, streamText)
+	}
+}
+
+func TestInboundClassificationFailureFallsBackToTextStream(t *testing.T) {
+	harness := newHarness(t, false)
+	defer harness.close(t)
+	harness.inbound.workspaceClassifier = conversationClassifierFunc(func(context.Context, string) (contracts.ConversationKind, error) {
+		return contracts.ConversationKindAgentWorkspace, errors.New("lookup failed")
+	})
+	harness.session.setReplyOnly()
+	event := inboundEvent("sdk-fallback-stream", "sg_group-1", "message-trigger")
+	event.Data, _ = json.Marshal(map[string]any{
+		"conversation_id": "sg_group-1", "message_id": "message-trigger", "sender_id": "user-2",
+		"group_id": "group-1", "session_type": 3,
+	})
+	if _, err := harness.inbound.Process(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-harness.sender.deliveries:
+	case <-time.After(time.Second):
+		t.Fatal("fallback stream did not finish")
+	}
+	harness.sender.mu.Lock()
+	streamType := harness.sender.stream.Type
+	harness.sender.mu.Unlock()
+	if streamType != "text" {
+		t.Fatalf("fallback stream type = %q", streamType)
+	}
+}
+
 func TestInboundCanBoundHistoryBeforeTrigger(t *testing.T) {
 	harness := newHarness(t, false)
 	defer harness.close(t)
@@ -265,6 +357,12 @@ type harness struct {
 	policies int
 	decided  InboundContext
 	windowed grant.MessageWindow
+}
+
+type conversationClassifierFunc func(context.Context, string) (contracts.ConversationKind, error)
+
+func (f conversationClassifierFunc) ConversationKind(ctx context.Context, groupID string) (contracts.ConversationKind, error) {
+	return f(ctx, groupID)
 }
 
 func newHarness(t *testing.T, blockTurn bool) *harness {
@@ -489,6 +587,7 @@ type recordingSession struct {
 	denied        bool
 	replyOnly     bool
 	outputUpdates []string
+	turnErr       error
 	block         bool
 	started       chan struct{}
 }
@@ -515,10 +614,14 @@ func (s *recordingSession) Turn(ctx context.Context, turn contracts.TurnRequest)
 	block := s.block
 	replyOnly := s.replyOnly
 	outputUpdates := append([]string(nil), s.outputUpdates...)
+	turnErr := s.turnErr
 	s.mu.Unlock()
 	if block {
 		<-ctx.Done()
 		return contracts.TurnResult{}, ctx.Err()
+	}
+	if turnErr != nil {
+		return contracts.TurnResult{}, turnErr
 	}
 	if response, err := s.call(ctx, proxyValue, turn, "conversation-third-party"); err != nil || response.Error == nil || response.Error.Code != contracts.CodePolicyDenied {
 		return contracts.TurnResult{}, errors.New("third-party conversation was not denied")
@@ -558,6 +661,12 @@ func (s *recordingSession) setReplyOnly() {
 func (s *recordingSession) setOutputUpdates(updates ...string) {
 	s.mu.Lock()
 	s.outputUpdates = append([]string(nil), updates...)
+	s.mu.Unlock()
+}
+
+func (s *recordingSession) setTurnError(err error) {
+	s.mu.Lock()
+	s.turnErr = err
 	s.mu.Unlock()
 }
 

@@ -24,10 +24,15 @@ func TestAdapterRunsFixedAppServerTurn(t *testing.T) {
 	}
 	defer session.Close(context.Background())
 	var outputs []string
+	var activities []contracts.TurnActivity
 	result, err := session.Turn(context.Background(), contracts.TurnRequest{
 		RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "inbound body marker",
 		Output: func(_ context.Context, output contracts.TurnOutput) error {
 			outputs = append(outputs, output.Text)
+			return nil
+		},
+		Activity: func(_ context.Context, activity contracts.TurnActivity) error {
+			activities = append(activities, activity)
 			return nil
 		},
 	})
@@ -39,6 +44,13 @@ func TestAdapterRunsFixedAppServerTurn(t *testing.T) {
 	}
 	if len(outputs) != 2 || outputs[0] != "final" || outputs[1] != "final reply" {
 		t.Fatalf("Turn() outputs = %#v", outputs)
+	}
+	if len(activities) != 4 || activities[0].Kind != "activity.summary" || activities[0].Summary != "intermediate reply" ||
+		activities[1].Kind != "activity.summary" || activities[1].Summary != "checked the available weather sources" ||
+		activities[2].Kind != "tool.started" || activities[2].CallID != "command-1" || activities[2].Name != "shell" ||
+		activities[2].Summary != "git status" || activities[3].Kind != "tool.completed" || activities[3].Status != "completed" ||
+		activities[3].Summary != "git status" {
+		t.Fatalf("Turn() activities = %#v", activities)
 	}
 	prompt, err := os.ReadFile(capture)
 	if err != nil || string(prompt) != "inbound body marker" {
@@ -90,6 +102,51 @@ func TestAdapterCancellationReapsBlockedServer(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Turn() did not return after Cancel()")
+	}
+}
+
+func TestAdapterEndsTurnOnTerminalAppServerError(t *testing.T) {
+	adapter := newAdapter(t, "", false)
+	adapter.config.Environment = append(adapter.config.Environment, "FAKE_CODEX_TERMINAL_ERROR=1")
+	session, err := adapter.Start(context.Background(), startRequest())
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer session.Close(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = session.Turn(ctx, contracts.TurnRequest{RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "fail"})
+	if err == nil || err.Error() != "Codex turn did not complete: stream disconnected" {
+		t.Fatalf("Turn() error = %v, want terminal app-server error", err)
+	}
+}
+
+func TestConfiguredThreadSettingsApplyToStartAndResume(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("model = \"gpt-test\"\nmodel_provider = \"selected-provider\"\n\n[model_providers.selected-provider]\nbase_url = \"https://api.example.test/v1\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := configuredThreadSettings(path)
+	if err != nil {
+		t.Fatalf("configuredThreadSettings() error = %v", err)
+	}
+	params := threadParams("/workspace", settings)
+	if model, _ := params["model"].(*string); model == nil || *model != "gpt-test" {
+		t.Fatalf("thread model = %#v", params["model"])
+	}
+	if provider, _ := params["modelProvider"].(*string); provider == nil || *provider != "selected-provider" {
+		t.Fatalf("thread model provider = %#v", params["modelProvider"])
+	}
+}
+
+func TestSessionKeepsTurnOpenForRetryingAppServerError(t *testing.T) {
+	turn := &turnState{done: make(chan struct{})}
+	session := &session{threadID: "thread-1", turn: turn}
+	session.handleNotification("error", json.RawMessage(`{"threadId":"thread-1","willRetry":true,"error":{"message":"stream disconnected"}}`))
+	select {
+	case <-turn.done:
+		t.Fatal("retrying app-server error ended the turn")
+	default:
 	}
 }
 
@@ -160,6 +217,12 @@ func TestPermissionApprovalOnlyEchoesSupportedPermissions(t *testing.T) {
 	permissions, ok := result["permissions"].(map[string]any)
 	if !ok || len(permissions) != 2 || permissions["network"] == nil || permissions["fileSystem"] == nil || result["scope"] != "turn" {
 		t.Fatalf("permissionApproval() = %#v", result)
+	}
+}
+
+func TestPermissionSummaryOnlyNamesGrantedPermissionKinds(t *testing.T) {
+	if got := permissionSummary(json.RawMessage(`{"permissions":{"network":{"enabled":true},"fileSystem":{"read":["/tmp"]},"other":true}}`)); got != "Network access, File access" {
+		t.Fatalf("permissionSummary() = %q", got)
 	}
 }
 
@@ -248,6 +311,10 @@ func TestCodexHelperProcess(t *testing.T) {
 				_ = os.WriteFile(os.Getenv("FAKE_CODEX_CAPTURE"), []byte(params.Input[0].Text), 0o600)
 			}
 			writeHelperResponse(request.ID, map[string]any{})
+			if os.Getenv("FAKE_CODEX_TERMINAL_ERROR") == "1" {
+				writeHelperNotification("error", map[string]any{"threadId": "thread-1", "willRetry": false, "error": map[string]string{"message": "stream disconnected"}})
+				continue
+			}
 			if os.Getenv("FAKE_CODEX_BLOCK") == "1" {
 				_ = os.WriteFile(os.Getenv("FAKE_CODEX_STARTED"), []byte("1"), 0o600)
 				continue
@@ -255,6 +322,10 @@ func TestCodexHelperProcess(t *testing.T) {
 			writeHelperNotification("item/started", map[string]any{"threadId": "thread-1", "item": map[string]any{"id": "commentary-1", "type": "agentMessage", "text": "", "phase": "commentary"}})
 			writeHelperNotification("item/agentMessage/delta", map[string]any{"threadId": "thread-1", "itemId": "commentary-1", "delta": "internal commentary"})
 			writeHelperNotification("item/completed", map[string]any{"threadId": "thread-1", "item": map[string]any{"id": "commentary-1", "type": "agentMessage", "text": "intermediate reply", "phase": "commentary"}})
+			writeHelperNotification("item/reasoning/summaryTextDelta", map[string]any{"threadId": "thread-1", "itemId": "reasoning-1", "summaryIndex": 0, "delta": "checked the available "})
+			writeHelperNotification("item/completed", map[string]any{"threadId": "thread-1", "item": map[string]any{"id": "reasoning-1", "type": "reasoning", "summary": []string{"checked the available", "weather sources"}, "content": []string{"private reasoning"}}})
+			writeHelperNotification("item/started", map[string]any{"threadId": "thread-1", "item": map[string]any{"id": "command-1", "type": "commandExecution", "command": "git status"}})
+			writeHelperNotification("item/completed", map[string]any{"threadId": "thread-1", "item": map[string]any{"id": "command-1", "type": "commandExecution", "status": "completed", "command": "git status"}})
 			writeHelperNotification("item/started", map[string]any{"threadId": "thread-1", "item": map[string]any{"id": "final-1", "type": "agentMessage", "text": "", "phase": "final_answer"}})
 			writeHelperNotification("item/agentMessage/delta", map[string]any{"threadId": "thread-1", "itemId": "final-1", "delta": "final"})
 			writeHelperNotification("item/agentMessage/delta", map[string]any{"threadId": "thread-1", "itemId": "final-1", "delta": " reply"})

@@ -51,6 +51,50 @@ func TestManagerSerializesConversationAndCreatesRunPrivateSessions(t *testing.T)
 	}
 }
 
+func TestManagerPublishesStartedOnlyWhenQueuedRunExecutes(t *testing.T) {
+	block := make(chan struct{})
+	session := &recordingSession{block: block}
+	manager, err := NewManager(Config{Provider: &recordingProvider{session: session}, MaxQueue: 1, Deadline: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Shutdown(context.Background())
+
+	started := make(chan string, 2)
+	firstRequest := testRequest("run-1", "conversation-1", time.Now().Add(time.Hour))
+	firstRequest.Started = func(context.Context) error { started <- "run-1"; return nil }
+	first, err := manager.Submit(firstRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := <-started; got != "run-1" {
+		t.Fatalf("first started callback = %q", got)
+	}
+
+	secondRequest := testRequest("run-2", "conversation-1", time.Now().Add(time.Hour))
+	secondRequest.Started = func(context.Context) error { started <- "run-2"; return nil }
+	second, err := manager.Submit(secondRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-started:
+		t.Fatalf("queued run started early: %q", got)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(block)
+	if result := <-first.Done; result.Status != StatusCompleted {
+		t.Fatalf("first result = %#v", result)
+	}
+	if got := <-started; got != "run-2" {
+		t.Fatalf("second started callback = %q", got)
+	}
+	if result := <-second.Done; result.Status != StatusCompleted {
+		t.Fatalf("second result = %#v", result)
+	}
+}
+
 func TestManagerReusesConversationSessionAndReplacesMissingSession(t *testing.T) {
 	sessions := &memorySessionStore{refs: make(map[string]string)}
 	provider := &sessionRefProvider{}

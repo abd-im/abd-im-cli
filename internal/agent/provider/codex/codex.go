@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -158,8 +159,13 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 		_ = session.Close(context.Background())
 		return nil, errors.New("notify Codex app-server initialization")
 	}
+	settings, err := configuredThreadSettings(filepath.Join(a.stateDir, "config.toml"))
+	if err != nil {
+		_ = session.Close(context.Background())
+		return nil, err
+	}
 	method := "thread/start"
-	params := threadParams(runPaths.workDir)
+	params := threadParams(runPaths.workDir, settings)
 	if request.SessionRef != "" {
 		method = "thread/resume"
 		params["threadId"] = request.SessionRef
@@ -184,10 +190,15 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 	return session, nil
 }
 
-func threadParams(workDir string) map[string]any {
+type threadSettings struct {
+	model         *string
+	modelProvider *string
+}
+
+func threadParams(workDir string, settings threadSettings) map[string]any {
 	return map[string]any{
-		"model":                  nil,
-		"modelProvider":          nil,
+		"model":                  settings.model,
+		"modelProvider":          settings.modelProvider,
 		"profile":                nil,
 		"cwd":                    workDir,
 		"approvalPolicy":         "never",
@@ -200,6 +211,47 @@ func threadParams(workDir string) map[string]any {
 		"experimentalRawEvents":  false,
 		"persistExtendedHistory": false,
 	}
+}
+
+// configuredThreadSettings reads only the two top-level values accepted by
+// the app-server's thread start and resume requests. Resuming must include
+// them explicitly so a thread does not retain a provider that is no longer
+// selected in the current profile configuration.
+func configuredThreadSettings(path string) (threadSettings, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return threadSettings{}, fmt.Errorf("read Codex run configuration: %w", err)
+	}
+	var settings threadSettings
+	for _, line := range strings.Split(string(payload), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			break
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if len(value) < 2 || (value[0] != '"' && value[0] != '\'') || value[len(value)-1] != value[0] {
+			continue
+		}
+		parsed := value[1 : len(value)-1]
+		if value[0] == '"' {
+			var err error
+			parsed, err = strconv.Unquote(value)
+			if err != nil {
+				continue
+			}
+		}
+		switch strings.TrimSpace(key) {
+		case "model":
+			settings.model = &parsed
+		case "model_provider":
+			settings.modelProvider = &parsed
+		}
+	}
+	return settings, nil
 }
 
 type rpcResult struct {
@@ -222,6 +274,7 @@ func isThreadNotFound(err error) bool {
 type turnState struct {
 	ctx                context.Context
 	output             contracts.TurnOutputSink
+	activity           contracts.TurnActivitySink
 	done               chan struct{}
 	agentMessagePhases map[string]string
 	agentMessageText   map[string]string
@@ -259,7 +312,7 @@ func (s *session) Turn(ctx context.Context, request contracts.TurnRequest) (cont
 		return contracts.TurnResult{}, errors.New("Codex session is unavailable")
 	}
 	turn := &turnState{
-		ctx: ctx, output: request.Output, done: make(chan struct{}),
+		ctx: ctx, output: request.Output, activity: request.Activity, done: make(chan struct{}),
 		agentMessagePhases: make(map[string]string), agentMessageText: make(map[string]string),
 	}
 	threadID := s.threadID
@@ -271,7 +324,7 @@ func (s *session) Turn(ctx context.Context, request contracts.TurnRequest) (cont
 		"input":    []map[string]string{{"type": "text", "text": request.Prompt}},
 	})
 	if err != nil {
-		s.finishTurn(turn, "", errors.New("Codex turn start failed"))
+		s.finishTurn(turn, "", fmt.Errorf("Codex turn start failed: %w", err))
 	}
 	select {
 	case <-turn.done:
@@ -475,7 +528,22 @@ func (s *session) handleServerRequest(id json.RawMessage, method string, params 
 		return
 	}
 	if method == "item/permissions/requestApproval" {
+		approvalID := fmt.Sprintf("permission-%d", requestID)
+		s.mu.Lock()
+		turn := s.turn
+		s.mu.Unlock()
+		if turn != nil {
+			s.deliverActivity(turn, contracts.TurnActivity{
+				Kind: "approval.requested", RequestID: approvalID, Name: "permission",
+				Summary: permissionSummary(params),
+			})
+		}
 		_ = s.write(map[string]any{"jsonrpc": "2.0", "id": requestID, "result": permissionApproval(params)})
+		if turn != nil {
+			s.deliverActivity(turn, contracts.TurnActivity{
+				Kind: "approval.resolved", RequestID: approvalID, Decision: "accepted",
+			})
+		}
 		return
 	}
 	_ = s.write(map[string]any{"jsonrpc": "2.0", "id": requestID, "error": map[string]any{"code": -32601, "message": "method not supported"}})
@@ -493,6 +561,21 @@ func permissionApproval(raw json.RawMessage) map[string]any {
 		}
 	}
 	return map[string]any{"permissions": permissions, "scope": "turn"}
+}
+
+func permissionSummary(raw json.RawMessage) string {
+	var request struct {
+		Permissions map[string]any `json:"permissions"`
+	}
+	_ = json.Unmarshal(raw, &request)
+	parts := make([]string, 0, 2)
+	if request.Permissions["network"] != nil {
+		parts = append(parts, "Network access")
+	}
+	if request.Permissions["fileSystem"] != nil {
+		parts = append(parts, "File access")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (s *session) handleNotification(method string, raw json.RawMessage) {
@@ -514,6 +597,9 @@ func (s *session) handleNotification(method string, raw json.RawMessage) {
 	case "item/started":
 		item, _ := params["item"].(map[string]any)
 		s.rememberAgentMessagePhase(turn, item)
+		if activity, ok := codexToolActivity(item, "tool.started"); ok {
+			s.deliverActivity(turn, activity)
+		}
 	case "item/agentMessage/delta":
 		s.deliverAgentMessageDelta(turn, params)
 	case "item/completed":
@@ -521,6 +607,20 @@ func (s *session) handleNotification(method string, raw json.RawMessage) {
 		itemType, _ := item["type"].(string)
 		phase, _ := item["phase"].(string)
 		s.rememberAgentMessagePhase(turn, item)
+		if itemType == "reasoning" {
+			if summary := codexReasoningSummary(item); summary != "" {
+				s.deliverActivity(turn, contracts.TurnActivity{Kind: "activity.summary", Summary: summary})
+			}
+		}
+		if itemType == "agentMessage" && phase == "commentary" {
+			text, _ := item["text"].(string)
+			if summary := boundedSummary(text); summary != "" {
+				s.deliverActivity(turn, contracts.TurnActivity{Kind: "activity.summary", Summary: summary})
+			}
+		}
+		if activity, ok := codexToolActivity(item, "tool.completed"); ok {
+			s.deliverActivity(turn, activity)
+		}
 		if itemType == "agentMessage" && phase == "final_answer" {
 			text, _ := item["text"].(string)
 			if text != "" {
@@ -537,10 +637,99 @@ func (s *session) handleNotification(method string, raw json.RawMessage) {
 			return
 		}
 		s.finishTurn(turn, "", nil)
+	case "error":
+		willRetry, _ := params["willRetry"].(bool)
+		if !willRetry {
+			s.finishTurn(turn, "", codexTurnError(params))
+		}
 	case "thread/status/changed":
 		if nestedString(params, "status", "type") == "idle" {
 			s.finishTurn(turn, "", nil)
 		}
+	}
+}
+
+func codexTurnError(params map[string]any) error {
+	message := nestedString(params, "error", "message")
+	if message == "" {
+		message, _ = params["message"].(string)
+	}
+	if message == "" {
+		return errors.New("Codex turn did not complete")
+	}
+	return fmt.Errorf("Codex turn did not complete: %s", boundedSummary(message))
+}
+
+func codexToolActivity(item map[string]any, kind string) (contracts.TurnActivity, bool) {
+	itemType, _ := item["type"].(string)
+	name := map[string]string{
+		"commandExecution": "shell",
+		"fileChange":       "file_change",
+		"mcpToolCall":      "mcp",
+		"webSearch":        "web_search",
+		"imageView":        "image_view",
+	}[itemType]
+	callID, _ := item["id"].(string)
+	if name == "" || callID == "" {
+		return contracts.TurnActivity{}, false
+	}
+	status, _ := item["status"].(string)
+	if kind == "tool.started" {
+		status = "running"
+	} else if status == "" {
+		status = "completed"
+	}
+	summary, _ := item["summary"].(string)
+	if summary == "" {
+		for _, key := range []string{"command", "query", "tool", "path"} {
+			if value, _ := item[key].(string); value != "" {
+				summary = value
+				break
+			}
+		}
+	}
+	return contracts.TurnActivity{
+		Kind:       kind,
+		CallID:     callID,
+		Name:       name,
+		Summary:    boundedSummary(summary),
+		Status:     status,
+		DurationMS: numericInt64(item["durationMs"]),
+	}, true
+}
+
+// Codex exposes summary as the approved, user-visible form of reasoning.
+// Raw reasoning content is deliberately never forwarded to the workspace.
+func codexReasoningSummary(item map[string]any) string {
+	parts, _ := item["summary"].([]any)
+	text := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value, _ := part.(string); value != "" {
+			text = append(text, value)
+		}
+	}
+	return boundedSummary(strings.Join(text, " "))
+}
+
+func boundedSummary(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) > 500 {
+		value = string(runes[:500])
+	}
+	return value
+}
+
+func numericInt64(value any) int64 {
+	switch number := value.(type) {
+	case float64:
+		return int64(number)
+	case int64:
+		return number
+	case int:
+		return int64(number)
+	default:
+		return 0
 	}
 }
 
@@ -593,6 +782,27 @@ func (s *session) deliver(turn *turnState, text string) {
 			s.mu.Unlock()
 			_ = s.Cancel(context.Background())
 		}
+	}
+}
+
+func (s *session) deliverActivity(turn *turnState, activity contracts.TurnActivity) {
+	s.mu.Lock()
+	if s.turn != turn || turn.err != nil {
+		s.mu.Unlock()
+		return
+	}
+	sink, activityContext := turn.activity, turn.ctx
+	s.mu.Unlock()
+	if sink == nil {
+		return
+	}
+	if err := sink(activityContext, activity); err != nil {
+		s.mu.Lock()
+		if s.turn == turn && turn.err == nil {
+			turn.err = err
+		}
+		s.mu.Unlock()
+		_ = s.Cancel(context.Background())
 	}
 }
 

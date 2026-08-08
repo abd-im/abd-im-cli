@@ -850,12 +850,14 @@ func (l messageListener) event(raw string) (contracts.SDKEvent, error) {
 		occurredAt = time.UnixMilli(message.SendTime).UTC()
 	}
 	data, err := json.Marshal(struct {
-		ConversationID string `json:"conversation_id"`
-		MessageID      string `json:"message_id"`
-		SenderID       string `json:"sender_id,omitempty"`
-		GroupID        string `json:"group_id,omitempty"`
-		SessionType    int32  `json:"session_type"`
-	}{ConversationID: conversationID, MessageID: messageID, SenderID: message.SendID, GroupID: message.GroupID, SessionType: message.SessionType})
+		ConversationID   string `json:"conversation_id"`
+		MessageID        string `json:"message_id"`
+		SenderID         string `json:"sender_id,omitempty"`
+		GroupID          string `json:"group_id,omitempty"`
+		SessionType      int32  `json:"session_type"`
+		ContentType      int32  `json:"content_type"`
+		SenderPlatformID int32  `json:"sender_platform_id"`
+	}{ConversationID: conversationID, MessageID: messageID, SenderID: message.SendID, GroupID: message.GroupID, SessionType: message.SessionType, ContentType: message.ContentType, SenderPlatformID: message.SenderPlatformID})
 	if err != nil {
 		return contracts.SDKEvent{}, errors.New("encode OpenIM message callback")
 	}

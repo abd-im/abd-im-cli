@@ -42,6 +42,7 @@ import (
 	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
+	pbconstant "github.com/openimsdk/protocol/constant"
 )
 
 func main() {
@@ -459,14 +460,15 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	methods = append(methods, friendHandler.ProxyMethods()...)
 	methods = append(methods, blacklistHandler.ProxyMethods()...)
 	inbound, err := daemon.New(daemon.Config{
-		ProfileID: item.Name,
-		Ledger:    ledger,
-		Replies:   replies,
-		Runs:      runs,
-		Grants:    grant.NewStore(),
-		Methods:   methods,
-		Policy:    directMessagePolicy(item.Deployment.UserID, item.InboundToolsEnabled, methods),
-		GrantTTL:  2 * time.Minute,
+		ProfileID:           item.Name,
+		Ledger:              ledger,
+		Replies:             replies,
+		Runs:                runs,
+		Grants:              grant.NewStore(),
+		Methods:             methods,
+		Policy:              agentWorkspacePolicy(directMessagePolicy(item.Deployment.UserID, item.InboundToolsEnabled, methods), item.Deployment.UserID, item.InboundToolsEnabled, methods),
+		WorkspaceClassifier: groupSource,
+		GrantTTL:            2 * time.Minute,
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -526,6 +528,36 @@ func directMessagePolicy(userID string, toolsEnabled bool, methods []proxy.Metho
 		}
 		return decision, true, nil
 	})
+}
+
+func agentWorkspacePolicy(base daemon.Policy, userID string, toolsEnabled bool, methods []proxy.Method) daemon.Policy {
+	return daemon.PolicyFunc(func(ctx context.Context, inbound daemon.InboundContext) (daemon.Decision, bool, error) {
+		if decision, allowed, err := base.Decide(ctx, inbound); err != nil || allowed {
+			return decision, allowed, err
+		}
+		if inbound.ConversationKind != contracts.ConversationKindAgentWorkspace || strings.TrimSpace(inbound.SenderID) == "" || inbound.SenderID == userID || strings.TrimSpace(inbound.GroupID) == "" || (inbound.SessionType != 2 && inbound.SessionType != 3) || !agentPromptContentType(inbound.ContentType) {
+			return daemon.Decision{}, false, nil
+		}
+		decision := daemon.Decision{Principal: "openim:" + inbound.SenderID, RateBudget: 1}
+		if toolsEnabled {
+			decision.HistoryBeforeTrigger = true
+			decision.AttachmentByteLimit = 32 * 1024 * 1024
+			decision.RateBudget = 64
+			for _, method := range methods {
+				decision.Methods = append(decision.Methods, method.Name)
+			}
+		}
+		return decision, true, nil
+	})
+}
+
+func agentPromptContentType(contentType int32) bool {
+	switch contentType {
+	case pbconstant.Text, pbconstant.AtText, pbconstant.Quote:
+		return true
+	default:
+		return false
+	}
 }
 
 type agentLaunchSpec struct {

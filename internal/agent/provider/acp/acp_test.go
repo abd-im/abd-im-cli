@@ -25,12 +25,19 @@ func TestAdapterRunsV1PromptAndStreamsAgentText(t *testing.T) {
 	defer session.Close(context.Background())
 	var mu sync.Mutex
 	var updates []string
+	var activities []contracts.TurnActivity
 	result, err := session.Turn(context.Background(), contracts.TurnRequest{
 		RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "hello",
 		Output: func(_ context.Context, output contracts.TurnOutput) error {
 			mu.Lock()
 			defer mu.Unlock()
 			updates = append(updates, output.Text)
+			return nil
+		},
+		Activity: func(_ context.Context, activity contracts.TurnActivity) error {
+			mu.Lock()
+			defer mu.Unlock()
+			activities = append(activities, activity)
 			return nil
 		},
 	})
@@ -46,6 +53,10 @@ func TestAdapterRunsV1PromptAndStreamsAgentText(t *testing.T) {
 	wantUpdates := []string{"hel", "hello", "hello world"}
 	if strings.Join(gotUpdates, "|") != strings.Join(wantUpdates, "|") {
 		t.Fatalf("output updates = %#v, want %#v", gotUpdates, wantUpdates)
+	}
+	if len(activities) != 2 || activities[0].Kind != "tool.started" || activities[0].CallID != "call-1" ||
+		activities[0].Name != "terminal" || activities[1].Kind != "tool.completed" || activities[1].Status != "completed" {
+		t.Fatalf("activity updates = %#v", activities)
 	}
 	payload, err := os.ReadFile(capture)
 	if err != nil {
@@ -231,6 +242,7 @@ func TestACPHelperProcess(t *testing.T) {
 			if message.Result.Outcome.Outcome != "selected" || message.Result.Outcome.OptionID != "allow" {
 				os.Exit(3)
 			}
+			writeHelperNotification("session/update", map[string]any{"sessionId": sessionID, "update": map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "completed"}})
 			writeHelperNotification("session/update", map[string]any{"sessionId": sessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "lo"}}})
 			writeHelperNotification("session/update", map[string]any{"sessionId": sessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": " world"}}})
 			writeHelperResponse(promptID, map[string]string{"stopReason": "end_turn"})
@@ -274,6 +286,7 @@ func TestACPHelperProcess(t *testing.T) {
 				continue
 			}
 			writeHelperNotification("session/update", map[string]any{"sessionId": sessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "hel"}}})
+			writeHelperNotification("session/update", map[string]any{"sessionId": sessionID, "update": map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "Check status", "kind": "execute", "status": "in_progress"}})
 			writeHelperRequest(99, "session/request_permission", map[string]any{
 				"sessionId": sessionID,
 				"toolCall":  map[string]any{"toolCallId": "call-1"},

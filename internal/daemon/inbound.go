@@ -39,11 +39,14 @@ func (f PolicyFunc) Decide(ctx context.Context, inbound InboundContext) (Decisio
 // Message text is intentionally excluded so authorization never depends on the
 // prompt body.
 type InboundContext struct {
-	Event          contracts.Event
-	SenderID       string
-	ConversationID string
-	GroupID        string
-	SessionType    int32
+	Event            contracts.Event
+	SenderID         string
+	ConversationID   string
+	GroupID          string
+	SessionType      int32
+	ContentType      int32
+	SenderPlatformID int32
+	ConversationKind contracts.ConversationKind
 }
 
 // Decision selects a subset of the daemon's fixed typed tool registry.
@@ -56,13 +59,14 @@ type Decision struct {
 }
 
 type Config struct {
-	ProfileID string
-	Ledger    *events.Ledger
-	Replies   *reply.Service
-	Runs      *run.Manager
-	Grants    *grant.Store
-	Methods   []proxy.Method
-	Policy    Policy
+	ProfileID           string
+	Ledger              *events.Ledger
+	Replies             *reply.Service
+	Runs                *run.Manager
+	Grants              *grant.Store
+	Methods             []proxy.Method
+	Policy              Policy
+	WorkspaceClassifier contracts.ConversationClassifier
 
 	GrantTTL time.Duration
 	OnError  func(error)
@@ -71,15 +75,16 @@ type Config struct {
 // Inbound accepts normalized SDK events and owns their progression from the
 // durable ledger to a run-private proxy and event-bound reply.
 type Inbound struct {
-	profileID string
-	ledger    *events.Ledger
-	replies   *reply.Service
-	runs      *run.Manager
-	grants    *grant.Store
-	methods   map[string]proxy.Method
-	policy    Policy
-	grantTTL  time.Duration
-	onError   func(error)
+	profileID           string
+	ledger              *events.Ledger
+	replies             *reply.Service
+	runs                *run.Manager
+	grants              *grant.Store
+	methods             map[string]proxy.Method
+	policy              Policy
+	workspaceClassifier contracts.ConversationClassifier
+	grantTTL            time.Duration
+	onError             func(error)
 
 	mu          sync.Mutex
 	stopped     bool
@@ -114,16 +119,17 @@ func New(config Config) (*Inbound, error) {
 		methods[method.Name] = method
 	}
 	return &Inbound{
-		profileID:   config.ProfileID,
-		ledger:      config.Ledger,
-		replies:     config.Replies,
-		runs:        config.Runs,
-		grants:      config.Grants,
-		methods:     methods,
-		policy:      config.Policy,
-		grantTTL:    config.GrantTTL,
-		onError:     config.OnError,
-		runsByEvent: make(map[string]string),
+		profileID:           config.ProfileID,
+		ledger:              config.Ledger,
+		replies:             config.Replies,
+		runs:                config.Runs,
+		grants:              config.Grants,
+		methods:             methods,
+		policy:              config.Policy,
+		workspaceClassifier: config.WorkspaceClassifier,
+		grantTTL:            config.GrantTTL,
+		onError:             config.OnError,
+		runsByEvent:         make(map[string]string),
 	}, nil
 }
 
@@ -176,12 +182,16 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	if err := reference.validate(); err != nil {
 		return outcome, err
 	}
+	conversationKind := d.conversationKind(ctx, reference.GroupID)
 	decision, allowed, err := d.policy.Decide(ctx, InboundContext{
-		Event:          recorded.Event,
-		SenderID:       reference.SenderID,
-		ConversationID: reference.ConversationID,
-		GroupID:        reference.GroupID,
-		SessionType:    reference.SessionType,
+		Event:            recorded.Event,
+		SenderID:         reference.SenderID,
+		ConversationID:   reference.ConversationID,
+		GroupID:          reference.GroupID,
+		SessionType:      reference.SessionType,
+		ContentType:      reference.ContentType,
+		SenderPlatformID: reference.SenderPlatformID,
+		ConversationKind: conversationKind,
 	})
 	if err != nil {
 		return outcome, err
@@ -215,9 +225,20 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	}); err != nil {
 		return outcome, err
 	}
-	stream, err := d.replies.NewStream(ctx, d.profileID, recorded.Event.EventID)
-	if err != nil {
-		return outcome, err
+	workspace := conversationKind == contracts.ConversationKindAgentWorkspace
+	var stream *reply.Stream
+	var agentReply *agentRunReply
+	if workspace {
+		agentStream, streamErr := d.replies.NewAgentRun(ctx, d.profileID, recorded.Event.EventID)
+		if streamErr != nil {
+			return outcome, streamErr
+		}
+		agentReply = &agentRunReply{run: agentStream}
+	} else {
+		stream, err = d.replies.NewStream(ctx, d.profileID, recorded.Event.EventID)
+		if err != nil {
+			return outcome, err
+		}
 	}
 	messageWindow := grant.MessageWindow{
 		ConversationID: conversation.ConversationID,
@@ -246,7 +267,7 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		return outcome, err
 	}
 	allowedMethods := providerVisibleMethods(selected)
-	handle, err := d.runs.Submit(run.Request{
+	request := run.Request{
 		ID:              runID,
 		ProfileID:       d.profileID,
 		ConversationID:  conversation.ConversationID,
@@ -256,18 +277,42 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		AllowedMethods:  allowedMethods,
 		Proxy:           toolProxy,
 		Prompt:          inboundPrompt(event.MessageText, allowedMethods),
-		Output: func(outputContext context.Context, output contracts.TurnOutput) error {
+	}
+	if workspace {
+		request.Output = agentReply.output
+		request.Activity = agentReply.activity
+		request.Started = agentReply.ensureStarted
+	} else {
+		request.Output = func(outputContext context.Context, output contracts.TurnOutput) error {
 			return stream.Update(outputContext, output.Text)
-		},
-	})
-	if err != nil {
-		return outcome, err
+		}
+	}
+	if agentReply != nil {
+		if err := agentReply.run.Queued(ctx); err != nil {
+			_ = toolProxy.Close(context.Background())
+			d.grants.RevokeRun(runID)
+			return outcome, err
+		}
 	}
 	d.mu.Lock()
 	if d.stopped {
 		d.mu.Unlock()
-		d.runs.Cancel(runID)
+		_ = toolProxy.Close(context.Background())
+		d.grants.RevokeRun(runID)
+		if agentReply != nil {
+			_ = agentReply.fail(context.WithoutCancel(ctx), "Agent run was interrupted")
+		}
 		return outcome, ErrStopped
+	}
+	handle, err := d.runs.Submit(request)
+	if err != nil {
+		d.mu.Unlock()
+		_ = toolProxy.Close(context.Background())
+		d.grants.RevokeRun(runID)
+		if agentReply != nil {
+			_ = agentReply.fail(context.WithoutCancel(ctx), "Agent run could not be queued")
+		}
+		return outcome, err
 	}
 	d.runsByEvent[recorded.Event.EventID] = runID
 	d.finishers.Add(1)
@@ -275,7 +320,7 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	outcome.RunID = runID
 	go func() {
 		defer d.finishers.Done()
-		d.finish(recorded.Event.EventID, handle, stream)
+		d.finish(recorded.Event.EventID, handle, stream, agentReply)
 	}()
 	return outcome, nil
 }
@@ -300,11 +345,23 @@ func (d *Inbound) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (d *Inbound) finish(eventID string, handle *run.Handle, stream *reply.Stream) {
+func (d *Inbound) finish(eventID string, handle *run.Handle, stream *reply.Stream, agentReply *agentRunReply) {
 	result, ok := <-handle.Done
 	d.mu.Lock()
 	delete(d.runsByEvent, eventID)
 	d.mu.Unlock()
+	if agentReply != nil {
+		if !ok {
+			if err := agentReply.fail(context.Background(), "Agent run was interrupted"); err != nil {
+				d.report(err)
+			}
+			return
+		}
+		if err := agentReply.finish(context.Background(), result); err != nil {
+			d.report(err)
+		}
+		return
+	}
 	if !ok || result.Status != run.StatusCompleted || strings.TrimSpace(result.Turn.FinalText) == "" {
 		if err := stream.Close(context.Background()); err != nil {
 			d.report(err)
@@ -314,6 +371,70 @@ func (d *Inbound) finish(eventID string, handle *run.Handle, stream *reply.Strea
 	if err := stream.Finish(context.Background(), result.Turn.FinalText); err != nil {
 		d.report(err)
 	}
+}
+
+func (d *Inbound) conversationKind(ctx context.Context, groupID string) contracts.ConversationKind {
+	if d.workspaceClassifier == nil || strings.TrimSpace(groupID) == "" {
+		return contracts.ConversationKindChat
+	}
+	kind, err := d.workspaceClassifier.ConversationKind(ctx, groupID)
+	if err != nil || kind != contracts.ConversationKindAgentWorkspace {
+		return contracts.ConversationKindChat
+	}
+	return kind
+}
+
+type agentRunReply struct {
+	run      *reply.AgentRun
+	start    sync.Once
+	startErr error
+}
+
+func (r *agentRunReply) ensureStarted(ctx context.Context) error {
+	r.start.Do(func() { r.startErr = r.run.Started(ctx) })
+	return r.startErr
+}
+
+func (r *agentRunReply) output(ctx context.Context, output contracts.TurnOutput) error {
+	writeContext := context.WithoutCancel(ctx)
+	if err := r.ensureStarted(writeContext); err != nil {
+		return err
+	}
+	return r.run.Answer(writeContext, output.Text)
+}
+
+func (r *agentRunReply) activity(ctx context.Context, activity contracts.TurnActivity) error {
+	writeContext := context.WithoutCancel(ctx)
+	if err := r.ensureStarted(writeContext); err != nil {
+		return err
+	}
+	return r.run.Activity(writeContext, activity)
+}
+
+func (r *agentRunReply) finish(ctx context.Context, result run.Result) error {
+	if err := r.ensureStarted(ctx); err != nil {
+		return err
+	}
+	switch result.Status {
+	case run.StatusCompleted:
+		if strings.TrimSpace(result.Turn.FinalText) != "" {
+			if err := r.run.Answer(ctx, result.Turn.FinalText); err != nil {
+				return err
+			}
+		}
+		return r.run.Complete(ctx)
+	case run.StatusCanceled:
+		return r.run.Cancel(ctx)
+	default:
+		return r.run.Fail(ctx, "Agent run failed")
+	}
+}
+
+func (r *agentRunReply) fail(ctx context.Context, summary string) error {
+	if err := r.ensureStarted(ctx); err != nil {
+		return err
+	}
+	return r.run.Fail(ctx, summary)
 }
 
 func (d *Inbound) selectMethods(names []string) ([]proxy.Method, error) {
@@ -334,11 +455,13 @@ func (d *Inbound) selectMethods(names []string) ([]proxy.Method, error) {
 }
 
 type eventRef struct {
-	ConversationID string `json:"conversation_id"`
-	MessageID      string `json:"message_id"`
-	SenderID       string `json:"sender_id,omitempty"`
-	GroupID        string `json:"group_id,omitempty"`
-	SessionType    int32  `json:"session_type,omitempty"`
+	ConversationID   string `json:"conversation_id"`
+	MessageID        string `json:"message_id"`
+	SenderID         string `json:"sender_id,omitempty"`
+	GroupID          string `json:"group_id,omitempty"`
+	SessionType      int32  `json:"session_type,omitempty"`
+	ContentType      int32  `json:"content_type,omitempty"`
+	SenderPlatformID int32  `json:"sender_platform_id,omitempty"`
 }
 
 func eventReference(raw json.RawMessage) eventRef {

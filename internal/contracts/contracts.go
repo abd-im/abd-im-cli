@@ -12,6 +12,21 @@ import (
 
 const APIVersionV1 = "v1"
 
+// ConversationKind is a product presentation classification. It is not an
+// authorization or transport boundary.
+type ConversationKind string
+
+const (
+	ConversationKindChat           ConversationKind = "chat"
+	ConversationKindAgentWorkspace ConversationKind = "agent_workspace"
+)
+
+// ConversationClassifier exposes only the classification needed by inbound
+// routing. Implementations must not expose arbitrary group extensions here.
+type ConversationClassifier interface {
+	ConversationKind(context.Context, string) (ConversationKind, error)
+}
+
 var (
 	ErrInvalidContract = errors.New("invalid v1 contract")
 	ErrSessionNotFound = errors.New("provider session not found")
@@ -264,6 +279,9 @@ type TurnRequest struct {
 	// Output receives the complete current user-visible Agent text after each
 	// provider update. It is daemon-owned and cannot select a reply target.
 	Output TurnOutputSink
+	// Activity is optional. Normal chat turns leave it nil; Agent workspace
+	// turns use it for bounded, user-facing lifecycle summaries.
+	Activity TurnActivitySink
 }
 
 type TurnOutput struct {
@@ -271,6 +289,24 @@ type TurnOutput struct {
 }
 
 type TurnOutputSink func(context.Context, TurnOutput) error
+
+type TurnActivity struct {
+	Kind         string
+	CallID       string
+	RequestID    string
+	Name         string
+	Summary      string
+	Status       string
+	Decision     string
+	Choices      []string
+	DurationMS   int64
+	ArtifactName string
+	MediaType    string
+	Size         int64
+	AttachmentID string
+}
+
+type TurnActivitySink func(context.Context, TurnActivity) error
 
 type TurnResult struct {
 	FinalText   string

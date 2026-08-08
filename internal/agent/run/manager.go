@@ -42,6 +42,8 @@ type Request struct {
 	Proxy           contracts.ToolProxy
 	Prompt          string
 	Output          contracts.TurnOutputSink
+	Activity        contracts.TurnActivitySink
+	Started         func(context.Context) error
 }
 
 // Result is delivered exactly once for every accepted or rejected run.
@@ -275,6 +277,13 @@ func (m *Manager) execute(item *job) {
 			return
 		}
 	}
+	if item.request.Started != nil {
+		if err := item.request.Started(context.Background()); err != nil {
+			m.complete(item, Result{RunID: item.request.ID, Status: StatusInterrupted, Err: fmt.Errorf("publish run start: %w", err)})
+			m.remove(item.request.ID)
+			return
+		}
+	}
 
 	turnContext, turnCancel := withTurnDeadline(item.context, m.deadline, item.request.GrantExpiresAt)
 	defer turnCancel()
@@ -326,7 +335,7 @@ func (m *Manager) execute(item *job) {
 	result, err := session.Turn(turnContext, contracts.TurnRequest{
 		RunID: item.request.ID, EventID: item.request.EventID,
 		GrantCredential: item.request.GrantCredential, Prompt: item.request.Prompt,
-		Output: item.request.Output,
+		Output: item.request.Output, Activity: item.request.Activity,
 	})
 	close(finished)
 	if status, canceled := item.cancellation(); canceled {
