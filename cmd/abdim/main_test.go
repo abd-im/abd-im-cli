@@ -98,7 +98,7 @@ func TestDaemonSDKConfigUsesProfilePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := daemonSDKConfig(paths, profile.Deployment{UserID: "user-1", APIAddr: "https://2.example.test/api", WSAddr: "wss://2.example.test/msg_gateway", PlatformID: 7})
+	config := daemonSDKConfig(paths, profile.Deployment{UserID: "user-1", APIAddr: "https://2.example.test/api", ChatAPIAddr: "https://2.example.test/chat", WSAddr: "wss://2.example.test/msg_gateway", PlatformID: 7})
 	if config.SystemType != runtime.GOOS || config.PlatformID != 7 || config.ApiAddr != "https://2.example.test/api" || config.WsAddr != "wss://2.example.test/msg_gateway" || config.DataDir != paths.SDKDir || config.LogFilePath != filepath.Join(paths.LogsDir, "sdk.log") {
 		t.Fatalf("daemonSDKConfig() = %#v", config)
 	}

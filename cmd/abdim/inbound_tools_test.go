@@ -103,7 +103,7 @@ func saveInboundToolsTestProfile(t *testing.T, roots commandRoots, enabled bool)
 	}
 	item := profile.Profile{
 		Name: "work", CredentialRef: "file:work", InboundToolsEnabled: enabled,
-		Deployment: profile.Deployment{UserID: "bot-user", APIAddr: "https://example.test/api", WSAddr: "wss://example.test/ws", PlatformID: 7},
+		Deployment: profile.Deployment{UserID: "bot-user", APIAddr: "https://example.test/api", ChatAPIAddr: "https://example.test/chat", WSAddr: "wss://example.test/ws", PlatformID: 7},
 	}
 	if err := profile.Save(paths.ConfigFile, item); err != nil {
 		t.Fatal(err)

@@ -130,4 +130,10 @@ var migrations = []migration{
 			)`,
 		},
 	},
+	{
+		version: 7,
+		statements: []string{
+			`ALTER TABLE reply_slots ADD COLUMN business_connection_id TEXT NOT NULL DEFAULT ''`,
+		},
+	},
 }

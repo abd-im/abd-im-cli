@@ -26,11 +26,12 @@ import (
 // Config contains deployment-owned identity and server settings. CredentialRef
 // is opaque; the token is resolved only while preparing the daemon adapter.
 type Config struct {
-	ProfileID     string
-	UserID        string
-	CredentialRef string
-	SDKConfig     sdk_struct.IMConfig
-	Credentials   profile.CredentialStore
+	ProfileID       string
+	UserID          string
+	CredentialRef   string
+	SDKConfig       sdk_struct.IMConfig
+	BusinessAPIAddr string
+	Credentials     profile.CredentialStore
 }
 
 // Prepared is the daemon-owned SDK composition. The adapter is created once
@@ -60,10 +61,11 @@ func Prepare(ctx context.Context, config Config) (*Prepared, error) {
 		return nil, errors.New("resolved profile credential is empty")
 	}
 	adapter, err := abdim.New(abdim.Config{
-		ProfileID: config.ProfileID,
-		UserID:    config.UserID,
-		Token:     token,
-		SDKConfig: config.SDKConfig,
+		ProfileID:       config.ProfileID,
+		UserID:          config.UserID,
+		Token:           token,
+		SDKConfig:       config.SDKConfig,
+		BusinessAPIAddr: config.BusinessAPIAddr,
 	})
 	for index := range token {
 		token[index] = 0

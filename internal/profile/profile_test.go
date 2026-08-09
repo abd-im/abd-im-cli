@@ -112,7 +112,7 @@ func TestFileStoreKeepsTokenOutOfProfile(t *testing.T) {
 
 func TestLoadIgnoresRemovedPairingFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "work.toml")
-	contents := "name = \"work\"\ncredential_ref = \"file:work\"\nuser_id = \"bot-user\"\napi_addr = \"https://example.test/api\"\nws_addr = \"wss://example.test/ws\"\nplatform_id = 7\npairing_code_hash = \"legacy\"\npairing_expires_at = 1\nowner_user_id = \"legacy-owner\"\n"
+	contents := "name = \"work\"\ncredential_ref = \"file:work\"\nuser_id = \"bot-user\"\napi_addr = \"https://example.test/api\"\nchat_api_addr = \"https://example.test/chat\"\nws_addr = \"wss://example.test/ws\"\nplatform_id = 7\npairing_code_hash = \"legacy\"\npairing_expires_at = 1\nowner_user_id = \"legacy-owner\"\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -141,11 +141,47 @@ func TestNormalizeAgentAcceptsOnlyFixedProviders(t *testing.T) {
 func TestSaveRejectsPartialOrInvalidDeployment(t *testing.T) {
 	for _, deployment := range []Deployment{
 		{UserID: "user-1"},
-		{UserID: "user-1", APIAddr: "wss://2.example.test/api", WSAddr: "wss://2.example.test/ws", PlatformID: 7},
+		{UserID: "user-1", APIAddr: "https://2.example.test/api", WSAddr: "wss://2.example.test/ws", PlatformID: 7},
+		{UserID: "user-1", APIAddr: "https://2.example.test/api", ChatAPIAddr: "wss://2.example.test/chat", WSAddr: "wss://2.example.test/ws", PlatformID: 7},
 	} {
 		if err := Save(filepath.Join(t.TempDir(), "work.toml"), Profile{Name: "work", CredentialRef: "file:work", Deployment: deployment}); !errors.Is(err, ErrInvalidDeployment) {
 			t.Errorf("Save(%#v) error = %v, want ErrInvalidDeployment", deployment, err)
 		}
+	}
+}
+
+func TestProfileRoundTripIncludesChatAPIAddr(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "work.toml")
+	want := Profile{
+		Name:          "work",
+		CredentialRef: "file:work",
+		Agent:         DefaultAgent,
+		Deployment: Deployment{
+			UserID:      "bot-user",
+			APIAddr:     "https://example.test/api",
+			ChatAPIAddr: "https://example.test/chat",
+			WSAddr:      "wss://example.test/ws",
+			PlatformID:  7,
+		},
+	}
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil || got != want {
+		t.Fatalf("Load() = %#v, %v; want %#v", got, err, want)
+	}
+}
+
+func TestLoadRejectsProfileMissingChatAPIAddr(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "work.toml")
+	contents := "name = \"work\"\ncredential_ref = \"file:work\"\nuser_id = \"bot-user\"\napi_addr = \"https://example.test/api\"\nws_addr = \"wss://example.test/ws\"\nplatform_id = 7\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if !errors.Is(err, ErrInvalidDeployment) || !strings.Contains(err.Error(), "Chat API address is required") {
+		t.Fatalf("Load() error = %v", err)
 	}
 }
 

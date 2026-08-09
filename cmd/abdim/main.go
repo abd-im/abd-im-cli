@@ -23,6 +23,7 @@ import (
 	runmanager "github.com/abd-im/abd-im-cli/internal/agent/run"
 	"github.com/abd-im/abd-im-cli/internal/bridge"
 	blacklistcapability "github.com/abd-im/abd-im-cli/internal/capability/blacklist"
+	businesscapability "github.com/abd-im/abd-im-cli/internal/capability/business"
 	conversationcapability "github.com/abd-im/abd-im-cli/internal/capability/conversation"
 	friendcapability "github.com/abd-im/abd-im-cli/internal/capability/friend"
 	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
@@ -229,11 +230,12 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	prepared, err := connector.Prepare(ctx, connector.Config{
-		ProfileID:     item.Name,
-		UserID:        item.Deployment.UserID,
-		CredentialRef: item.CredentialRef,
-		Credentials:   credentials,
-		SDKConfig:     daemonSDKConfig(paths, item.Deployment),
+		ProfileID:       item.Name,
+		UserID:          item.Deployment.UserID,
+		CredentialRef:   item.CredentialRef,
+		Credentials:     credentials,
+		SDKConfig:       daemonSDKConfig(paths, item.Deployment),
+		BusinessAPIAddr: item.Deployment.ChatAPIAddr,
 	})
 	if err != nil {
 		return writeDaemonServeFailure(output, format, requestID)
@@ -344,6 +346,10 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	messageSend, err := messagecapability.New(groupOperations, messageSender)
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
+	businessSend, err := businesscapability.New(groupOperations, prepared.Adapter)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
@@ -459,6 +465,8 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	methods = append(methods, conversationMarkRead.ProxyMethod(), conversationPinned.ProxyMethod(), conversationReceiveOption.ProxyMethod())
 	methods = append(methods, friendHandler.ProxyMethods()...)
 	methods = append(methods, blacklistHandler.ProxyMethods()...)
+	normalMethods := append([]proxy.Method(nil), methods...)
+	methods = append(methods, businessSend.ProxyMethod())
 	inbound, err := daemon.New(daemon.Config{
 		ProfileID:           item.Name,
 		Ledger:              ledger,
@@ -466,7 +474,7 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 		Runs:                runs,
 		Grants:              grant.NewStore(),
 		Methods:             methods,
-		Policy:              agentWorkspacePolicy(directMessagePolicy(item.Deployment.UserID, item.InboundToolsEnabled, methods), item.Deployment.UserID, item.InboundToolsEnabled, methods),
+		Policy:              businessMessagePolicy(agentWorkspacePolicy(directMessagePolicy(item.Deployment.UserID, item.InboundToolsEnabled, normalMethods), item.Deployment.UserID, item.InboundToolsEnabled, normalMethods)),
 		WorkspaceClassifier: groupSource,
 		GrantTTL:            2 * time.Minute,
 	})
@@ -505,6 +513,19 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 		return 1
 	}
 	return 0
+}
+
+func businessMessagePolicy(base daemon.Policy) daemon.Policy {
+	return daemon.PolicyFunc(func(ctx context.Context, inbound daemon.InboundContext) (daemon.Decision, bool, error) {
+		if strings.TrimSpace(inbound.BusinessConnectionID) != "" {
+			return daemon.Decision{
+				Principal:  "business:" + inbound.BusinessConnectionID,
+				Methods:    []string{businesscapability.SendMessageMethod},
+				RateBudget: 8,
+			}, true, nil
+		}
+		return base.Decide(ctx, inbound)
+	})
 }
 
 func directMessagePolicy(userID string, toolsEnabled bool, methods []proxy.Method) daemon.Policy {

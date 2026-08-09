@@ -43,14 +43,14 @@ func TestRunSetupPersistsTokenFreeProfileAndStartsDaemon(t *testing.T) {
 	}
 	if err := profile.Save(paths.ConfigFile, profile.Profile{
 		Name: "default", CredentialRef: "file:default", InboundToolsEnabled: true,
-		Deployment: profile.Deployment{UserID: "old-bot", APIAddr: "https://example.test/api", WSAddr: "wss://example.test/ws", PlatformID: 7},
+		Deployment: profile.Deployment{UserID: "old-bot", APIAddr: "https://example.test/api", ChatAPIAddr: "https://example.test/chat", WSAddr: "wss://example.test/ws", PlatformID: 7},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	const token = "token-marker-must-not-leak"
 	started := false
 	dependencies := setupDependencies{
-		endpoints: connector.ABDEndpoints{APIAddr: "http://127.0.0.1:10002", WSAddr: "ws://127.0.0.1:10001"},
+		endpoints: connector.ABDEndpoints{APIAddr: "http://127.0.0.1:10002", ChatAPIAddr: "http://127.0.0.1:10008", WSAddr: "ws://127.0.0.1:10001"},
 		login: func(_ context.Context, account, areaCode, password string) (string, string, error) {
 			if account != "15500000000" || areaCode != "+86" || password != "password" {
 				t.Fatalf("login input = %q, %q, %q", account, areaCode, password)
@@ -71,7 +71,7 @@ func TestRunSetupPersistsTokenFreeProfileAndStartsDaemon(t *testing.T) {
 		t.Fatalf("setup output = %q, started=%t", output.String(), started)
 	}
 	item, err := profile.Load(paths.ConfigFile)
-	if err != nil || item.Deployment.UserID != "bot-user" || item.Deployment.APIAddr != "http://127.0.0.1:10002" || item.Deployment.WSAddr != "ws://127.0.0.1:10001" || !item.InboundToolsEnabled || item.Agent != "codex" {
+	if err != nil || item.Deployment.UserID != "bot-user" || item.Deployment.APIAddr != "http://127.0.0.1:10002" || item.Deployment.ChatAPIAddr != "http://127.0.0.1:10008" || item.Deployment.WSAddr != "ws://127.0.0.1:10001" || !item.InboundToolsEnabled || item.Agent != "codex" {
 		t.Fatalf("profile = %#v, %v", item, err)
 	}
 	profileContents, _ := os.ReadFile(paths.ConfigFile)

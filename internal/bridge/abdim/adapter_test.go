@@ -182,6 +182,43 @@ func TestAdapterNormalizesMessageCallbacksWithoutBody(t *testing.T) {
 	}
 }
 
+func TestAdapterNormalizesSecretaryBusinessCallback(t *testing.T) {
+	adapter, err := newAdapter(testConfig(t), func() userContext { return &fakeUserContext{} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan contracts.SDKEvent, 1)
+	adapter.listener = func(_ context.Context, event contracts.SDKEvent) { events <- event }
+	update := `{"update_id":"update-1","business_message":{"business_connection_id":"connection-1","conversation_id":"si_owner_contact","trigger_message_id":"message-2","instruction":"Keep it brief","messages":[{"message_id":"message-1","from_user_id":"owner","date":100,"content_type":101,"content":"{\"content\":\"Earlier\"}"},{"message_id":"message-2","from_user_id":"contact","date":200,"content_type":101,"content":"{\"content\":\"Current\"}"}]}}`
+	envelope, err := json.Marshal(struct {
+		Key  string `json:"key"`
+		Data string `json:"data"`
+	}{Key: "secretary.business_message", Data: update})
+	if err != nil {
+		t.Fatal(err)
+	}
+	businessListener{adapter: adapter}.OnRecvCustomBusinessMessage(string(envelope))
+	event := <-events
+	if event.DedupKey != "openim-business:update-1" || !event.OccurredAt.Equal(time.UnixMilli(200).UTC()) {
+		t.Fatalf("Business event = %#v", event)
+	}
+	if event.MessageText != "Conversation instruction:\nKeep it brief\n\nRecent conversation, oldest first:\nowner: Earlier\ncontact: Current" {
+		t.Fatalf("Business prompt = %q", event.MessageText)
+	}
+	var reference struct {
+		ConversationID       string `json:"conversation_id"`
+		MessageID            string `json:"message_id"`
+		SenderID             string `json:"sender_id"`
+		BusinessConnectionID string `json:"business_connection_id"`
+	}
+	if err := json.Unmarshal(event.Data, &reference); err != nil {
+		t.Fatal(err)
+	}
+	if reference.ConversationID != "si_owner_contact" || reference.MessageID != "message-2" || reference.SenderID != "contact" || reference.BusinessConnectionID != "connection-1" {
+		t.Fatalf("Business reference = %#v", reference)
+	}
+}
+
 func TestMessageTextIncludesCompleteStream(t *testing.T) {
 	message := sdk_struct.MsgStruct{StreamElem: &sdk_struct.StreamMsgElem{
 		Content: "hello", Packets: []string{" ", "world"}, End: true,
@@ -500,6 +537,7 @@ func testConfig(t *testing.T) Config {
 type fakeUserContext struct {
 	listener             open_im_sdk_callback.OnConnListener
 	messageListener      open_im_sdk_callback.OnAdvancedMsgListener
+	businessListener     open_im_sdk_callback.OnCustomBusinessListener
 	loginErr             error
 	loginCalled          bool
 	loginTokenSet        bool
@@ -551,6 +589,10 @@ func (f *fakeUserContext) InitResources() {}
 
 func (f *fakeUserContext) SetAdvancedMsgListener(listener open_im_sdk_callback.OnAdvancedMsgListener) {
 	f.messageListener = listener
+}
+
+func (f *fakeUserContext) SetCustomBusinessListener(listener open_im_sdk_callback.OnCustomBusinessListener) {
+	f.businessListener = listener
 }
 
 func (f *fakeUserContext) Login(ctx context.Context, _ string, token string) error {

@@ -50,10 +50,11 @@ func NormalizeAgent(value string) (string, error) {
 // Deployment is the non-secret server configuration required to start one
 // daemon profile. The IM token remains behind Profile.CredentialRef.
 type Deployment struct {
-	UserID     string
-	APIAddr    string
-	WSAddr     string
-	PlatformID int32
+	UserID      string
+	APIAddr     string
+	ChatAPIAddr string
+	WSAddr      string
+	PlatformID  int32
 }
 
 // Paths describes the exclusive on-disk resources of one profile.
@@ -133,7 +134,7 @@ func ValidateName(name string) error {
 
 // Configured reports whether all deployment inputs have been supplied.
 func (d Deployment) Configured() bool {
-	return strings.TrimSpace(d.UserID) != "" || strings.TrimSpace(d.APIAddr) != "" || strings.TrimSpace(d.WSAddr) != "" || d.PlatformID != 0
+	return strings.TrimSpace(d.UserID) != "" || strings.TrimSpace(d.APIAddr) != "" || strings.TrimSpace(d.ChatAPIAddr) != "" || strings.TrimSpace(d.WSAddr) != "" || d.PlatformID != 0
 }
 
 // Validate verifies complete, non-secret SDK deployment inputs.
@@ -142,6 +143,12 @@ func (d Deployment) Validate() error {
 		return fmt.Errorf("%w: user ID and positive platform ID are required", ErrInvalidDeployment)
 	}
 	if err := validateEndpoint(d.APIAddr, "http", "https"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(d.ChatAPIAddr) == "" {
+		return fmt.Errorf("%w: Chat API address is required", ErrInvalidDeployment)
+	}
+	if err := validateEndpoint(d.ChatAPIAddr, "http", "https"); err != nil {
 		return err
 	}
 	return validateEndpoint(d.WSAddr, "ws", "wss")
@@ -203,6 +210,7 @@ func Save(path string, profile Profile) error {
 	if profile.Deployment.Configured() {
 		contents += "user_id = " + strconv.Quote(profile.Deployment.UserID) + "\n"
 		contents += "api_addr = " + strconv.Quote(profile.Deployment.APIAddr) + "\n"
+		contents += "chat_api_addr = " + strconv.Quote(profile.Deployment.ChatAPIAddr) + "\n"
 		contents += "ws_addr = " + strconv.Quote(profile.Deployment.WSAddr) + "\n"
 		contents += "platform_id = " + strconv.FormatInt(int64(profile.Deployment.PlatformID), 10) + "\n"
 	}
@@ -226,7 +234,7 @@ func Load(path string) (Profile, error) {
 		return Profile{}, fmt.Errorf("read profile file: %w", err)
 	}
 
-	values := make(map[string]string, 8)
+	values := make(map[string]string, 9)
 	var platformID int32
 	var inboundToolsEnabled bool
 	for _, line := range strings.Split(string(contents), "\n") {
@@ -242,7 +250,7 @@ func Load(path string) (Profile, error) {
 		if key == "owner_user_id" || key == "pairing_code_hash" || key == "pairing_expires_at" {
 			continue // Compatibility with profiles written by the removed pairing flow.
 		}
-		if key != "name" && key != "credential_ref" && key != "inbound_tools_enabled" && key != "agent" && key != "user_id" && key != "api_addr" && key != "ws_addr" && key != "platform_id" {
+		if key != "name" && key != "credential_ref" && key != "inbound_tools_enabled" && key != "agent" && key != "user_id" && key != "api_addr" && key != "chat_api_addr" && key != "ws_addr" && key != "platform_id" {
 			return Profile{}, fmt.Errorf("unsupported profile field %q", key)
 		}
 		if _, exists := values[key]; exists {
@@ -282,7 +290,7 @@ func Load(path string) (Profile, error) {
 		CredentialRef:       values["credential_ref"],
 		InboundToolsEnabled: inboundToolsEnabled,
 		Agent:               agent,
-		Deployment:          Deployment{UserID: values["user_id"], APIAddr: values["api_addr"], WSAddr: values["ws_addr"], PlatformID: platformID},
+		Deployment:          Deployment{UserID: values["user_id"], APIAddr: values["api_addr"], ChatAPIAddr: values["chat_api_addr"], WSAddr: values["ws_addr"], PlatformID: platformID},
 	}
 	if err := ValidateName(profile.Name); err != nil {
 		return Profile{}, err

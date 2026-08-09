@@ -3,11 +3,13 @@
 package abdim
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"math"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -35,11 +37,12 @@ const defaultConnectTimeout = 30 * time.Second
 // logged or embedded in emitted events; Adapter.Context exposes it only to
 // daemon-internal SDK sources.
 type Config struct {
-	ProfileID string
-	UserID    string
-	Token     []byte
-	SDKConfig sdk_struct.IMConfig
-	OnError   func(error)
+	ProfileID       string
+	UserID          string
+	Token           []byte
+	SDKConfig       sdk_struct.IMConfig
+	BusinessAPIAddr string
+	OnError         func(error)
 
 	ConnectTimeout time.Duration
 }
@@ -48,6 +51,7 @@ type userContext interface {
 	InitSDK(*sdk_struct.IMConfig, open_im_sdk_callback.OnConnListener) bool
 	InitResources()
 	SetAdvancedMsgListener(open_im_sdk_callback.OnAdvancedMsgListener)
+	SetCustomBusinessListener(open_im_sdk_callback.OnCustomBusinessListener)
 	Login(context.Context, string, string) error
 	SendAtMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, []string) error
 	SendQuoteMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string, *sdk_struct.MsgStruct) error
@@ -168,11 +172,12 @@ func (u sdkUserContext) SendVideoMessage(ctx context.Context, callback open_im_s
 // daemon-internal typed services only; CLI and providers never receive
 // it.
 type Adapter struct {
-	profileID string
-	userID    string
-	token     string
-	config    sdk_struct.IMConfig
-	onError   func(error)
+	profileID       string
+	userID          string
+	token           string
+	config          sdk_struct.IMConfig
+	businessAPIAddr string
+	onError         func(error)
 
 	newUserContext func() userContext
 	initLogger     func(sdk_struct.IMConfig) error
@@ -206,15 +211,16 @@ func newAdapter(config Config, factory func() userContext) (*Adapter, error) {
 		config.ConnectTimeout = defaultConnectTimeout
 	}
 	return &Adapter{
-		profileID:      config.ProfileID,
-		userID:         config.UserID,
-		token:          string(config.Token),
-		config:         config.SDKConfig,
-		onError:        config.OnError,
-		newUserContext: factory,
-		initLogger:     initSDKLogger,
-		now:            time.Now,
-		connectTimeout: config.ConnectTimeout,
+		profileID:       config.ProfileID,
+		userID:          config.UserID,
+		token:           string(config.Token),
+		config:          config.SDKConfig,
+		businessAPIAddr: strings.TrimRight(config.BusinessAPIAddr, "/"),
+		onError:         config.OnError,
+		newUserContext:  factory,
+		initLogger:      initSDKLogger,
+		now:             time.Now,
+		connectTimeout:  config.ConnectTimeout,
 	}, nil
 }
 
@@ -273,6 +279,7 @@ func (a *Adapter) SetEventListener(listener contracts.EventListener) error {
 	// Install a listener even without an inbound handler so the SDK's default
 	// listener cannot log complete message payloads.
 	user.SetAdvancedMsgListener(messageListener{adapter: a})
+	user.SetCustomBusinessListener(businessListener{adapter: a})
 	return nil
 }
 
@@ -352,7 +359,52 @@ func (a *Adapter) Reply(ctx context.Context, delivery reply.Delivery) error {
 	if strings.TrimSpace(delivery.Text) == "" || (strings.TrimSpace(delivery.RecipientID) == "" && strings.TrimSpace(delivery.GroupID) == "") || (strings.TrimSpace(delivery.RecipientID) != "" && strings.TrimSpace(delivery.GroupID) != "") {
 		return errors.New("invalid event-bound reply delivery")
 	}
+	if delivery.BusinessConnectionID != "" {
+		return a.sendBusinessMessage(ctx, delivery.BusinessConnectionID, delivery.ConversationID, delivery.TriggerMessageID, delivery.Text, delivery.OperationID)
+	}
 	return a.sendCompleteTextStream(ctx, delivery.Text, delivery.RecipientID, delivery.GroupID, delivery.OperationID, reply.ErrOutcomeUnknown)
+}
+
+func (a *Adapter) SendBusinessText(ctx context.Context, businessConnectionID, conversationID, triggerMessageID, text, operationID string) error {
+	return a.sendBusinessMessage(ctx, businessConnectionID, conversationID, triggerMessageID, text, operationID)
+}
+
+func (a *Adapter) sendBusinessMessage(ctx context.Context, businessConnectionID, conversationID, triggerMessageID, text, operationID string) error {
+	if strings.TrimSpace(a.businessAPIAddr) == "" {
+		return errors.New("Business API is not configured")
+	}
+	payload, err := json.Marshal(struct {
+		BusinessConnectionID string `json:"businessConnectionID"`
+		ConversationID       string `json:"conversationID"`
+		TriggerMessageID     string `json:"triggerMessageID"`
+		Text                 string `json:"text"`
+	}{businessConnectionID, conversationID, triggerMessageID, text})
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, a.businessAPIAddr+"/agent/business/send_message", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("token", a.token)
+	request.Header.Set("operationID", operationID)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return reply.ErrOutcomeUnknown
+	}
+	defer response.Body.Close()
+	var result struct {
+		ErrCode int    `json:"errCode"`
+		ErrMsg  string `json:"errMsg"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); err != nil {
+		return reply.ErrOutcomeUnknown
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices || result.ErrCode != 0 {
+		return errors.New("Business message delivery failed")
+	}
+	return nil
 }
 
 func (a *Adapter) sendCompleteTextStream(ctx context.Context, text, recipientID, groupID, clientMsgID string, outcomeUnknown error) error {
@@ -822,6 +874,126 @@ func (l messageListener) OnRecvNewMessage(raw string) {
 	l.adapter.emit(event)
 }
 
+type businessListener struct{ adapter *Adapter }
+
+type secretaryBusinessUpdate struct {
+	UpdateID        string `json:"update_id"`
+	BusinessMessage struct {
+		BusinessConnectionID string `json:"business_connection_id"`
+		ConversationID       string `json:"conversation_id"`
+		TriggerMessageID     string `json:"trigger_message_id"`
+		Instruction          string `json:"instruction"`
+		Messages             []struct {
+			MessageID   string `json:"message_id"`
+			FromUserID  string `json:"from_user_id"`
+			Date        int64  `json:"date"`
+			ContentType int32  `json:"content_type"`
+			Content     string `json:"content"`
+		} `json:"messages"`
+	} `json:"business_message"`
+}
+
+func (l businessListener) OnRecvCustomBusinessMessage(raw string) {
+	event, err := l.event(raw)
+	if err != nil {
+		l.adapter.report(err)
+		return
+	}
+	if event.DedupKey != "" {
+		l.adapter.emit(event)
+	}
+}
+
+func (l businessListener) event(raw string) (contracts.SDKEvent, error) {
+	var envelope struct {
+		Key  string `json:"key"`
+		Data string `json:"data"`
+	}
+	if json.Unmarshal([]byte(raw), &envelope) != nil {
+		return contracts.SDKEvent{}, errors.New("decode OpenIM Business callback")
+	}
+	if envelope.Key != "secretary.business_message" {
+		return contracts.SDKEvent{}, nil
+	}
+	var update secretaryBusinessUpdate
+	if json.Unmarshal([]byte(envelope.Data), &update) != nil {
+		return contracts.SDKEvent{}, errors.New("decode Secretary Business update")
+	}
+	message := update.BusinessMessage
+	if update.UpdateID == "" || message.BusinessConnectionID == "" || message.ConversationID == "" || message.TriggerMessageID == "" {
+		return contracts.SDKEvent{}, errors.New("Secretary Business update has no stable reference")
+	}
+	var trigger *struct {
+		MessageID   string `json:"message_id"`
+		FromUserID  string `json:"from_user_id"`
+		Date        int64  `json:"date"`
+		ContentType int32  `json:"content_type"`
+		Content     string `json:"content"`
+	}
+	for i := range message.Messages {
+		if message.Messages[i].MessageID == message.TriggerMessageID {
+			trigger = &message.Messages[i]
+			break
+		}
+	}
+	if trigger == nil || trigger.FromUserID == "" {
+		return contracts.SDKEvent{}, errors.New("Secretary Business trigger message is missing")
+	}
+	data, err := json.Marshal(struct {
+		ConversationID       string `json:"conversation_id"`
+		MessageID            string `json:"message_id"`
+		SenderID             string `json:"sender_id"`
+		SessionType          int32  `json:"session_type"`
+		ContentType          int32  `json:"content_type"`
+		BusinessConnectionID string `json:"business_connection_id"`
+	}{message.ConversationID, message.TriggerMessageID, trigger.FromUserID, pbconstant.SingleChatType, trigger.ContentType, message.BusinessConnectionID})
+	if err != nil {
+		return contracts.SDKEvent{}, errors.New("encode Secretary Business event")
+	}
+	occurredAt := time.Now().UTC()
+	if trigger.Date > 0 {
+		occurredAt = time.UnixMilli(trigger.Date).UTC()
+	}
+	return contracts.SDKEvent{
+		ProfileID: l.adapter.profileID, Type: string(contracts.EventMessageReceived), OccurredAt: occurredAt,
+		DedupKey: "openim-business:" + update.UpdateID, Data: data,
+		MessageText: secretaryPrompt(message.Instruction, message.Messages),
+	}, nil
+}
+
+func secretaryPrompt(instruction string, messages []struct {
+	MessageID   string `json:"message_id"`
+	FromUserID  string `json:"from_user_id"`
+	Date        int64  `json:"date"`
+	ContentType int32  `json:"content_type"`
+	Content     string `json:"content"`
+}) string {
+	var prompt strings.Builder
+	if instruction = strings.TrimSpace(instruction); instruction != "" {
+		prompt.WriteString("Conversation instruction:\n")
+		prompt.WriteString(instruction)
+		prompt.WriteString("\n\n")
+	}
+	prompt.WriteString("Recent conversation, oldest first:\n")
+	for _, message := range messages {
+		prompt.WriteString(message.FromUserID)
+		prompt.WriteString(": ")
+		prompt.WriteString(businessContentText(message.Content))
+		prompt.WriteByte('\n')
+	}
+	return strings.TrimSpace(prompt.String())
+}
+
+func businessContentText(content string) string {
+	var elem struct {
+		Content string `json:"content"`
+	}
+	if json.Unmarshal([]byte(content), &elem) == nil && strings.TrimSpace(elem.Content) != "" {
+		return elem.Content
+	}
+	return content
+}
+
 func (l messageListener) OnRecvC2CReadReceipt(string)    {}
 func (l messageListener) OnNewRecvMessageRevoked(string) {}
 func (l messageListener) OnRecvOfflineNewMessage(raw string) {
@@ -932,3 +1104,4 @@ var _ contracts.SDK = (*Adapter)(nil)
 var _ reply.Sender = (*Adapter)(nil)
 var _ open_im_sdk_callback.OnConnListener = connectionListener{}
 var _ open_im_sdk_callback.OnAdvancedMsgListener = messageListener{}
+var _ open_im_sdk_callback.OnCustomBusinessListener = businessListener{}

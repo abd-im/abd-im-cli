@@ -39,14 +39,15 @@ func (f PolicyFunc) Decide(ctx context.Context, inbound InboundContext) (Decisio
 // Message text is intentionally excluded so authorization never depends on the
 // prompt body.
 type InboundContext struct {
-	Event            contracts.Event
-	SenderID         string
-	ConversationID   string
-	GroupID          string
-	SessionType      int32
-	ContentType      int32
-	SenderPlatformID int32
-	ConversationKind contracts.ConversationKind
+	Event                contracts.Event
+	SenderID             string
+	ConversationID       string
+	GroupID              string
+	SessionType          int32
+	ContentType          int32
+	SenderPlatformID     int32
+	ConversationKind     contracts.ConversationKind
+	BusinessConnectionID string
 }
 
 // Decision selects a subset of the daemon's fixed typed tool registry.
@@ -184,14 +185,15 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	}
 	conversationKind := d.conversationKind(ctx, reference.GroupID)
 	decision, allowed, err := d.policy.Decide(ctx, InboundContext{
-		Event:            recorded.Event,
-		SenderID:         reference.SenderID,
-		ConversationID:   reference.ConversationID,
-		GroupID:          reference.GroupID,
-		SessionType:      reference.SessionType,
-		ContentType:      reference.ContentType,
-		SenderPlatformID: reference.SenderPlatformID,
-		ConversationKind: conversationKind,
+		Event:                recorded.Event,
+		SenderID:             reference.SenderID,
+		ConversationID:       reference.ConversationID,
+		GroupID:              reference.GroupID,
+		SessionType:          reference.SessionType,
+		ContentType:          reference.ContentType,
+		SenderPlatformID:     reference.SenderPlatformID,
+		ConversationKind:     conversationKind,
+		BusinessConnectionID: reference.BusinessConnectionID,
 	})
 	if err != nil {
 		return outcome, err
@@ -215,17 +217,19 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 
 	runID := newRunID()
 	if _, err := d.replies.Reserve(ctx, reply.Binding{
-		ProfileID:        d.profileID,
-		EventID:          recorded.Event.EventID,
-		ConversationID:   conversation.ConversationID,
-		TriggerMessageID: conversation.MessageID,
-		RecipientID:      target.recipientID,
-		GroupID:          target.groupID,
-		RunID:            runID,
+		ProfileID:            d.profileID,
+		EventID:              recorded.Event.EventID,
+		ConversationID:       conversation.ConversationID,
+		TriggerMessageID:     conversation.MessageID,
+		RecipientID:          target.recipientID,
+		GroupID:              target.groupID,
+		RunID:                runID,
+		BusinessConnectionID: conversation.BusinessConnectionID,
 	}); err != nil {
 		return outcome, err
 	}
 	workspace := conversationKind == contracts.ConversationKindAgentWorkspace
+	business := conversation.BusinessConnectionID != ""
 	var stream *reply.Stream
 	var agentReply *agentRunReply
 	if workspace {
@@ -234,7 +238,7 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 			return outcome, streamErr
 		}
 		agentReply = &agentRunReply{run: agentStream}
-	} else {
+	} else if !business {
 		stream, err = d.replies.NewStream(ctx, d.profileID, recorded.Event.EventID)
 		if err != nil {
 			return outcome, err
@@ -282,6 +286,8 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		request.Output = agentReply.output
 		request.Activity = agentReply.activity
 		request.Started = agentReply.ensureStarted
+	} else if business {
+		request.Output = func(context.Context, contracts.TurnOutput) error { return nil }
 	} else {
 		request.Output = func(outputContext context.Context, output contracts.TurnOutput) error {
 			return stream.Update(outputContext, output.Text)
@@ -320,7 +326,7 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	outcome.RunID = runID
 	go func() {
 		defer d.finishers.Done()
-		d.finish(recorded.Event.EventID, handle, stream, agentReply)
+		d.finish(recorded.Event.EventID, handle, stream, agentReply, business)
 	}()
 	return outcome, nil
 }
@@ -345,7 +351,7 @@ func (d *Inbound) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (d *Inbound) finish(eventID string, handle *run.Handle, stream *reply.Stream, agentReply *agentRunReply) {
+func (d *Inbound) finish(eventID string, handle *run.Handle, stream *reply.Stream, agentReply *agentRunReply, business bool) {
 	result, ok := <-handle.Done
 	d.mu.Lock()
 	delete(d.runsByEvent, eventID)
@@ -359,6 +365,14 @@ func (d *Inbound) finish(eventID string, handle *run.Handle, stream *reply.Strea
 		}
 		if err := agentReply.finish(context.Background(), result); err != nil {
 			d.report(err)
+		}
+		return
+	}
+	if business {
+		if ok && result.Status == run.StatusCompleted && strings.TrimSpace(result.Turn.FinalText) != "" {
+			if _, err := d.replies.Deliver(context.Background(), d.profileID, eventID, result.Turn.FinalText); err != nil {
+				d.report(err)
+			}
 		}
 		return
 	}
@@ -455,13 +469,14 @@ func (d *Inbound) selectMethods(names []string) ([]proxy.Method, error) {
 }
 
 type eventRef struct {
-	ConversationID   string `json:"conversation_id"`
-	MessageID        string `json:"message_id"`
-	SenderID         string `json:"sender_id,omitempty"`
-	GroupID          string `json:"group_id,omitempty"`
-	SessionType      int32  `json:"session_type,omitempty"`
-	ContentType      int32  `json:"content_type,omitempty"`
-	SenderPlatformID int32  `json:"sender_platform_id,omitempty"`
+	ConversationID       string `json:"conversation_id"`
+	MessageID            string `json:"message_id"`
+	SenderID             string `json:"sender_id,omitempty"`
+	GroupID              string `json:"group_id,omitempty"`
+	SessionType          int32  `json:"session_type,omitempty"`
+	ContentType          int32  `json:"content_type,omitempty"`
+	SenderPlatformID     int32  `json:"sender_platform_id,omitempty"`
+	BusinessConnectionID string `json:"business_connection_id,omitempty"`
 }
 
 func eventReference(raw json.RawMessage) eventRef {

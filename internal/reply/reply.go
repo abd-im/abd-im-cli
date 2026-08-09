@@ -24,25 +24,27 @@ const replyScope = "event.reply"
 // Binding is copied from the triggering event before a provider turn begins.
 // No provider input can supply or replace its conversation target.
 type Binding struct {
-	ProfileID        string
-	EventID          string
-	ConversationID   string
-	TriggerMessageID string
-	RecipientID      string
-	GroupID          string
-	RunID            string
+	ProfileID            string
+	EventID              string
+	ConversationID       string
+	TriggerMessageID     string
+	RecipientID          string
+	GroupID              string
+	RunID                string
+	BusinessConnectionID string
 }
 
 // Delivery is constructed exclusively from a persisted reply slot.
 type Delivery struct {
-	ProfileID        string
-	EventID          string
-	ConversationID   string
-	TriggerMessageID string
-	RecipientID      string
-	GroupID          string
-	OperationID      string
-	Text             string
+	ProfileID            string
+	EventID              string
+	ConversationID       string
+	TriggerMessageID     string
+	RecipientID          string
+	GroupID              string
+	OperationID          string
+	Text                 string
+	BusinessConnectionID string
 }
 
 // Sender is the narrow SDK-facing reply capability. It has no generic send or
@@ -81,15 +83,16 @@ func (s *Service) Reserve(ctx context.Context, binding Binding) (control.ReplySl
 		return control.ReplySlot{}, err
 	}
 	slot := control.ReplySlot{
-		ID:               newID(),
-		ProfileID:        binding.ProfileID,
-		EventID:          binding.EventID,
-		ConversationID:   binding.ConversationID,
-		TriggerMessageID: binding.TriggerMessageID,
-		RecipientID:      binding.RecipientID,
-		GroupID:          binding.GroupID,
-		RunID:            binding.RunID,
-		OperationID:      newID(),
+		ID:                   newID(),
+		ProfileID:            binding.ProfileID,
+		EventID:              binding.EventID,
+		ConversationID:       binding.ConversationID,
+		TriggerMessageID:     binding.TriggerMessageID,
+		RecipientID:          binding.RecipientID,
+		GroupID:              binding.GroupID,
+		RunID:                binding.RunID,
+		OperationID:          newID(),
+		BusinessConnectionID: binding.BusinessConnectionID,
 	}
 	if err := s.store.PutReplySlot(ctx, slot); err != nil {
 		if errors.Is(err, control.ErrConflict) {
@@ -146,14 +149,15 @@ func (s *Service) Deliver(ctx context.Context, profileID, eventID, finalText str
 	}
 
 	delivery := Delivery{
-		ProfileID:        slot.ProfileID,
-		EventID:          slot.EventID,
-		ConversationID:   slot.ConversationID,
-		TriggerMessageID: slot.TriggerMessageID,
-		RecipientID:      slot.RecipientID,
-		GroupID:          slot.GroupID,
-		OperationID:      slot.OperationID,
-		Text:             finalText,
+		ProfileID:            slot.ProfileID,
+		EventID:              slot.EventID,
+		ConversationID:       slot.ConversationID,
+		TriggerMessageID:     slot.TriggerMessageID,
+		RecipientID:          slot.RecipientID,
+		GroupID:              slot.GroupID,
+		OperationID:          slot.OperationID,
+		Text:                 finalText,
+		BusinessConnectionID: slot.BusinessConnectionID,
 	}
 	if err := s.sender.Reply(ctx, delivery); err != nil {
 		if errors.Is(err, ErrOutcomeUnknown) {

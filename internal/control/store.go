@@ -527,10 +527,10 @@ func (s *Store) PutReplySlot(ctx context.Context, slot ReplySlot) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO reply_slots (
 			id, profile_id, event_id, conversation_id, trigger_message_id,
-			recipient_id, group_id, run_id, operation_id, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			recipient_id, group_id, run_id, operation_id, business_connection_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		slot.ID, slot.ProfileID, slot.EventID, slot.ConversationID, slot.TriggerMessageID,
-		slot.RecipientID, slot.GroupID, slot.RunID, slot.OperationID, encodeTime(slot.CreatedAt))
+		slot.RecipientID, slot.GroupID, slot.RunID, slot.OperationID, slot.BusinessConnectionID, encodeTime(slot.CreatedAt))
 	if isUniqueViolation(err) {
 		return fmt.Errorf("%w: reply slot %q", ErrConflict, slot.ID)
 	}
@@ -544,7 +544,7 @@ func (s *Store) PutReplySlot(ctx context.Context, slot ReplySlot) error {
 func (s *Store) ReplySlotByEvent(ctx context.Context, profileID, eventID string) (ReplySlot, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, profile_id, event_id, conversation_id, trigger_message_id,
-			recipient_id, group_id, run_id, operation_id, created_at
+			recipient_id, group_id, run_id, operation_id, business_connection_id, created_at
 		FROM reply_slots WHERE profile_id = ? AND event_id = ?`, profileID, eventID)
 	slot, err := scanReplySlot(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -742,7 +742,7 @@ func scanReplySlot(row scanner) (ReplySlot, error) {
 	var createdAt string
 	if err := row.Scan(
 		&slot.ID, &slot.ProfileID, &slot.EventID, &slot.ConversationID, &slot.TriggerMessageID,
-		&slot.RecipientID, &slot.GroupID, &slot.RunID, &slot.OperationID, &createdAt,
+		&slot.RecipientID, &slot.GroupID, &slot.RunID, &slot.OperationID, &slot.BusinessConnectionID, &createdAt,
 	); err != nil {
 		return ReplySlot{}, err
 	}

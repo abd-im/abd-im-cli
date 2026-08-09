@@ -16,16 +16,18 @@ go build -o ./abdim ./cmd/abdim
 ```text
 Account login = https://2.alissa.xin/chat/account/login
 OpenIM API    = https://2.alissa.xin/api
+Chat API      = https://2.alissa.xin/chat
 OpenIM WS     = wss://2.alissa.xin/msg_gateway
 Platform      = 7
 ```
 
-可在执行 `setup` 时通过环境变量覆盖服务地址。API 和 WebSocket 地址会保存到
+可在执行 `setup` 时通过环境变量覆盖服务地址。OpenIM API、Chat API 和 WebSocket 地址会保存到
 profile，后续执行 `start` 或 `restart` 时不需要重复传入：
 
 ```bash
 ABDIM_ACCOUNT_LOGIN_URL=http://127.0.0.1:10008/account/login \
 ABDIM_OPENIM_API_ADDR=http://127.0.0.1:10002 \
+ABDIM_CHAT_API_ADDR=http://127.0.0.1:10008 \
 ABDIM_OPENIM_WS_ADDR=ws://127.0.0.1:10001 \
 ./abdim setup
 ```

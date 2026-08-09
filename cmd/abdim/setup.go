@@ -94,10 +94,11 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 		InboundToolsEnabled: inboundToolsEnabled,
 		Agent:               agent,
 		Deployment: profile.Deployment{
-			UserID:     userID,
-			APIAddr:    dependencies.endpoints.APIAddr,
-			WSAddr:     dependencies.endpoints.WSAddr,
-			PlatformID: connector.ABDPlatformID,
+			UserID:      userID,
+			APIAddr:     dependencies.endpoints.APIAddr,
+			ChatAPIAddr: dependencies.endpoints.ChatAPIAddr,
+			WSAddr:      dependencies.endpoints.WSAddr,
+			PlatformID:  connector.ABDPlatformID,
 		},
 	}
 	if err := profile.Save(paths.ConfigFile, item); err != nil {

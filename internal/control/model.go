@@ -125,16 +125,17 @@ func (run Run) validate() error {
 // ReplySlot binds a provider result to the original event and conversation.
 // It contains only identifiers, never reply text or message content.
 type ReplySlot struct {
-	ID               string
-	ProfileID        string
-	EventID          string
-	ConversationID   string
-	TriggerMessageID string
-	RecipientID      string
-	GroupID          string
-	RunID            string
-	OperationID      string
-	CreatedAt        time.Time
+	ID                   string
+	ProfileID            string
+	EventID              string
+	ConversationID       string
+	TriggerMessageID     string
+	RecipientID          string
+	GroupID              string
+	RunID                string
+	OperationID          string
+	BusinessConnectionID string
+	CreatedAt            time.Time
 }
 
 func (slot ReplySlot) validate() error {
