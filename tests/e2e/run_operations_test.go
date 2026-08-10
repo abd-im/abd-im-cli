@@ -32,7 +32,7 @@ func TestOwnerRunCancellationUsesLocalRPCAndClosesProviderBoundaryE2E(t *testing
 		t.Fatal(err)
 	}
 	provider := newRunOperationsProvider()
-	manager, err := run.NewManager(run.Config{Provider: provider, MaxQueue: 1, Deadline: time.Minute, Observer: tracker})
+	manager, err := run.NewManager(run.Config{Provider: provider, MaxQueue: 1, MaxConcurrentRuns: 2, Deadline: time.Minute, Observer: tracker})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -25,6 +25,8 @@ Agent 都不直接打开 SDK 数据库。
 - `codex` 直接启动 `codex app-server`。
 - `hermes` 和 `openclaw` 保留固定 ACP v1 启动入口，不支持任意 provider 命令。
 - 每个 run 都有独立工作目录、私有 socket、短期 grant 和允许方法快照。
+- Codex `CODEX_HOME` 按 conversation 隔离并持久化，同一 conversation 的后续 run
+  可以恢复已有 thread；run 工作目录在进程退出后删除。
 - Agent 只能通过注入的 `abdim` CLI 调用 IM 方法；owner 管理方法不会出现在
   run 命令列表中。
 
@@ -39,6 +41,7 @@ OpenIM `conversation_id` 是会话隔离键：
 
 - event、reply slot 和 run 都记录 conversation ID。
 - 同一 conversation 的 run 排队执行，不与其他 conversation 混用队列。
+- 不同 conversation 在 profile 的全局上限内并行执行；当前上限为两个 run。
 - 回复目标只来自持久化 reply slot，Agent 不能改写目标。
 - run 及其状态持久化，可供未来网页工作区列出、取消和展示历史状态。
 
@@ -83,7 +86,7 @@ grant 只存在于 daemon 内存中，daemon 重启后不恢复旧 grant。旧�
 | `cmd/abdim` | setup、daemon 生命周期、owner/run CLI。 |
 | `internal/agent/provider/codex` | Codex app-server adapter。 |
 | `internal/agent/provider/acp` | 其他 Agent 的 ACP v1 adapter。 |
-| `internal/agent/run` | conversation 队列、deadline 和取消。 |
+| `internal/agent/run` | conversation 队列、有界并发、deadline 和取消。 |
 | `internal/agent/grant` | 内存 grant。 |
 | `internal/agent/access` | run 私有 socket 和 CLI 环境。 |
 | `internal/agent/proxy` | typed method 调用边界。 |
@@ -96,6 +99,7 @@ grant 只存在于 daemon 内存中，daemon 重启后不恢复旧 grant。旧�
 ## 不变量
 
 - 一个 profile 同时只运行一个 daemon。
+- 同一 conversation 最多运行一个 run，一个 profile 最多并行运行两个 run。
 - 一条入站 event 只创建一个 reply slot；回复不能跨 conversation。
 - provider 不能调用 owner 管理方法或未授予的 IM method。
 - 消息历史不能越过 run 的 conversation 和消息窗口。

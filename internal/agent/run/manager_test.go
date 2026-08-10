@@ -15,7 +15,7 @@ import (
 func TestManagerSerializesConversationAndCreatesRunPrivateSessions(t *testing.T) {
 	session := &recordingSession{}
 	provider := &recordingProvider{session: session}
-	manager, err := NewManager(Config{Provider: provider, MaxQueue: 2, Deadline: time.Second})
+	manager, err := NewManager(Config{Provider: provider, MaxQueue: 2, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -54,7 +54,7 @@ func TestManagerSerializesConversationAndCreatesRunPrivateSessions(t *testing.T)
 func TestManagerPublishesStartedOnlyWhenQueuedRunExecutes(t *testing.T) {
 	block := make(chan struct{})
 	session := &recordingSession{block: block}
-	manager, err := NewManager(Config{Provider: &recordingProvider{session: session}, MaxQueue: 1, Deadline: time.Second})
+	manager, err := NewManager(Config{Provider: &recordingProvider{session: session}, MaxQueue: 1, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestManagerPublishesStartedOnlyWhenQueuedRunExecutes(t *testing.T) {
 func TestManagerReusesConversationSessionAndReplacesMissingSession(t *testing.T) {
 	sessions := &memorySessionStore{refs: make(map[string]string)}
 	provider := &sessionRefProvider{}
-	manager, err := NewManager(Config{Provider: provider, Sessions: sessions, SessionNamespace: "codex", MaxQueue: 1, Deadline: time.Second})
+	manager, err := NewManager(Config{Provider: provider, Sessions: sessions, SessionNamespace: "codex", MaxQueue: 1, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,12 +141,21 @@ func TestManagerReusesConversationSessionAndReplacesMissingSession(t *testing.T)
 	if sessions.refs["work/conversation-2/codex"] != "session-new" {
 		t.Fatalf("replacement session ref = %q", sessions.refs["work/conversation-2/codex"])
 	}
+	keys := provider.stateKeys()
+	if len(keys) != 4 || keys[0] != keys[1] || keys[2] != keys[3] || keys[0] == keys[2] {
+		t.Fatalf("provider state keys = %v", keys)
+	}
+	for _, key := range keys {
+		if len(key) != 64 {
+			t.Fatalf("provider state key length = %d, want 64", len(key))
+		}
+	}
 }
 
 func TestManagerRejectsOverflowAndCancelsGrantExpiry(t *testing.T) {
 	block := make(chan struct{})
 	session := &recordingSession{block: block}
-	manager, err := NewManager(Config{Provider: &recordingProvider{session: session}, MaxQueue: 1, Deadline: time.Second})
+	manager, err := NewManager(Config{Provider: &recordingProvider{session: session}, MaxQueue: 1, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -174,7 +183,7 @@ func TestManagerRejectsOverflowAndCancelsGrantExpiry(t *testing.T) {
 	<-second.Done
 
 	expiring := &recordingSession{block: make(chan struct{})}
-	expiringManager, err := NewManager(Config{Provider: &recordingProvider{session: expiring}, MaxQueue: 1, Deadline: time.Second})
+	expiringManager, err := NewManager(Config{Provider: &recordingProvider{session: expiring}, MaxQueue: 1, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		t.Fatalf("NewManager(expiring) error = %v", err)
 	}
@@ -191,7 +200,7 @@ func TestManagerRejectsOverflowAndCancelsGrantExpiry(t *testing.T) {
 func TestManagerKeepsConversationQueuesDistinct(t *testing.T) {
 	block := make(chan struct{})
 	session := &recordingSession{block: block}
-	manager, err := NewManager(Config{Provider: &recordingProvider{session: session}, MaxQueue: 1, Deadline: time.Second})
+	manager, err := NewManager(Config{Provider: &recordingProvider{session: session}, MaxQueue: 1, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,9 +233,109 @@ func TestManagerKeepsConversationQueuesDistinct(t *testing.T) {
 	}
 }
 
+func TestManagerBoundsCrossConversationConcurrency(t *testing.T) {
+	provider := newBlockingProvider()
+	manager, err := NewManager(Config{Provider: provider, MaxQueue: 1, MaxConcurrentRuns: 2, Deadline: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Shutdown(context.Background())
+
+	first, err := manager.Submit(testRequest("run-a", "conversation-a", time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.Submit(testRequest("run-b", "conversation-b", time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := map[string]bool{provider.waitStarted(t): true, provider.waitStarted(t): true}
+	if !started["run-a"] || !started["run-b"] {
+		t.Fatalf("initial concurrent runs = %v", started)
+	}
+
+	waiting := make(chan string, 1)
+	manager.onSlotWait = func(runID string) { waiting <- runID }
+	third, err := manager.Submit(testRequest("run-c", "conversation-c", time.Now().Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runID := waitString(t, waiting); runID != "run-c" {
+		t.Fatalf("waiting run = %q", runID)
+	}
+	if provider.startCount("run-c") != 0 {
+		t.Fatal("third provider started without a concurrency slot")
+	}
+	provider.release("run-a")
+	if runID := provider.waitStarted(t); runID != "run-c" {
+		t.Fatalf("run after released slot = %q", runID)
+	}
+	provider.release("run-b")
+	provider.release("run-c")
+	for name, handle := range map[string]*Handle{"first": first, "second": second, "third": third} {
+		if result := waitRunResult(t, handle); result.Status != StatusCompleted {
+			t.Fatalf("%s result = %#v", name, result)
+		}
+	}
+	if provider.maxConcurrent() != 2 {
+		t.Fatalf("max concurrent turns = %d, want 2", provider.maxConcurrent())
+	}
+}
+
+func TestManagerCancelsAndExpiresRunsWaitingForConcurrencySlot(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		expiry func() time.Time
+		cancel bool
+		status Status
+	}{
+		{name: "cancel", expiry: func() time.Time { return time.Now().Add(time.Hour) }, cancel: true, status: StatusCanceled},
+		{name: "grant expiry", expiry: func() time.Time { return time.Now().Add(50 * time.Millisecond) }, status: StatusGrantExpired},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider := newBlockingProvider()
+			manager, err := NewManager(Config{Provider: provider, MaxQueue: 1, MaxConcurrentRuns: 1, Deadline: time.Second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer manager.Shutdown(context.Background())
+			active, err := manager.Submit(testRequest("run-active", "conversation-a", time.Now().Add(time.Hour)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runID := provider.waitStarted(t); runID != "run-active" {
+				t.Fatalf("active run = %q", runID)
+			}
+			waiting := make(chan string, 1)
+			manager.onSlotWait = func(runID string) { waiting <- runID }
+			blocked, err := manager.Submit(testRequest("run-waiting", "conversation-b", test.expiry()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runID := waitString(t, waiting); runID != "run-waiting" {
+				t.Fatalf("waiting run = %q", runID)
+			}
+			if test.cancel && !manager.Cancel("run-waiting") {
+				t.Fatal("Cancel() = false")
+			}
+			result := waitRunResult(t, blocked)
+			if result.Status != test.status {
+				t.Fatalf("waiting result = %#v, want %q", result, test.status)
+			}
+			if provider.startCount("run-waiting") != 0 {
+				t.Fatal("provider started a run while it was waiting for capacity")
+			}
+			provider.release("run-active")
+			if result := waitRunResult(t, active); result.Status != StatusCompleted {
+				t.Fatalf("active result = %#v", result)
+			}
+		})
+	}
+}
+
 func TestManagerCancelAndShutdownTerminateRuns(t *testing.T) {
 	canceledSession := &recordingSession{block: make(chan struct{})}
-	manager, err := NewManager(Config{Provider: &recordingProvider{session: canceledSession}, MaxQueue: 1, Deadline: time.Second})
+	manager, err := NewManager(Config{Provider: &recordingProvider{session: canceledSession}, MaxQueue: 1, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
@@ -257,7 +366,7 @@ func TestManagerCancelAndShutdownTerminateRuns(t *testing.T) {
 	}
 
 	shutdownSession := &recordingSession{block: make(chan struct{})}
-	shutdownManager, err := NewManager(Config{Provider: &recordingProvider{session: shutdownSession}, MaxQueue: 1, Deadline: time.Second})
+	shutdownManager, err := NewManager(Config{Provider: &recordingProvider{session: shutdownSession}, MaxQueue: 1, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		t.Fatalf("NewManager(shutdown) error = %v", err)
 	}
@@ -321,6 +430,16 @@ func (p *sessionRefProvider) sessionRefs() []string {
 	return refs
 }
 
+func (p *sessionRefProvider) stateKeys() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	keys := make([]string, 0, len(p.requests))
+	for _, request := range p.requests {
+		keys = append(keys, request.StateKey)
+	}
+	return keys
+}
+
 type sessionRefSession struct{ ref string }
 
 func (s *sessionRefSession) Turn(_ context.Context, request contracts.TurnRequest) (contracts.TurnResult, error) {
@@ -352,6 +471,112 @@ func (p *recordingProvider) Start(_ context.Context, request contracts.StartRequ
 	p.requests = append(p.requests, request)
 	p.mu.Unlock()
 	return p.session, nil
+}
+
+type blockingProvider struct {
+	mu        sync.Mutex
+	started   chan string
+	releases  map[string]chan struct{}
+	starts    map[string]int
+	active    int
+	maxActive int
+}
+
+func newBlockingProvider() *blockingProvider {
+	return &blockingProvider{started: make(chan string, 16), releases: make(map[string]chan struct{}), starts: make(map[string]int)}
+}
+
+func (p *blockingProvider) Start(_ context.Context, request contracts.StartRequest) (contracts.Session, error) {
+	p.mu.Lock()
+	p.starts[request.RunID]++
+	if p.releases[request.RunID] == nil {
+		p.releases[request.RunID] = make(chan struct{})
+	}
+	p.mu.Unlock()
+	return &blockingSession{provider: p, runID: request.RunID}, nil
+}
+
+func (p *blockingProvider) waitStarted(t *testing.T) string {
+	t.Helper()
+	select {
+	case runID := <-p.started:
+		return runID
+	case <-time.After(time.Second):
+		t.Fatal("provider turn did not start")
+		return ""
+	}
+}
+
+func (p *blockingProvider) release(runID string) {
+	p.mu.Lock()
+	channel := p.releases[runID]
+	p.mu.Unlock()
+	close(channel)
+}
+
+func (p *blockingProvider) startCount(runID string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.starts[runID]
+}
+
+func (p *blockingProvider) maxConcurrent() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.maxActive
+}
+
+type blockingSession struct {
+	provider *blockingProvider
+	runID    string
+}
+
+func (s *blockingSession) Turn(ctx context.Context, _ contracts.TurnRequest) (contracts.TurnResult, error) {
+	s.provider.mu.Lock()
+	s.provider.active++
+	if s.provider.active > s.provider.maxActive {
+		s.provider.maxActive = s.provider.active
+	}
+	release := s.provider.releases[s.runID]
+	s.provider.mu.Unlock()
+	s.provider.started <- s.runID
+	select {
+	case <-release:
+	case <-ctx.Done():
+		s.provider.mu.Lock()
+		s.provider.active--
+		s.provider.mu.Unlock()
+		return contracts.TurnResult{}, ctx.Err()
+	}
+	s.provider.mu.Lock()
+	s.provider.active--
+	s.provider.mu.Unlock()
+	return contracts.TurnResult{FinalText: s.runID}, nil
+}
+
+func (*blockingSession) Cancel(context.Context) error { return nil }
+func (*blockingSession) Close(context.Context) error  { return nil }
+
+func waitString(t *testing.T, values <-chan string) string {
+	t.Helper()
+	select {
+	case value := <-values:
+		return value
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for value")
+		return ""
+	}
+}
+
+func waitRunResult(t *testing.T, handle *Handle) Result {
+	t.Helper()
+	select {
+	case result := <-handle.Done:
+		return result
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for run result")
+		return Result{}
+	}
 }
 
 type recordingSession struct {

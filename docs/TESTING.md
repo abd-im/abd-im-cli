@@ -11,7 +11,7 @@ go vet ./...
 默认测试不需要真实 Codex 或 OpenIM 凭据，覆盖：
 
 - setup、daemon 生命周期和私有 token 文件。
-- conversation 队列、run 持久化、取消和重启中断。
+- conversation 队列、跨会话有界并发、run 持久化、取消和重启中断。
 - run-private `abdim` CLI 与 method grant。
 - 消息窗口、event-bound reply 和写操作幂等。
 - fake Codex app-server、fake ACP Agent 和 Stream reply。

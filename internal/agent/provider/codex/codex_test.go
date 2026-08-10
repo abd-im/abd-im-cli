@@ -162,7 +162,7 @@ func TestAdapterCreatesRunPrivateCLIConfiguration(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	runRoot := filepath.Join(adapter.config.WorkingDir, request.RunID)
-	configPath := filepath.Join(adapter.stateDir, "config.toml")
+	configPath := filepath.Join(adapter.stateDir, "conversations", request.StateKey, "config.toml")
 	config, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("read run config: %v", err)
@@ -185,6 +185,58 @@ func TestAdapterCreatesRunPrivateCLIConfiguration(t *testing.T) {
 	}
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("persistent Codex state was removed after close: %v", err)
+	}
+}
+
+func TestAdapterScopesPersistentStateByStateKey(t *testing.T) {
+	adapter := newAdapter(t, "", false)
+	first := startRequest()
+	firstPaths, err := adapter.prepareRun(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.RunID = "run-2"
+	secondPaths, err := adapter.prepareRun(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third := first
+	third.RunID = "run-3"
+	third.StateKey = strings.Repeat("b", 64)
+	thirdPaths, err := adapter.prepareRun(third)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstPaths.home != secondPaths.home {
+		t.Fatalf("same state key homes = %q and %q", firstPaths.home, secondPaths.home)
+	}
+	if firstPaths.home == thirdPaths.home {
+		t.Fatalf("different state keys shared home %q", firstPaths.home)
+	}
+	for _, path := range []string{firstPaths.home, thirdPaths.home} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat state directory %q: %v", path, err)
+		}
+		if info.Mode().Perm() != 0o700 {
+			t.Fatalf("state directory %q mode = %v", path, info.Mode())
+		}
+	}
+}
+
+func TestAdapterRejectsInvalidStateKeyBeforeCreatingRunFiles(t *testing.T) {
+	adapter := newAdapter(t, "", false)
+	for _, stateKey := range []string{"", "short", strings.Repeat("A", 64), strings.Repeat("g", 64), "../" + strings.Repeat("a", 61)} {
+		request := startRequest()
+		request.StateKey = stateKey
+		request.RunID = "invalid-state"
+		if _, err := adapter.Start(context.Background(), request); err == nil {
+			t.Fatalf("Start() accepted state key %q", stateKey)
+		}
+		if _, err := os.Stat(filepath.Join(adapter.config.WorkingDir, request.RunID)); !os.IsNotExist(err) {
+			t.Fatalf("invalid state key created run files: %v", err)
+		}
 	}
 }
 
@@ -255,7 +307,7 @@ func newAdapter(t *testing.T, capture string, block bool) *Adapter {
 }
 
 func startRequest() contracts.StartRequest {
-	return contracts.StartRequest{ProfileID: "work", RunID: "run-1", GrantCredential: "grant-1", Proxy: &testkit.FakeProxy{}}
+	return contracts.StartRequest{ProfileID: "work", RunID: "run-1", StateKey: strings.Repeat("a", 64), GrantCredential: "grant-1", Proxy: &testkit.FakeProxy{}}
 }
 
 func waitForFile(path string, timeout time.Duration) error {

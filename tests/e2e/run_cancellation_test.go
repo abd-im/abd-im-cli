@@ -61,7 +61,7 @@ func TestGrantExpiryCancelsRunAndClosesProxyE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := run.NewManager(run.Config{Provider: provider, MaxQueue: 1, Deadline: time.Second})
+	manager, err := run.NewManager(run.Config{Provider: provider, MaxQueue: 1, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func newCancellationInbound(t *testing.T, grantTTL time.Duration) *cancellationI
 		t.Fatal(err)
 	}
 	provider := newCancellationProvider()
-	manager, err := run.NewManager(run.Config{Provider: provider, MaxQueue: 1, Deadline: time.Second})
+	manager, err := run.NewManager(run.Config{Provider: provider, MaxQueue: 1, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		_ = store.Close()
 		t.Fatal(err)

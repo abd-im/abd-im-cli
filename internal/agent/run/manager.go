@@ -1,8 +1,11 @@
-// Package run serializes provider turns and owns their cancellation lifecycle.
+// Package run schedules conversation-serialized provider turns with bounded
+// cross-conversation concurrency and owns their cancellation lifecycle.
 package run
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -60,15 +63,16 @@ type Handle struct {
 	Done  <-chan Result
 }
 
-// Config fixes the single provider adapter and queue/turn limits for a daemon.
+// Config fixes the provider adapter and queue, concurrency, and turn limits.
 type Config struct {
-	Provider         contracts.Provider
-	Sessions         SessionStore
-	SessionNamespace string
-	MaxQueue         int
-	Deadline         time.Duration
-	Observer         Observer
-	OnError          func(error)
+	Provider          contracts.Provider
+	Sessions          SessionStore
+	SessionNamespace  string
+	MaxQueue          int
+	MaxConcurrentRuns int
+	Deadline          time.Duration
+	Observer          Observer
+	OnError           func(error)
 }
 
 // SessionStore persists the opaque provider state assigned to each IM conversation.
@@ -110,6 +114,7 @@ type Manager struct {
 	sessions         SessionStore
 	sessionNamespace string
 	maxQueue         int
+	slots            chan struct{}
 	deadline         time.Duration
 	observer         Observer
 	onError          func(error)
@@ -120,15 +125,17 @@ type Manager struct {
 	stopped       bool
 	workers       sync.WaitGroup
 
-	turnMu sync.Mutex
+	// onSlotWait is a package-private synchronization point for deterministic
+	// cancellation tests. Production managers leave it nil.
+	onSlotWait func(string)
 }
 
 func NewManager(config Config) (*Manager, error) {
 	if config.Provider == nil {
 		return nil, errors.New("provider is required")
 	}
-	if config.MaxQueue <= 0 || config.Deadline <= 0 {
-		return nil, errors.New("positive queue size and turn deadline are required")
+	if config.MaxQueue <= 0 || config.MaxConcurrentRuns <= 0 || config.Deadline <= 0 {
+		return nil, errors.New("positive queue size, concurrent run limit, and turn deadline are required")
 	}
 	if config.Sessions != nil && strings.TrimSpace(config.SessionNamespace) == "" {
 		return nil, errors.New("session namespace is required with a session store")
@@ -138,6 +145,7 @@ func NewManager(config Config) (*Manager, error) {
 		sessions:         config.Sessions,
 		sessionNamespace: config.SessionNamespace,
 		maxQueue:         config.MaxQueue,
+		slots:            make(chan struct{}, config.MaxConcurrentRuns),
 		deadline:         config.Deadline,
 		observer:         config.Observer,
 		onError:          config.OnError,
@@ -263,8 +271,18 @@ func (m *Manager) execute(item *job) {
 		return
 	}
 
-	m.turnMu.Lock()
-	defer m.turnMu.Unlock()
+	waitContext, waitCancel := context.WithDeadline(item.context, item.request.GrantExpiresAt)
+	defer waitCancel()
+	if err := m.acquireSlot(waitContext, item.request.ID); err != nil {
+		status := deadlineStatus(item.request.GrantExpiresAt)
+		if canceledStatus, canceled := item.cancellation(); canceled {
+			status = canceledStatus
+		}
+		m.complete(item, Result{RunID: item.request.ID, Status: status, Err: err})
+		m.remove(item.request.ID)
+		return
+	}
+	defer func() { <-m.slots }()
 	if status, canceled := item.cancellation(); canceled {
 		m.complete(item, Result{RunID: item.request.ID, Status: status})
 		m.remove(item.request.ID)
@@ -290,6 +308,7 @@ func (m *Manager) execute(item *job) {
 	startRequest := contracts.StartRequest{
 		ProfileID:       item.request.ProfileID,
 		RunID:           item.request.ID,
+		StateKey:        providerStateKey(item.request.ProfileID, item.request.ConversationID),
 		GrantCredential: item.request.GrantCredential,
 		AllowedMethods:  append([]string(nil), item.request.AllowedMethods...),
 		Proxy:           item.request.Proxy,
@@ -354,6 +373,37 @@ func (m *Manager) execute(item *job) {
 		m.complete(item, Result{RunID: item.request.ID, Status: StatusCompleted, Turn: result})
 	}
 	m.remove(item.request.ID)
+}
+
+func (m *Manager) acquireSlot(ctx context.Context, runID string) error {
+	select {
+	case m.slots <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-m.slots
+			return err
+		}
+		return nil
+	default:
+	}
+	if m.onSlotWait != nil {
+		m.onSlotWait(runID)
+	}
+	select {
+	case m.slots <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-m.slots
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func providerStateKey(profileID, conversationID string) string {
+	input := fmt.Sprintf("abdim-provider-state-v1:%d:%s:%d:%s", len(profileID), profileID, len(conversationID), conversationID)
+	digest := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(digest[:])
 }
 
 func (m *Manager) complete(item *job, result Result) {

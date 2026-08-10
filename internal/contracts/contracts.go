@@ -255,8 +255,11 @@ type Provider interface {
 }
 
 type StartRequest struct {
-	ProfileID       string
-	RunID           string
+	ProfileID string
+	RunID     string
+	// StateKey is a stable, opaque key for provider state shared by runs in
+	// the same conversation. It must not contain the conversation ID itself.
+	StateKey        string
 	SessionRef      string
 	GrantCredential string
 	// AllowedMethods is the fixed method snapshot selected for this run.

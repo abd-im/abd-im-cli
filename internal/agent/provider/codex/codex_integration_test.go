@@ -76,7 +76,7 @@ func TestRealCodexAppServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, err := adapter.Start(ctx, contracts.StartRequest{
-		ProfileID: "real-codex", RunID: "real-codex", GrantCredential: credential,
+		ProfileID: "real-codex", RunID: "real-codex", StateKey: strings.Repeat("a", 64), GrantCredential: credential,
 		AllowedMethods: []string{"message.history"}, Proxy: runProxy,
 	})
 	if err != nil {

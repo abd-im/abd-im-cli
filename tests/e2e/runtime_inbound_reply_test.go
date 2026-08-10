@@ -142,7 +142,7 @@ func newRuntimeHarness(t *testing.T, databasePath, lockPath, socketPath string) 
 	}
 	session := &testkit.FakeSession{TurnResults: []contracts.TurnResult{{FinalText: "e2e final response"}}}
 	provider := &testkit.FakeProvider{Session: session}
-	runs, err := run.NewManager(run.Config{Provider: provider, MaxQueue: 2, Deadline: time.Second})
+	runs, err := run.NewManager(run.Config{Provider: provider, MaxQueue: 2, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		_ = store.Close()
 		t.Fatalf("new run manager: %v", err)

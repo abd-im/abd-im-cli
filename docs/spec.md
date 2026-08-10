@@ -9,7 +9,7 @@ app-server；其他 Agent 将来通过保留的 ACP adapter 接入。实现应�
 ## 当前要求
 
 1. 以 OpenIM `conversation_id` 区分会话，回复不能串到其他会话。
-2. 同一会话的 run 顺序执行，run 状态可持久化、查询和取消。
+2. 同一会话的 run 顺序执行，不同会话最多并行两个 run；run 状态可持久化、查询和取消。
 3. Codex 直接使用 `codex app-server`，不能依赖 ACP wrapper。
 4. ACP adapter 保留给后续其他 Agent，但不影响 Codex 主路径。
 5. Agent 通过 run-private `abdim` CLI 读取或修改 IM 数据。
@@ -39,6 +39,7 @@ app-server；其他 Agent 将来通过保留的 ACP adapter 接入。实现应�
 
 - 两个 conversation 的 event、run、queue 和 reply slot 不混用。
 - 同一 conversation 的多个 run 保持顺序。
+- 两个不同 conversation 可以同时执行，profile 总并发不超过两个 run。
 - 真实 Codex 能启动 app-server、执行 `abdim commands` 并调用授权 IM 方法。
 - tools disabled 时命令列表为空但仍能回复；enabled 时固定方法可调用。
 - provider 不能调用 owner 的 run/operation 管理方法。

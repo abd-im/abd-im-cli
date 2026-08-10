@@ -77,7 +77,7 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("Codex provider context is unavailable")
 	}
-	if strings.TrimSpace(request.ProfileID) == "" || !validRunID(request.RunID) || request.Proxy == nil {
+	if strings.TrimSpace(request.ProfileID) == "" || !validRunID(request.RunID) || !validStateKey(request.StateKey) || request.Proxy == nil {
 		return nil, errors.New("Codex provider start request is invalid")
 	}
 	runPaths, err := a.prepareRun(request)
@@ -159,7 +159,7 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 		_ = session.Close(context.Background())
 		return nil, errors.New("notify Codex app-server initialization")
 	}
-	settings, err := configuredThreadSettings(filepath.Join(a.stateDir, "config.toml"))
+	settings, err := configuredThreadSettings(filepath.Join(runPaths.home, "config.toml"))
 	if err != nil {
 		_ = session.Close(context.Background())
 		return nil, err
@@ -843,9 +843,10 @@ type runPathSet struct {
 }
 
 func (a *Adapter) prepareRun(request contracts.StartRequest) (runPathSet, error) {
+	conversationsDir := filepath.Join(a.stateDir, "conversations")
 	paths := runPathSet{
 		root:    filepath.Join(a.config.WorkingDir, request.RunID),
-		home:    a.stateDir,
+		home:    filepath.Join(conversationsDir, request.StateKey),
 		workDir: filepath.Join(a.config.WorkingDir, request.RunID, "work"),
 		socket:  filepath.Join(a.config.WorkingDir, request.RunID, "work", ".abdim.sock"),
 	}
@@ -856,7 +857,7 @@ func (a *Adapter) prepareRun(request contracts.StartRequest) (runPathSet, error)
 		_ = os.RemoveAll(paths.root)
 		return runPathSet{}, err
 	}
-	for _, directory := range []string{paths.root, paths.home, paths.workDir} {
+	for _, directory := range []string{a.stateDir, conversationsDir, paths.root, paths.home, paths.workDir} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return cleanup(fmt.Errorf("create Codex run directory: %w", err))
 		}
@@ -975,6 +976,18 @@ func validRunID(value string) bool {
 	for _, character := range value {
 		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') &&
 			(character < '0' || character > '9') && character != '-' && character != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func validStateKey(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}
 	}

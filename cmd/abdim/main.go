@@ -433,7 +433,7 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	}
 	runs, err := runmanager.NewManager(runmanager.Config{
 		Provider: agent, Sessions: store, SessionNamespace: item.Agent,
-		MaxQueue: 2, Deadline: 2 * time.Minute, Observer: runTracker,
+		MaxQueue: 2, MaxConcurrentRuns: 2, Deadline: 2 * time.Minute, Observer: runTracker,
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)

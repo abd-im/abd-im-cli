@@ -384,7 +384,7 @@ func newHarness(t *testing.T, blockTurn bool) *harness {
 	}
 	session := &recordingSession{block: blockTurn}
 	provider := &recordingProvider{session: session}
-	runs, err := run.NewManager(run.Config{Provider: provider, MaxQueue: 2, Deadline: time.Second})
+	runs, err := run.NewManager(run.Config{Provider: provider, MaxQueue: 2, MaxConcurrentRuns: 2, Deadline: time.Second})
 	if err != nil {
 		_ = store.Close()
 		t.Fatalf("run.NewManager() error = %v", err)
