@@ -11,8 +11,6 @@ import (
 
 var (
 	ErrListenerUnset = errors.New("fake SDK event listener is not configured")
-	ErrProxyClosed   = errors.New("fake tool proxy is closed")
-	ErrNoProxyResult = errors.New("fake tool proxy has no configured result")
 )
 
 // FakeSDK records lifecycle calls and emits normalized events without an SDK.
@@ -181,71 +179,8 @@ func (f *FakeSession) CloseCount() int {
 	return f.closeCount
 }
 
-// FakeProxy records tool calls without exposing a daemon connection.
-type FakeProxy struct {
-	mu sync.Mutex
-
-	CallFunc func(context.Context, contracts.Request) (contracts.Response, error)
-	CallErr  error
-	Response *contracts.Response
-	CloseErr error
-
-	calls      []contracts.Request
-	closed     bool
-	closeCount int
-}
-
-func (f *FakeProxy) Call(ctx context.Context, request contracts.Request) (contracts.Response, error) {
-	f.mu.Lock()
-	f.calls = append(f.calls, request)
-	if f.closed {
-		f.mu.Unlock()
-		return contracts.Response{}, ErrProxyClosed
-	}
-	call := f.CallFunc
-	err := f.CallErr
-	var response contracts.Response
-	if f.Response != nil {
-		response = *f.Response
-	}
-	hasResponse := f.Response != nil
-	f.mu.Unlock()
-
-	if call != nil {
-		return call(ctx, request)
-	}
-	if err != nil {
-		return contracts.Response{}, err
-	}
-	if !hasResponse {
-		return contracts.Response{}, ErrNoProxyResult
-	}
-	return response, nil
-}
-
-func (f *FakeProxy) Close(context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.closed = true
-	f.closeCount++
-	return f.CloseErr
-}
-
-func (f *FakeProxy) Calls() []contracts.Request {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]contracts.Request(nil), f.calls...)
-}
-
-func (f *FakeProxy) CloseCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.closeCount
-}
-
 var (
-	_ contracts.SDK       = (*FakeSDK)(nil)
-	_ contracts.Provider  = (*FakeProvider)(nil)
-	_ contracts.Session   = (*FakeSession)(nil)
-	_ contracts.ToolProxy = (*FakeProxy)(nil)
+	_ contracts.SDK      = (*FakeSDK)(nil)
+	_ contracts.Provider = (*FakeProvider)(nil)
+	_ contracts.Session  = (*FakeSession)(nil)
 )

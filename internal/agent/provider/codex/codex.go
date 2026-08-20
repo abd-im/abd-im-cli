@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/abd-im/abd-im-cli/internal/agent/access"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
+	"github.com/abd-im/abd-im-cli/skills"
 )
 
 const defaultInitializeTimeout = 30 * time.Second
@@ -77,7 +77,7 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("Codex provider context is unavailable")
 	}
-	if strings.TrimSpace(request.ProfileID) == "" || !validRunID(request.RunID) || !validStateKey(request.StateKey) || request.Proxy == nil {
+	if strings.TrimSpace(request.ProfileID) == "" || !validRunID(request.RunID) || !validStateKey(request.StateKey) {
 		return nil, errors.New("Codex provider start request is invalid")
 	}
 	runPaths, err := a.prepareRun(request)
@@ -85,28 +85,13 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 		return nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(runPaths.root) }
-	accessServer, err := access.Listen(runPaths.socket, request.Proxy)
-	if err != nil {
-		cleanup()
-		return nil, err
-	}
 	executable, err := exec.LookPath(a.config.Executable)
 	if err != nil {
-		_ = accessServer.Close()
 		cleanup()
 		return nil, errors.New("Codex executable is unavailable")
 	}
 	processContext, cancel := context.WithCancel(context.Background())
-	environment, err := access.Environment(runEnvironment(a.config.Environment, runPaths.home, runPaths.workDir), a.config.CLICommand, access.Context{
-		Socket: runPaths.socket, ProfileID: request.ProfileID, RunID: request.RunID,
-		Grant: request.GrantCredential, AllowedMethods: request.AllowedMethods,
-	})
-	if err != nil {
-		cancel()
-		_ = accessServer.Close()
-		cleanup()
-		return nil, err
-	}
+	environment := append(runEnvironment(a.config.Environment, runPaths.home, runPaths.workDir), "ABDIM_CLI="+a.config.CLICommand)
 	command := exec.CommandContext(processContext, executable, "app-server", "--listen", "stdio://")
 	command.Dir = runPaths.workDir
 	command.Env = environment
@@ -115,21 +100,18 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		cancel()
-		_ = accessServer.Close()
 		cleanup()
 		return nil, errors.New("create Codex stdin pipe")
 	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		cancel()
-		_ = accessServer.Close()
 		cleanup()
 		return nil, errors.New("create Codex stdout pipe")
 	}
 	command.Stderr = io.Discard
 	if err := command.Start(); err != nil {
 		cancel()
-		_ = accessServer.Close()
 		cleanup()
 		return nil, fmt.Errorf("start Codex app-server: %w", err)
 	}
@@ -140,7 +122,6 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 		cancel:  cancel,
 		pending: make(map[int]chan rpcResult),
 		done:    make(chan struct{}),
-		access:  accessServer,
 		cleanup: cleanup,
 	}
 	go session.read(stdout)
@@ -298,7 +279,6 @@ type session struct {
 	waitErr  error
 	done     chan struct{}
 	close    sync.Once
-	access   *access.Server
 	cleanup  func()
 }
 
@@ -375,9 +355,6 @@ func (s *session) closeProcess() {
 			s.finishTurn(turn, "", errors.New("Codex turn interrupted"))
 		}
 		_ = s.stdin.Close()
-		if s.access != nil {
-			_ = s.access.Close()
-		}
 		terminateProcessGroup(s.command)
 		s.cancel()
 	})
@@ -396,9 +373,6 @@ func (s *session) read(reader io.Reader) {
 
 func (s *session) wait() {
 	err := s.command.Wait()
-	if s.access != nil {
-		_ = s.access.Close()
-	}
 	if s.cleanup != nil {
 		s.cleanup()
 	}
@@ -839,7 +813,6 @@ type runPathSet struct {
 	root    string
 	home    string
 	workDir string
-	socket  string
 }
 
 func (a *Adapter) prepareRun(request contracts.StartRequest) (runPathSet, error) {
@@ -848,7 +821,6 @@ func (a *Adapter) prepareRun(request contracts.StartRequest) (runPathSet, error)
 		root:    filepath.Join(a.config.WorkingDir, request.RunID),
 		home:    filepath.Join(conversationsDir, request.StateKey),
 		workDir: filepath.Join(a.config.WorkingDir, request.RunID, "work"),
-		socket:  filepath.Join(a.config.WorkingDir, request.RunID, "work", ".abdim.sock"),
 	}
 	if err := os.RemoveAll(paths.root); err != nil {
 		return runPathSet{}, fmt.Errorf("remove previous Codex run directory: %w", err)
@@ -864,6 +836,9 @@ func (a *Adapter) prepareRun(request contracts.StartRequest) (runPathSet, error)
 		if err := os.Chmod(directory, 0o700); err != nil {
 			return cleanup(fmt.Errorf("secure Codex run directory: %w", err))
 		}
+	}
+	if err := skills.InstallABD(paths.workDir); err != nil {
+		return cleanup(fmt.Errorf("install ABD IM skill: %w", err))
 	}
 	if err := copyCodexAuth(filepath.Join(a.sourceCodexHome, "auth.json"), filepath.Join(paths.home, "auth.json")); err != nil {
 		return cleanup(fmt.Errorf("copy Codex credentials: %w", err))
@@ -898,7 +873,7 @@ func writeRunConfig(sourcePath, path string) error {
 		"[shell_environment_policy]\n" +
 		"inherit = \"all\"\n" +
 		"ignore_default_excludes = true\n" +
-		"include_only = [\"PATH\", \"ABDIM_CLI\", \"ABDIM_AGENT_SOCKET\", \"ABDIM_AGENT_PROFILE\", \"ABDIM_AGENT_RUN\", \"ABDIM_AGENT_GRANT\", \"ABDIM_AGENT_METHODS\"]\n"
+		"include_only = [\"PATH\", \"ABDIM_CLI\", \"ABDIM_PROFILE\"]\n"
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		return err
 	}

@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
-	"github.com/abd-im/abd-im-cli/internal/profile"
 )
 
 // State describes the daemon's SDK lifecycle state.
@@ -32,30 +31,24 @@ type SDKFactory func() contracts.SDK
 // LoginMgr is the daemon-owned lifecycle bridge for exactly one profile.
 type LoginMgr struct {
 	factory      SDKFactory
-	lockPath     string
 	eventHandler contracts.EventListener
 
 	mu    sync.RWMutex
 	state State
 	err   error
 	sdk   contracts.SDK
-	lock  *profile.Lock
 }
 
 // NewLoginMgr creates a bridge. It does not allocate an SDK context or acquire
 // the profile lock until Start is called.
-func NewLoginMgr(factory SDKFactory, lockPath string, eventHandler contracts.EventListener) (*LoginMgr, error) {
+func NewLoginMgr(factory SDKFactory, eventHandler contracts.EventListener) (*LoginMgr, error) {
 	if factory == nil {
 		return nil, errors.New("SDK factory is required")
 	}
-	if lockPath == "" {
-		return nil, errors.New("profile lock path is required")
-	}
-	return &LoginMgr{factory: factory, lockPath: lockPath, eventHandler: eventHandler, state: StateNew}, nil
+	return &LoginMgr{factory: factory, eventHandler: eventHandler, state: StateNew}, nil
 }
 
-// Start acquires exclusive profile ownership and initializes the SDK in the
-// prescribed order. A failure leaves no partially-ready bridge behind.
+// Start initializes one SDK context in the prescribed order.
 func (m *LoginMgr) Start(ctx context.Context) error {
 	m.mu.Lock()
 	if m.state != StateNew {
@@ -65,26 +58,14 @@ func (m *LoginMgr) Start(ctx context.Context) error {
 	m.state = StateStarting
 	m.mu.Unlock()
 
-	lock, err := profile.AcquireLock(m.lockPath)
-	if err != nil {
-		if errors.Is(err, profile.ErrLocked) {
-			m.fail(StateLocked, err)
-			return err
-		}
-		m.fail(StateDegraded, err)
-		return err
-	}
-
 	sdk := m.factory()
 	if sdk == nil {
-		_ = lock.Release()
 		err := errors.New("SDK factory returned nil")
 		m.fail(StateDegraded, err)
 		return err
 	}
 
 	m.mu.Lock()
-	m.lock = lock
 	m.sdk = sdk
 	m.mu.Unlock()
 
@@ -124,8 +105,7 @@ func (m *LoginMgr) Err() error {
 	return m.err
 }
 
-// Shutdown stops event delivery, shuts down the SDK, and releases exclusive
-// profile ownership. It is safe after a failed or repeated Start attempt.
+// Shutdown stops event delivery and releases the SDK context.
 func (m *LoginMgr) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
 	if m.state == StateStopped {
@@ -133,9 +113,7 @@ func (m *LoginMgr) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	sdk := m.sdk
-	lock := m.lock
 	m.sdk = nil
-	m.lock = nil
 	m.state = StateStopped
 	m.mu.Unlock()
 
@@ -143,11 +121,6 @@ func (m *LoginMgr) Shutdown(ctx context.Context) error {
 	if sdk != nil {
 		if err := sdk.Shutdown(ctx); err != nil {
 			result = fmt.Errorf("shutdown SDK: %w", err)
-		}
-	}
-	if lock != nil {
-		if err := lock.Release(); err != nil && result == nil {
-			result = fmt.Errorf("release profile lock: %w", err)
 		}
 	}
 	return result
@@ -173,16 +146,11 @@ func (m *LoginMgr) fail(state State, err error) {
 func (m *LoginMgr) failAndRelease(ctx context.Context, err error) {
 	m.mu.Lock()
 	sdk := m.sdk
-	lock := m.lock
-	m.lock = nil
 	m.sdk = nil
 	m.state = StateDegraded
 	m.err = err
 	m.mu.Unlock()
 	if sdk != nil {
 		_ = sdk.Shutdown(ctx)
-	}
-	if lock != nil {
-		_ = lock.Release()
 	}
 }

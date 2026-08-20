@@ -43,27 +43,27 @@ func TestOpenIMProfileReadsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	profile, err := reader.Profile(ctx, service.OwnerAccess())
+	profile, err := reader.Profile(ctx)
 	if err != nil || profile.Data.ID != "integration" {
 		t.Fatalf("profile.get = %#v, %v", profile, err)
 	}
 	assertProfileIntegrationMeta(t, profile.Meta, ProfileGet)
-	self, err := reader.Self(ctx, service.OwnerAccess())
+	self, err := reader.Self(ctx)
 	if err != nil || self.Data.ID != userID {
 		t.Fatalf("user.me = %#v, %v", self, err)
 	}
 	assertProfileIntegrationMeta(t, self.Meta, UserMe)
-	users, err := reader.Users(ctx, service.OwnerAccess(), []string{userID})
+	users, err := reader.Users(ctx, []string{userID})
 	if err != nil || len(users.Data) != 1 || users.Data[0].ID != userID {
 		t.Fatalf("user.get = %#v, %v", users, err)
 	}
 	assertProfileIntegrationMeta(t, users.Meta, UserGet)
-	daemon, err := reader.Daemon(ctx, service.OwnerAccess())
+	daemon, err := reader.Daemon(ctx)
 	if err != nil || daemon.Data.State != "ready" {
 		t.Fatalf("daemon.status = %#v, %v", daemon, err)
 	}
 	assertProfileIntegrationMeta(t, daemon.Meta, DaemonGet)
-	doctor, err := reader.Doctor(ctx, service.OwnerAccess())
+	doctor, err := reader.Doctor(ctx)
 	if err != nil || !doctor.Data.OK {
 		t.Fatalf("doctor.get = %#v, %v", doctor, err)
 	}

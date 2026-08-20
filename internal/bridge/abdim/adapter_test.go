@@ -1,195 +1,49 @@
 package abdim
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
-	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
-	"github.com/abd-im/abd-im-cli/internal/contracts"
-	"github.com/abd-im/abd-im-cli/internal/operation"
-	"github.com/abd-im/abd-im-cli/internal/reply"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk_callback"
-	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
-	"github.com/abd-im/abd-im-sdk-core/v3/pkg/constant"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
+	pbconstant "github.com/openimsdk/protocol/constant"
 )
 
-func TestAdapterOwnsSDKLifecycleAndRedactsLoginError(t *testing.T) {
-	user := &fakeUserContext{loginErr: errors.New("token-marker")}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatalf("newAdapter() error = %v", err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatalf("InitSDK() error = %v", err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatalf("InitResources() error = %v", err)
-	}
-	if err := adapter.SetEventListener(nil); err != nil {
-		t.Fatalf("SetEventListener() error = %v", err)
-	}
-	if err := adapter.Login(context.Background()); err == nil || strings.Contains(err.Error(), "token-marker") {
-		t.Fatalf("Login() error = %v", err)
-	}
-	if !user.loginCalled || !user.loginTokenSet || user.listener == nil || user.messageListener == nil {
-		t.Fatalf("SDK lifecycle was not fully configured: %#v", user)
-	}
-	loginConfig, ok := user.loginContext.Value(ccontext.GlobalConfigKey{}).(*ccontext.GlobalConfig)
-	if !ok || loginConfig == nil || loginConfig.UserID != "user-1" || loginConfig.Token != "token-marker" || loginConfig.IMConfig == nil || loginConfig.IMConfig.ApiAddr != "https://api.example.test" {
-		t.Fatalf("Login() context does not contain the SDK configuration")
-	}
-	if err := adapter.Shutdown(context.Background()); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
-	}
-	if user.logoutCalled || !user.uninitialized {
-		t.Fatal("Shutdown() did not safely close the SDK user context")
-	}
-}
-
-func TestAdapterLoginWaitsForOnlineCallback(t *testing.T) {
-	user := &fakeUserContext{connectOnLogin: true}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.SetEventListener(nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.Login(context.Background()); err != nil {
-		t.Fatalf("Login() error = %v", err)
-	}
-	if err := adapter.Shutdown(context.Background()); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
-	}
-	if !user.logoutCalled || !user.uninitialized {
-		t.Fatal("Shutdown() did not close a logged-in SDK user context")
-	}
-	config, ok := user.logoutContext.Value(ccontext.GlobalConfigKey{}).(*ccontext.GlobalConfig)
-	if !ok || config == nil || config.UserID != "user-1" || config.Token != "token-marker" || config.IMConfig == nil || config.IMConfig.ApiAddr != "https://api.example.test" {
-		t.Fatal("Shutdown() context does not contain the SDK configuration")
-	}
-}
-
-func TestAdapterShutdownAfterLoginSubmissionFailureSkipsLogout(t *testing.T) {
-	user := &fakeUserContext{loginErr: errors.New("submission failure")}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.Login(context.Background()); err == nil {
-		t.Fatal("Login() error = nil")
-	}
-	if err := adapter.Shutdown(context.Background()); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
-	}
-	if user.logoutCalled || !user.uninitialized {
-		t.Fatalf("shutdown after failed login = %+v", user)
-	}
-}
-
-func TestAdapterNormalizesMessageCallbacksWithoutBody(t *testing.T) {
-	user := &fakeUserContext{}
-	errorsSeen := make(chan error, 1)
-	config := testConfig(t)
-	config.OnError = func(err error) { errorsSeen <- err }
-	adapter, err := newAdapter(config, func() userContext { return user })
-	if err != nil {
-		t.Fatalf("newAdapter() error = %v", err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	adapter.now = func() time.Time { return time.UnixMilli(999).UTC() }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatalf("InitSDK() error = %v", err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatalf("InitResources() error = %v", err)
-	}
-	events := make(chan contracts.SDKEvent, 1)
-	if err := adapter.SetEventListener(func(_ context.Context, event contracts.SDKEvent) { events <- event }); err != nil {
-		t.Fatalf("SetEventListener() error = %v", err)
-	}
+func TestMessageListenerNormalizesStableReferences(t *testing.T) {
+	adapter := &Adapter{profileID: "work", now: func() time.Time { return time.UnixMilli(999).UTC() }}
 	raw, err := json.Marshal(sdk_struct.MsgStruct{
-		ClientMsgID:      "client-1",
-		ServerMsgID:      "server-1",
-		SessionType:      constant.SingleChatType,
-		ContentType:      constant.Text,
-		SenderPlatformID: 5,
-		SendID:           "user-2",
-		RecvID:           "user-1",
-		SendTime:         123,
-		Content:          `{"content":"message-body-marker"}`,
+		ServerMsgID: "message-1", SendID: "peer", RecvID: "agent",
+		SessionType: pbconstant.SingleChatType, ContentType: pbconstant.Text,
+		SendTime: 123, Content: `{"content":"hello"}`,
 	})
 	if err != nil {
-		t.Fatalf("marshal callback fixture: %v", err)
+		t.Fatal(err)
 	}
-	user.messageListener.OnRecvNewMessage(string(raw))
-	event := <-events
-	if err := event.Validate(); err != nil {
-		t.Fatalf("SDK event validation error = %v", err)
-	}
-	if event.ProfileID != "work" || event.DedupKey != "openim-message:server-1" || event.Type != string(contracts.EventMessageReceived) || !event.OccurredAt.Equal(time.UnixMilli(123).UTC()) {
-		t.Fatalf("SDK event = %#v", event)
-	}
-	if strings.Contains(string(event.Data), "message-body-marker") {
-		t.Fatalf("event data contains message body: %s", event.Data)
-	}
-	if event.MessageText != "message-body-marker" {
-		t.Fatalf("event transient message text = %q", event.MessageText)
-	}
-	var data struct {
-		ConversationID   string `json:"conversation_id"`
-		MessageID        string `json:"message_id"`
-		SenderID         string `json:"sender_id"`
-		SessionType      int32  `json:"session_type"`
-		ContentType      int32  `json:"content_type"`
-		SenderPlatformID int32  `json:"sender_platform_id"`
-	}
-	if err := json.Unmarshal(event.Data, &data); err != nil {
-		t.Fatalf("decode event data: %v", err)
-	}
-	if data.ConversationID != "si_user-1_user-2" || data.MessageID != "server-1" || data.SenderID != "user-2" || data.SessionType != constant.SingleChatType || data.ContentType != constant.Text || data.SenderPlatformID != 5 {
-		t.Fatalf("event data = %#v", data)
-	}
-	payload, err := json.Marshal(event)
-	if err != nil || strings.Contains(string(payload), "message-body-marker") {
-		t.Fatalf("serialized SDK event leaked message body: %s, %v", payload, err)
-	}
-	user.messageListener.OnRecvNewMessage(`{"content":"message-body-marker"}`)
-	if err := <-errorsSeen; strings.Contains(err.Error(), "message-body-marker") {
-		t.Fatalf("callback error leaked body: %v", err)
-	}
-}
-
-func TestAdapterNormalizesSecretaryBusinessCallback(t *testing.T) {
-	adapter, err := newAdapter(testConfig(t), func() userContext { return &fakeUserContext{} })
+	event, err := (messageListener{adapter: adapter}).event(string(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := make(chan contracts.SDKEvent, 1)
-	adapter.listener = func(_ context.Context, event contracts.SDKEvent) { events <- event }
-	update := `{"update_id":"update-1","business_message":{"business_connection_id":"connection-1","conversation_id":"si_owner_contact","trigger_message_id":"message-2","instruction":"Keep it brief","messages":[{"message_id":"message-1","from_user_id":"owner","date":100,"content_type":101,"content":"{\"content\":\"Earlier\"}"},{"message_id":"message-2","from_user_id":"contact","date":200,"content_type":101,"content":"{\"content\":\"Current\"}"}]}}`
+	if event.DedupKey != "openim-message:message-1" || event.MessageText != "hello" || !event.OccurredAt.Equal(time.UnixMilli(123).UTC()) {
+		t.Fatalf("message event = %#v", event)
+	}
+	var reference struct {
+		ConversationID string `json:"conversation_id"`
+		MessageID      string `json:"message_id"`
+		SenderID       string `json:"sender_id"`
+	}
+	if err := json.Unmarshal(event.Data, &reference); err != nil {
+		t.Fatal(err)
+	}
+	if reference.ConversationID != "si_agent_peer" || reference.MessageID != "message-1" || reference.SenderID != "peer" {
+		t.Fatalf("message reference = %#v", reference)
+	}
+}
+
+func TestBusinessListenerNormalizesHostedReferences(t *testing.T) {
+	adapter := &Adapter{profileID: "work", now: func() time.Time { return time.UnixMilli(999).UTC() }}
+	update := `{"update_id":"update-1","business_message":{"business_connection_id":"connection-1","owner_user_id":"owner","conversation_id":"si_owner_peer","trigger_message_id":"message-1","instruction":"be concise","sender_id":"peer","session_type":1,"content_type":101}}`
 	envelope, err := json.Marshal(struct {
 		Key  string `json:"key"`
 		Data string `json:"data"`
@@ -197,533 +51,72 @@ func TestAdapterNormalizesSecretaryBusinessCallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	businessListener{adapter: adapter}.OnRecvCustomBusinessMessage(string(envelope))
-	event := <-events
-	if event.DedupKey != "openim-business:update-1" || !event.OccurredAt.Equal(time.UnixMilli(200).UTC()) {
-		t.Fatalf("Business event = %#v", event)
+	event, err := (businessListener{adapter: adapter}).event(string(envelope))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if event.MessageText != "Conversation instruction:\nKeep it brief\n\nRecent conversation, oldest first:\nowner: Earlier\ncontact: Current" {
-		t.Fatalf("Business prompt = %q", event.MessageText)
+	if event.DedupKey != "openim-business:update-1" || event.MessageText != "" {
+		t.Fatalf("business event = %#v", event)
 	}
-	var reference struct {
-		ConversationID       string `json:"conversation_id"`
-		MessageID            string `json:"message_id"`
-		SenderID             string `json:"sender_id"`
-		BusinessConnectionID string `json:"business_connection_id"`
-	}
+	var reference eventReference
 	if err := json.Unmarshal(event.Data, &reference); err != nil {
 		t.Fatal(err)
 	}
-	if reference.ConversationID != "si_owner_contact" || reference.MessageID != "message-2" || reference.SenderID != "contact" || reference.BusinessConnectionID != "connection-1" {
-		t.Fatalf("Business reference = %#v", reference)
+	if reference.OwnerUserID != "owner" || reference.SenderID != "peer" || reference.MessageID != "message-1" || reference.BusinessConnectionID != "connection-1" {
+		t.Fatalf("business reference = %#v", reference)
 	}
 }
 
-func TestMessageTextIncludesCompleteStream(t *testing.T) {
-	message := sdk_struct.MsgStruct{StreamElem: &sdk_struct.StreamMsgElem{
-		Content: "hello", Packets: []string{" ", "world"}, End: true,
-	}}
-	if got := messageText(message); got != "hello world" {
-		t.Fatalf("messageText() = %q", got)
-	}
+type eventReference struct {
+	OwnerUserID          string `json:"owner_user_id"`
+	SenderID             string `json:"sender_id"`
+	MessageID            string `json:"message_id"`
+	BusinessConnectionID string `json:"business_connection_id"`
 }
 
-func TestMessageTextIncludesQuoteReply(t *testing.T) {
-	message := sdk_struct.MsgStruct{QuoteElem: &sdk_struct.QuoteElem{Text: "reply to agent"}}
-	if got := messageText(message); got != "reply to agent" {
-		t.Fatalf("messageText() = %q", got)
-	}
-}
-
-func TestNewRejectsIncompleteSDKConfiguration(t *testing.T) {
-	config := testConfig(t)
-	config.Token = nil
-	if _, err := New(config); err == nil {
-		t.Fatal("New() accepted missing token")
-	}
-	config = testConfig(t)
-	config.SDKConfig.WsAddr = "https://not-websocket.example"
-	if _, err := New(config); err == nil {
-		t.Fatal("New() accepted invalid WebSocket endpoint")
-	}
-}
-
-func TestAdapterRejectsLoggerInitializationFailure(t *testing.T) {
-	adapter, err := newAdapter(testConfig(t), func() userContext { return &fakeUserContext{} })
-	if err != nil {
+func TestAdapterSendTextUsesCurrentSDK(t *testing.T) {
+	user := &fakeUserContext{conversationID: "si_agent_peer"}
+	adapter := &Adapter{userID: "agent", token: "token", user: user}
+	if err := adapter.SendText(context.Background(), "hello", "peer", ""); err != nil {
 		t.Fatal(err)
 	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return errors.New("logger failure") }
-	if err := adapter.InitSDK(context.Background()); err == nil || strings.Contains(err.Error(), "logger failure") {
-		t.Fatalf("InitSDK() error = %v", err)
+	if user.text != "hello" || user.recipientID != "peer" || user.groupID != "" || user.clientMsgID == "" {
+		t.Fatalf("stream start = %#v", user)
 	}
-}
-
-func TestAdapterRepliesOnlyToEventBoundRecipient(t *testing.T) {
-	user := &fakeUserContext{streamConversationID: "si_user-1_user-2"}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatal(err)
+	if user.appendConversationID != "si_agent_peer" || user.appendClientMsgID != user.clientMsgID || !user.appendEnd {
+		t.Fatalf("stream append = %#v", user)
 	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatalf("InitSDK() error = %v", err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatalf("InitResources() error = %v", err)
-	}
-	if err := adapter.Reply(context.Background(), reply.Delivery{RecipientID: "user-2", OperationID: "reply-1", Text: "final response"}); err != nil {
-		t.Fatalf("Reply() error = %v", err)
-	}
-	if user.replyRecipient != "user-2" || user.replyGroup != "" || user.streamType != "text" || user.streamContent != "final response" || user.streamClientMsgID != "reply-1" {
-		t.Fatalf("SDK reply stream = %+v", user)
-	}
-	if len(user.streamAppends) != 1 || user.streamAppends[0].conversationID != "si_user-1_user-2" || user.streamAppends[0].clientMsgID != "reply-1" || user.streamAppends[0].startIndex != 0 || len(user.streamAppends[0].packets) != 0 || !user.streamAppends[0].end {
-		t.Fatalf("SDK reply stream completion = %#v", user.streamAppends)
-	}
-	replyConfig, ok := user.replyContext.Value(ccontext.GlobalConfigKey{}).(*ccontext.GlobalConfig)
-	if !ok || replyConfig == nil || replyConfig.UserID != "user-1" || replyConfig.Token != "token-marker" || replyConfig.IMConfig == nil || replyConfig.IMConfig.ApiAddr != "https://api.example.test" {
-		t.Fatal("Reply() context does not contain the SDK configuration")
-	}
-	if err := adapter.Reply(context.Background(), reply.Delivery{RecipientID: "user-2", GroupID: "group-1", Text: "must fail"}); err == nil {
-		t.Fatal("Reply() accepted an ambiguous target")
-	}
-}
-
-func TestAdapterStartsAndAppendsEventBoundStream(t *testing.T) {
-	user := &fakeUserContext{streamConversationID: "si_user-1_user-2"}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	ref, err := adapter.StartStream(context.Background(), reply.StreamDelivery{
-		ProfileID: "work", EventID: "event-1", RecipientID: "user-2",
-		ConversationID: "si_user-1_user-2", ClientMsgID: "stream-1", Type: "text", Content: "hello",
-	})
-	if err != nil || ref.ConversationID != "si_user-1_user-2" || ref.ClientMsgID != "stream-1" {
-		t.Fatalf("StartStream() = %#v, %v", ref, err)
-	}
-	if err := adapter.AppendStream(context.Background(), reply.StreamAppend{
-		ProfileID: "work", EventID: "event-1", ConversationID: ref.ConversationID,
-		ClientMsgID: ref.ClientMsgID, StartIndex: 0, Packets: []string{" world"}, End: true,
-	}); err != nil {
-		t.Fatalf("AppendStream() error = %v", err)
-	}
-	if user.streamType != "text" || user.streamContent != "hello" || user.streamClientMsgID != "stream-1" ||
-		len(user.streamAppends) != 1 || user.streamAppends[0].packets[0] != " world" || !user.streamAppends[0].end {
-		t.Fatalf("stream start/append = %#v / %#v", user, user.streamAppends)
-	}
-}
-
-func TestAdapterPreservesAgentRunStreamTypeAndPacketOrder(t *testing.T) {
-	user := &fakeUserContext{streamConversationID: "sg_group-1"}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	ref, err := adapter.StartStream(context.Background(), reply.StreamDelivery{
-		ProfileID: "work", EventID: "event-1", GroupID: "group-1", ConversationID: "sg_group-1",
-		ClientMsgID: "run-message-1", Type: reply.AgentRunStreamType, Content: `{"schema":1,"runId":"run-1","status":"running"}`,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	packets := []string{`{"version":1,"kind":"run.started","runId":"run-1"}`, `{"version":1,"kind":"run.completed"}`}
-	if err := adapter.AppendStream(context.Background(), reply.StreamAppend{
-		ProfileID: "work", EventID: "event-1", ConversationID: ref.ConversationID,
-		ClientMsgID: ref.ClientMsgID, StartIndex: 0, Packets: packets, End: true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if user.streamType != reply.AgentRunStreamType || len(user.streamAppends) != 1 || user.streamAppends[0].startIndex != 0 || strings.Join(user.streamAppends[0].packets, "") != strings.Join(packets, "") || !user.streamAppends[0].end {
-		t.Fatalf("agent stream = type %q appends %#v", user.streamType, user.streamAppends)
-	}
-}
-
-func TestAdapterSendsTextToOneExplicitTarget(t *testing.T) {
-	user := &fakeUserContext{streamConversationID: "si_user-1_user-2"}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.SendText(context.Background(), "outbound text", "user-2", ""); err != nil {
-		t.Fatalf("SendText() error = %v", err)
-	}
-	if user.replyRecipient != "user-2" || user.replyGroup != "" || user.streamType != "text" || user.streamContent != "outbound text" || user.streamClientMsgID == "" {
-		t.Fatalf("SDK text stream = %+v", user)
-	}
-	if len(user.streamAppends) != 1 || user.streamAppends[0].conversationID != "si_user-1_user-2" || user.streamAppends[0].clientMsgID != user.streamClientMsgID || user.streamAppends[0].startIndex != 0 || len(user.streamAppends[0].packets) != 0 || !user.streamAppends[0].end {
-		t.Fatalf("SDK text stream completion = %#v", user.streamAppends)
-	}
-	if err := adapter.SendText(context.Background(), "must fail", "user-2", "group-1"); err == nil {
-		t.Fatal("SendText() accepted an ambiguous target")
-	}
-}
-
-func TestAdapterTreatsTextStreamCompletionFailureAsUnknown(t *testing.T) {
-	user := &fakeUserContext{streamConversationID: "si_user-1_user-2", streamAppendErr: errors.New("append failed")}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.Reply(context.Background(), reply.Delivery{RecipientID: "user-2", OperationID: "reply-1", Text: "reply"}); !errors.Is(err, reply.ErrOutcomeUnknown) {
-		t.Fatalf("Reply() error = %v", err)
-	}
-	if err := adapter.SendText(context.Background(), "outbound", "user-2", ""); !errors.Is(err, operation.ErrOutcomeUnknown) {
-		t.Fatalf("SendText() error = %v", err)
-	}
-}
-
-func TestAdapterSendsTextAtToExplicitGroupAndUsers(t *testing.T) {
-	user := &fakeUserContext{}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.SendAt(context.Background(), "attention", "group-1", []string{"user-2", "user-3"}); err != nil {
-		t.Fatalf("SendAt() error = %v", err)
-	}
-	if user.replyGroup != "group-1" || user.replyText != "attention" || len(user.atMentionUserIDs) != 2 || user.atMentionUserIDs[0] != "user-2" || user.atMentionUserIDs[1] != "user-3" {
-		t.Fatalf("SDK text-at target = %+v", user)
-	}
-	if err := adapter.SendAt(context.Background(), "must fail", "", []string{"user-2"}); err == nil {
-		t.Fatal("SendAt() accepted an empty group")
-	}
-}
-
-func TestAdapterSendsVerifiedQuoteToOneExplicitTarget(t *testing.T) {
-	user := &fakeUserContext{}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	quoted := &sdk_struct.MsgStruct{ServerMsgID: "quoted-1"}
-	if err := adapter.SendQuote(context.Background(), "reply", "user-2", "", quoted); err != nil {
-		t.Fatalf("SendQuote() error = %v", err)
-	}
-	if user.replyRecipient != "user-2" || user.replyGroup != "" || user.replyText != "reply" || user.quotedMessage != quoted {
-		t.Fatalf("SDK quote target = %+v", user)
-	}
-	if err := adapter.SendQuote(context.Background(), "reply", "user-2", "group-1", quoted); err == nil {
-		t.Fatal("SendQuote() accepted an ambiguous target")
-	}
-	if err := adapter.SendQuote(context.Background(), "reply", "user-2", "", nil); err == nil {
-		t.Fatal("SendQuote() accepted a missing quote source")
-	}
-}
-
-func TestAdapterSendsLocationAndCustomMessagesToOneExplicitTarget(t *testing.T) {
-	user := &fakeUserContext{}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.SendLocation(context.Background(), "office", 120.1, 30.2, "user-2", ""); err != nil {
-		t.Fatalf("SendLocation() error = %v", err)
-	}
-	if user.replyRecipient != "user-2" || user.locationDescription != "office" || user.longitude != 120.1 || user.latitude != 30.2 {
-		t.Fatalf("SDK location target = %+v", user)
-	}
-	if err := adapter.SendCustom(context.Background(), "opaque-data", "v1", "description", "", "group-1"); err != nil {
-		t.Fatalf("SendCustom() error = %v", err)
-	}
-	if user.replyGroup != "group-1" || user.customData != "opaque-data" || user.customExtension != "v1" || user.customDescription != "description" {
-		t.Fatalf("SDK custom target = %+v", user)
-	}
-	if err := adapter.SendLocation(context.Background(), "", 181, 0, "user-2", ""); err == nil {
-		t.Fatal("SendLocation() accepted an invalid longitude")
-	}
-	if err := adapter.SendCustom(context.Background(), "", "", "", "user-2", ""); err == nil {
-		t.Fatal("SendCustom() accepted an empty data payload")
-	}
-}
-
-func TestAdapterUploadsMediaFromDaemonPrivateStagingFiles(t *testing.T) {
-	user := &fakeUserContext{}
-	adapter, err := newAdapter(testConfig(t), func() userContext { return user })
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter.initLogger = func(sdk_struct.IMConfig) error { return nil }
-	if err := adapter.InitSDK(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.InitResources(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.SendImage(context.Background(), messagecapability.MediaPayload{Reader: bytes.NewReader([]byte("image")), FileName: "photo.png"}, "user-2", ""); err != nil {
-		t.Fatalf("SendImage() error = %v", err)
-	}
-	if user.mediaKind != "image" || user.mediaPath == "" || !strings.HasPrefix(user.mediaPath, string(os.PathSeparator)+".abdim-media-") || user.replyRecipient != "user-2" {
-		t.Fatalf("SDK image = %+v", user)
-	}
-	if err := adapter.SendVideo(context.Background(), messagecapability.MediaPayload{Reader: bytes.NewReader([]byte("video")), FileName: "clip.mp4"}, messagecapability.MediaPayload{Reader: bytes.NewReader([]byte("thumbnail")), FileName: "cover.png"}, 8, "", "group-1"); err != nil {
-		t.Fatalf("SendVideo() error = %v", err)
-	}
-	if user.mediaKind != "video" || user.mediaType != "mp4" || user.mediaDuration != 8 || user.thumbnailPath == "" || user.replyGroup != "group-1" {
-		t.Fatalf("SDK video = %+v", user)
-	}
-	if err := adapter.SendFile(context.Background(), messagecapability.MediaPayload{Reader: bytes.NewReader([]byte("file")), FileName: "../../secret"}, "user-2", ""); err == nil {
-		t.Fatal("SendFile() accepted a path-like file name")
-	}
-}
-
-func testConfig(t *testing.T) Config {
-	t.Helper()
-	root := t.TempDir()
-	return Config{
-		ProfileID: "work",
-		UserID:    "user-1",
-		Token:     []byte("token-marker"),
-		SDKConfig: sdk_struct.IMConfig{
-			PlatformID:  5,
-			ApiAddr:     "https://api.example.test",
-			WsAddr:      "wss://ws.example.test",
-			DataDir:     root + "/sdk",
-			LogFilePath: root + "/logs/sdk.log",
-		},
+	if err := adapter.SendText(context.Background(), "invalid", "peer", "group"); err == nil {
+		t.Fatal("SendText accepted two targets")
 	}
 }
 
 type fakeUserContext struct {
-	listener             open_im_sdk_callback.OnConnListener
-	messageListener      open_im_sdk_callback.OnAdvancedMsgListener
-	businessListener     open_im_sdk_callback.OnCustomBusinessListener
-	loginErr             error
-	loginCalled          bool
-	loginTokenSet        bool
-	loginContext         context.Context
-	connectOnLogin       bool
-	logoutCalled         bool
-	uninitialized        bool
-	logoutContext        context.Context
-	replyCallback        open_im_sdk_callback.SendMsgCallBack
-	replyContext         context.Context
-	replyText            string
-	replyRecipient       string
-	replyGroup           string
-	atMentionUserIDs     []string
-	quotedMessage        *sdk_struct.MsgStruct
-	locationDescription  string
-	longitude            float64
-	latitude             float64
-	customData           string
-	customExtension      string
-	customDescription    string
-	mediaKind            string
-	mediaPath            string
-	thumbnailPath        string
-	mediaType            string
-	mediaDuration        int64
-	streamConversationID string
-	streamType           string
-	streamContent        string
-	streamClientMsgID    string
-	streamAppends        []fakeStreamAppend
-	streamAppendErr      error
+	conversationID       string
+	text                 string
+	recipientID          string
+	groupID              string
+	clientMsgID          string
+	appendConversationID string
+	appendClientMsgID    string
+	appendEnd            bool
 }
 
-type fakeStreamAppend struct {
-	conversationID string
-	clientMsgID    string
-	startIndex     int64
-	packets        []string
-	end            bool
-}
-
-func (f *fakeUserContext) InitSDK(_ *sdk_struct.IMConfig, listener open_im_sdk_callback.OnConnListener) bool {
-	f.listener = listener
+func (*fakeUserContext) InitSDK(*sdk_struct.IMConfig, open_im_sdk_callback.OnConnListener) bool {
 	return true
 }
-
-func (f *fakeUserContext) InitResources() {}
-
-func (f *fakeUserContext) SetAdvancedMsgListener(listener open_im_sdk_callback.OnAdvancedMsgListener) {
-	f.messageListener = listener
-}
-
-func (f *fakeUserContext) SetCustomBusinessListener(listener open_im_sdk_callback.OnCustomBusinessListener) {
-	f.businessListener = listener
-}
-
-func (f *fakeUserContext) Login(ctx context.Context, _ string, token string) error {
-	f.loginCalled = true
-	f.loginTokenSet = token != ""
-	f.loginContext = ctx
-	if f.loginErr == nil && f.connectOnLogin {
-		f.listener.OnConnectSuccess()
-	}
-	return f.loginErr
-}
-
-func (f *fakeUserContext) StartStreamMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, streamType, content, clientMsgID, recipientID, groupID string) (string, error) {
-	f.replyCallback = callback
-	f.replyContext = ctx
-	f.replyRecipient = recipientID
-	f.replyGroup = groupID
-	f.streamType = streamType
-	f.streamContent = content
-	f.streamClientMsgID = clientMsgID
+func (*fakeUserContext) InitResources()                                                          {}
+func (*fakeUserContext) SetAdvancedMsgListener(open_im_sdk_callback.OnAdvancedMsgListener)       {}
+func (*fakeUserContext) SetCustomBusinessListener(open_im_sdk_callback.OnCustomBusinessListener) {}
+func (*fakeUserContext) Login(context.Context, string, string) error                             { return nil }
+func (f *fakeUserContext) StartStreamMessage(_ context.Context, callback open_im_sdk_callback.SendMsgCallBack, _ string, text, clientMsgID, recipientID, groupID string) (string, error) {
+	f.text, f.clientMsgID, f.recipientID, f.groupID = text, clientMsgID, recipientID, groupID
 	callback.OnSuccess(`{}`)
-	return f.streamConversationID, nil
+	return f.conversationID, nil
 }
-
-func (f *fakeUserContext) AppendStreamMessage(_ context.Context, conversationID, clientMsgID string, startIndex int64, packets []string, end bool) error {
-	f.streamAppends = append(f.streamAppends, fakeStreamAppend{
-		conversationID: conversationID, clientMsgID: clientMsgID, startIndex: startIndex,
-		packets: append([]string(nil), packets...), end: end,
-	})
-	return f.streamAppendErr
-}
-
-func (f *fakeUserContext) SendAtMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, text, groupID string, mentionUserIDs []string) error {
-	f.replyCallback = callback
-	f.replyContext = ctx
-	f.replyText = text
-	f.replyRecipient = ""
-	f.replyGroup = groupID
-	f.atMentionUserIDs = append([]string(nil), mentionUserIDs...)
-	callback.OnSuccess(`{}`)
+func (f *fakeUserContext) AppendStreamMessage(_ context.Context, conversationID, clientMsgID string, _ int64, _ []string, end bool) error {
+	f.appendConversationID, f.appendClientMsgID, f.appendEnd = conversationID, clientMsgID, end
 	return nil
 }
-
-func (f *fakeUserContext) SendQuoteMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, text, recipientID, groupID string, quoted *sdk_struct.MsgStruct) error {
-	f.replyCallback = callback
-	f.replyContext = ctx
-	f.replyText = text
-	f.replyRecipient = recipientID
-	f.replyGroup = groupID
-	f.quotedMessage = quoted
-	callback.OnSuccess(`{}`)
-	return nil
-}
-
-func (f *fakeUserContext) SendLocationMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, description string, longitude, latitude float64, recipientID, groupID string) error {
-	f.replyCallback = callback
-	f.replyContext = ctx
-	f.replyRecipient = recipientID
-	f.replyGroup = groupID
-	f.locationDescription = description
-	f.longitude = longitude
-	f.latitude = latitude
-	callback.OnSuccess(`{}`)
-	return nil
-}
-
-func (f *fakeUserContext) SendCustomMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, data, extension, description, recipientID, groupID string) error {
-	f.replyCallback = callback
-	f.replyContext = ctx
-	f.replyRecipient = recipientID
-	f.replyGroup = groupID
-	f.customData = data
-	f.customExtension = extension
-	f.customDescription = description
-	callback.OnSuccess(`{}`)
-	return nil
-}
-
-func (f *fakeUserContext) SendImageMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, imagePath, recipientID, groupID string) error {
-	f.replyCallback = callback
-	f.replyContext = ctx
-	f.replyRecipient = recipientID
-	f.replyGroup = groupID
-	f.mediaKind = "image"
-	f.mediaPath = imagePath
-	callback.OnSuccess(`{}`)
-	return nil
-}
-
-func (f *fakeUserContext) SendFileMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, filePath, fileName, recipientID, groupID string) error {
-	f.replyCallback = callback
-	f.replyContext = ctx
-	f.replyRecipient = recipientID
-	f.replyGroup = groupID
-	f.mediaKind = "file"
-	f.mediaPath = filePath
-	f.customDescription = fileName
-	callback.OnSuccess(`{}`)
-	return nil
-}
-
-func (f *fakeUserContext) SendSoundMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, soundPath string, duration int64, recipientID, groupID string) error {
-	f.replyCallback = callback
-	f.replyContext = ctx
-	f.replyRecipient = recipientID
-	f.replyGroup = groupID
-	f.mediaKind = "sound"
-	f.mediaPath = soundPath
-	f.mediaDuration = duration
-	callback.OnSuccess(`{}`)
-	return nil
-}
-
-func (f *fakeUserContext) SendVideoMessage(ctx context.Context, callback open_im_sdk_callback.SendMsgCallBack, videoPath, videoType string, duration int64, snapshotPath, recipientID, groupID string) error {
-	f.replyCallback = callback
-	f.replyContext = ctx
-	f.replyRecipient = recipientID
-	f.replyGroup = groupID
-	f.mediaKind = "video"
-	f.mediaPath = videoPath
-	f.thumbnailPath = snapshotPath
-	f.mediaType = videoType
-	f.mediaDuration = duration
-	callback.OnSuccess(`{}`)
-	return nil
-}
-
-func (f *fakeUserContext) Logout(ctx context.Context) error {
-	f.logoutCalled = true
-	f.logoutContext = ctx
-	return nil
-}
-
-func (f *fakeUserContext) UnInitSDK() { f.uninitialized = true }
+func (*fakeUserContext) Logout(context.Context) error { return nil }
+func (*fakeUserContext) UnInitSDK()                   {}

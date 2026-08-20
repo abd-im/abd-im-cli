@@ -15,19 +15,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/abd-im/abd-im-cli/internal/agent/access"
-	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	acpprovider "github.com/abd-im/abd-im-cli/internal/agent/provider/acp"
 	codexprovider "github.com/abd-im/abd-im-cli/internal/agent/provider/codex"
-	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
 	runmanager "github.com/abd-im/abd-im-cli/internal/agent/run"
 	"github.com/abd-im/abd-im-cli/internal/bridge"
-	blacklistcapability "github.com/abd-im/abd-im-cli/internal/capability/blacklist"
-	businesscapability "github.com/abd-im/abd-im-cli/internal/capability/business"
-	conversationcapability "github.com/abd-im/abd-im-cli/internal/capability/conversation"
-	friendcapability "github.com/abd-im/abd-im-cli/internal/capability/friend"
-	groupcapability "github.com/abd-im/abd-im-cli/internal/capability/group"
-	messagecapability "github.com/abd-im/abd-im-cli/internal/capability/message"
 	"github.com/abd-im/abd-im-cli/internal/cli"
 	"github.com/abd-im/abd-im-cli/internal/commands"
 	"github.com/abd-im/abd-im-cli/internal/connector"
@@ -36,19 +27,14 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/daemon"
 	"github.com/abd-im/abd-im-cli/internal/events"
 	"github.com/abd-im/abd-im-cli/internal/ipc"
-	"github.com/abd-im/abd-im-cli/internal/operation"
 	"github.com/abd-im/abd-im-cli/internal/profile"
-	"github.com/abd-im/abd-im-cli/internal/reply"
-	operationsservice "github.com/abd-im/abd-im-cli/internal/service/operations"
+	messageservice "github.com/abd-im/abd-im-cli/internal/service/message"
 	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
-	pbconstant "github.com/openimsdk/protocol/constant"
 )
 
-func main() {
-	os.Exit(run(os.Args[1:]))
-}
+func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
 	configDir, err := os.UserConfigDir()
@@ -73,11 +59,14 @@ func runWithIO(args []string, input io.Reader, output io.Writer, roots commandRo
 }
 
 func runWithIOStreams(args []string, input io.Reader, output, prompt io.Writer, roots commandRoots) int {
-	profileName := "default"
+	profileName := strings.TrimSpace(os.Getenv("ABDIM_PROFILE"))
+	if profileName == "" {
+		profileName = "default"
+	}
 	requestID := "cli"
 	format := cli.OutputJSON
+	identity := profile.IdentityBot
 	var timeout time.Duration
-	profileSet := false
 	for len(args) > 0 && strings.HasPrefix(args[0], "--") {
 		switch args[0] {
 		case "--profile":
@@ -85,7 +74,16 @@ func runWithIOStreams(args []string, input io.Reader, output, prompt io.Writer, 
 				return writeInvalidArgument(output, requestID, "--profile requires a value")
 			}
 			profileName, args = args[1], args[2:]
-			profileSet = true
+		case "--as":
+			if len(args) < 2 {
+				return writeInvalidArgument(output, requestID, "--as requires user or bot")
+			}
+			var err error
+			identity, err = profile.ParseIdentity(args[1])
+			if err != nil {
+				return writeInvalidArgument(output, requestID, err.Error())
+			}
+			args = args[2:]
 		case "--request-id":
 			if len(args) < 2 {
 				return writeInvalidArgument(output, requestID, "--request-id requires a value")
@@ -119,37 +117,25 @@ func runWithIOStreams(args []string, input io.Reader, output, prompt io.Writer, 
 		defer cancel()
 	}
 
-	agentContext, agentMode, err := access.FromEnvironment(os.Getenv)
-	if err != nil {
-		return writeInvalidArgument(output, requestID, err.Error())
-	}
-	if agentMode {
-		if profileSet && profileName != agentContext.ProfileID {
-			return writeInvalidArgument(output, requestID, "--profile cannot override the Agent run profile")
-		}
-		return runTypedCommand(ctx, args, input, output, format, requestID, agentContext.ProfileID, agentContext.Socket, agentContext.Grant, commands.Run(agentContext.AllowedMethods))
-	}
-
-	if len(args) >= 1 && args[0] == "setup" {
+	if len(args) > 0 && args[0] == "setup" {
 		return runSetup(ctx, args[1:], input, output, prompt, roots, profileName)
 	}
-	if len(args) >= 1 && args[0] == "start" {
-		return runStart(ctx, args[1:], output, roots, profileName)
-	}
-	if len(args) >= 1 && args[0] == "stop" {
-		return runStop(ctx, args[1:], output, roots, profileName)
-	}
-	if len(args) >= 1 && args[0] == "restart" {
-		return runRestart(ctx, args[1:], output, roots, profileName)
-	}
-	if len(args) >= 1 && args[0] == "status" {
-		return runStatus(ctx, args[1:], output, roots, profileName)
-	}
-	if len(args) >= 1 && args[0] == "inbound" {
-		if len(args) < 2 || args[1] != "tools" {
-			return writeInvalidArgument(output, requestID, "unsupported inbound command")
+	if len(args) > 0 && args[0] == "daemon" {
+		if len(args) < 2 {
+			return writeInvalidArgument(output, requestID, "daemon requires start, stop, restart, or status")
 		}
-		return runInboundTools(ctx, args[2:], output, roots, profileName)
+		switch args[1] {
+		case "start":
+			return runStart(ctx, args[2:], output, roots, profileName)
+		case "stop":
+			return runStop(ctx, args[2:], output, roots, profileName)
+		case "restart":
+			return runRestart(ctx, args[2:], output, roots, profileName)
+		case "status":
+			return runStatus(ctx, args[2:], output, roots, profileName)
+		default:
+			return writeInvalidArgument(output, requestID, "unsupported daemon command")
+		}
 	}
 	if len(args) == 1 && args[0] == "__serve" {
 		return runDaemonServe(ctx, output, roots, profileName, requestID, format)
@@ -158,21 +144,10 @@ func runWithIOStreams(args []string, input io.Reader, output, prompt io.Writer, 
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	return runTypedCommand(ctx, args, input, output, format, requestID, profileName, paths.Socket, "", commands.Owner())
+	return runTypedCommand(ctx, args, input, output, format, requestID, profileName, paths.Socket, identity, commands.All())
 }
 
-func runTypedCommand(ctx context.Context, args []string, input io.Reader, output io.Writer, format cli.Output, requestID, profileID, socket, credential string, catalog []commands.Command) int {
-	if len(args) == 1 && args[0] == "commands" {
-		payload, err := json.Marshal(catalog)
-		if err != nil {
-			return writeLocalErrorForFormat(output, format, requestID, err)
-		}
-		response := contracts.Response{APIVersion: contracts.APIVersionV1, RequestID: requestID, OK: true, Data: payload, Meta: &contracts.Meta{ProfileID: profileID}}
-		if err := cli.WriteResponse(output, format, response); err != nil {
-			return 1
-		}
-		return 0
-	}
+func runTypedCommand(ctx context.Context, args []string, input io.Reader, output io.Writer, format cli.Output, requestID, profileID, socket string, identity profile.Identity, catalog []string) int {
 	method, consumed := commands.Resolve(args, catalog)
 	if method == "" {
 		return writeInvalidArgument(output, requestID, "unsupported command")
@@ -182,13 +157,8 @@ func runTypedCommand(ctx context.Context, args []string, input io.Reader, output
 		return writeInvalidArgument(output, requestID, err.Error())
 	}
 	response, err := ipc.Call(ctx, socket, contracts.Request{
-		APIVersion:     contracts.APIVersionV1,
-		RequestID:      requestID,
-		ProfileID:      profileID,
-		Method:         method,
-		Params:         params,
-		Grant:          credential,
-		IdempotencyKey: commandIdempotencyKey(params),
+		APIVersion: contracts.APIVersionV1, RequestID: requestID, ProfileID: profileID,
+		As: string(identity), Method: method, Params: params,
 	})
 	if err != nil {
 		response = cli.ErrorResponse(requestID, contracts.CodeDaemonUnavailable, errors.New("daemon is unavailable"))
@@ -199,8 +169,6 @@ func runTypedCommand(ctx context.Context, args []string, input io.Reader, output
 	return cli.ExitCode(response)
 }
 
-// runDaemonServe composes the fixed daemon path with the profile's allowlisted
-// Agent. Each run receives a fresh private abdim CLI context.
 func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, profileName, requestID string, format cli.Output) int {
 	paths, err := profile.NewPaths(roots.configDir, roots.dataDir, roots.runtimeDir, profileName)
 	if err != nil {
@@ -210,11 +178,8 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	item, err := profile.Load(paths.ConfigFile)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	if err := item.Deployment.Validate(); err != nil {
-		return writeInvalidArgument(output, requestID, "profile deployment is not configured")
+	if err != nil || item.Deployment.Validate() != nil {
+		return writeInvalidArgument(output, requestID, "profile is not configured; run abdim setup")
 	}
 	launch, err := agentLaunch(item.Agent)
 	if err != nil {
@@ -224,19 +189,15 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	if err != nil {
 		return writeInvalidArgument(output, requestID, "configured Agent is unavailable on PATH")
 	}
-
 	credentials, err := profile.NewFileStore(roots.dataDir)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	prepared, err := connector.Prepare(ctx, connector.Config{
-		ProfileID:       item.Name,
-		UserID:          item.Deployment.UserID,
-		CredentialRef:   item.CredentialRef,
-		Credentials:     credentials,
-		SDKConfig:       daemonSDKConfig(paths, item.Deployment),
-		BusinessAPIAddr: item.Deployment.ChatAPIAddr,
-	})
+	user, err := prepareIdentity(ctx, item, paths, profile.IdentityUser, credentials)
+	if err != nil {
+		return writeDaemonServeFailure(output, format, requestID)
+	}
+	bot, err := prepareIdentity(ctx, item, paths, profile.IdentityBot, credentials)
 	if err != nil {
 		return writeDaemonServeFailure(output, format, requestID)
 	}
@@ -253,332 +214,121 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	groupSource, err := prepared.GroupSource()
+	agent, err := newAgentProvider(item.Agent, item.Name, agentExecutable, launch.args, paths.RunsDir, paths.DataDir)
 	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	conversationSource, err := prepared.ConversationSource()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageSource, err := prepared.MessageSource()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	socialSource, err := prepared.SocialSource()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	groupCreator, err := prepared.GroupCreator()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	groupMembershipActions, err := prepared.GroupMembershipActions()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	groupAdministrationActions, err := prepared.GroupAdministrationActions()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageSender, err := prepared.MessageSender()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageAtSender, err := prepared.MessageAtSender()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageLocationSender, err := prepared.MessageLocationSender()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageCustomSender, err := prepared.MessageCustomSender()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageMediaSender, err := prepared.MessageMediaSender()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageQuoteSource, err := prepared.MessageQuoteSource()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	conversationMarkReadSource, err := prepared.ConversationMarkRead()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	conversationSettingsSource, err := prepared.ConversationSettings()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	friendActions, err := prepared.FriendActions()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	blacklistActions, err := prepared.BlacklistActions()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageRevokeSource, err := prepared.MessageRevokeSource()
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageAttachments, err := messagecapability.NewAttachmentStore(store, paths)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	groupOperations, err := operation.NewGuard(store)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	groupCreate, err := groupcapability.New(groupOperations, groupCreator)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	groupMembership, err := groupcapability.NewMembership(groupOperations, groupMembershipActions)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	groupAdministration, err := groupcapability.NewAdministration(groupOperations, groupAdministrationActions)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageSend, err := messagecapability.New(groupOperations, messageSender)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	businessSend, err := businesscapability.New(groupOperations, prepared.Adapter)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageAt, err := messagecapability.NewAt(groupOperations, messageAtSender)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageQuote, err := messagecapability.NewQuote(groupOperations, messageQuoteSource, messageQuoteSource)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageLocation, err := messagecapability.NewLocation(groupOperations, messageLocationSender)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageCustom, err := messagecapability.NewCustom(groupOperations, messageCustomSender)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageRevoke, err := messagecapability.NewRevoke(groupOperations, messageRevokeSource)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	messageMedia, err := messagecapability.NewMedia(groupOperations, messageAttachments, messageMediaSender)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	conversationMarkRead, err := conversationcapability.New(groupOperations, conversationMarkReadSource, conversationMarkReadSource)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	conversationPinned, err := conversationcapability.NewSetPinned(groupOperations, conversationSettingsSource)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	conversationReceiveOption, err := conversationcapability.NewSetReceiveOption(groupOperations, conversationSettingsSource)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	friendHandler, err := friendcapability.New(groupOperations, friendActions)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	blacklistHandler, err := blacklistcapability.New(groupOperations, blacklistActions)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	var runtime *daemon.Runtime
-	profileSource, err := prepared.ProfileSource(func() profileservice.DaemonStatus {
-		state := bridge.StateNew
-		if runtime != nil {
-			state = runtime.State()
-		}
-		return profileservice.DaemonStatus{
-			ProfileID:        item.Name,
-			State:            string(state),
-			PID:              os.Getpid(),
-			SDKVersion:       open_im_sdk.GetSdkVersion(),
-			CredentialsValid: state == bridge.StateReady,
-		}
-	})
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	services, err := daemon.NewOwnerServices(
-		item.Name, profileSource, conversationSource, messageSource, groupSource, socialSource,
-	)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	agent, err := newAgentProvider(item.Agent, agentExecutable, launch.args, paths.RunsDir, paths.DataDir)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	runTracker, err := operationsservice.NewTracker(store)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	if err := runTracker.Recover(ctx, item.Name); err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	runs, err := runmanager.NewManager(runmanager.Config{
 		Provider: agent, Sessions: store, SessionNamespace: item.Agent,
-		MaxQueue: 2, MaxConcurrentRuns: 2, Deadline: 2 * time.Minute, Observer: runTracker,
+		MaxQueue: 2, MaxConcurrentRuns: 2, Deadline: 2 * time.Minute,
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	runOperations, err := operationsservice.New(item.Name, store, runs)
+
+	var runtimeInstance *daemon.Runtime
+	status := func() profileservice.DaemonStatus {
+		state := bridge.StateNew
+		if runtimeInstance != nil {
+			state = runtimeInstance.State()
+		}
+		return profileservice.DaemonStatus{
+			ProfileID: item.Name, State: string(state), PID: os.Getpid(),
+			SDKVersion: open_im_sdk.GetSdkVersion(), CredentialsValid: state == bridge.StateReady,
+		}
+	}
+	userMethods, userMessages, err := identityMethods(item.Name, user, status)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	ownerMethods, err := daemon.OwnerMethods(services)
+	botMethods, _, err := identityMethods(item.Name, bot, status)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	runOwnerMethods, err := daemon.RunOperationOwnerMethods(runOperations)
+	dispatcher, err := daemon.NewDispatcher(item.Name, userMethods, botMethods)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	dispatcher, err := daemon.NewDispatcher(item.Name, append(ownerMethods, runOwnerMethods...))
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	replies, err := reply.New(store, prepared.Adapter)
-	if err != nil {
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
-	methods := append(serviceMethods(services), groupCreate.ProxyMethod(), messageSend.ProxyMethod(), messageAt.ProxyMethod(), messageQuote.ProxyMethod(), messageLocation.ProxyMethod(), messageCustom.ProxyMethod(), messageRevoke.ProxyMethod())
-	methods = append(methods, groupMembership.ProxyMethods()...)
-	methods = append(methods, groupAdministration.ProxyMethods()...)
-	methods = append(methods, messageMedia.ProxyMethods()...)
-	methods = append(methods, conversationMarkRead.ProxyMethod(), conversationPinned.ProxyMethod(), conversationReceiveOption.ProxyMethod())
-	methods = append(methods, friendHandler.ProxyMethods()...)
-	methods = append(methods, blacklistHandler.ProxyMethods()...)
-	normalMethods := append([]proxy.Method(nil), methods...)
-	methods = append(methods, businessSend.ProxyMethod())
 	inbound, err := daemon.New(daemon.Config{
-		ProfileID:           item.Name,
-		Ledger:              ledger,
-		Replies:             replies,
-		Runs:                runs,
-		Grants:              grant.NewStore(),
-		Methods:             methods,
-		Policy:              businessMessagePolicy(agentWorkspacePolicy(directMessagePolicy(item.Deployment.UserID, item.InboundToolsEnabled, normalMethods), item.Deployment.UserID, item.InboundToolsEnabled, normalMethods)),
-		WorkspaceClassifier: groupSource,
-		GrantTTL:            2 * time.Minute,
+		ProfileID: item.Name, UserID: item.User.UserID, BotID: item.Bot.UserID,
+		Ledger: ledger, Runs: runs, UserMessages: userMessages,
+		UserSender: user.Adapter, BotSender: bot.Adapter,
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
-	runtime, err = daemon.NewRuntime(daemon.RuntimeConfig{
-		SDKFactory: prepared.SDKFactory(),
-		LockFile:   paths.LockFile,
-		SocketPath: paths.Socket,
-		Inbound:    inbound,
-		Handler:    dispatcher.Handle,
+	runtimeInstance, err = daemon.NewRuntime(daemon.RuntimeConfig{
+		UserSDKFactory: user.SDKFactory(), BotSDKFactory: bot.SDKFactory(),
+		LockFile: paths.LockFile, SocketPath: paths.Socket, Inbound: inbound, Handler: dispatcher.Handle,
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
 	serveContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runtime.Start(serveContext); err != nil {
+	if err := runtimeInstance.Start(serveContext); err != nil {
 		return writeDaemonServeFailure(output, format, requestID)
 	}
-	payload, err := json.Marshal(struct {
+	payload, _ := json.Marshal(struct {
 		ProfileID string `json:"profile_id"`
 		Serving   bool   `json:"serving"`
 	}{ProfileID: item.Name, Serving: true})
-	if err != nil {
-		_ = runtime.Shutdown(context.Background())
-		return writeLocalErrorForFormat(output, format, requestID, err)
-	}
 	response := contracts.Response{APIVersion: contracts.APIVersionV1, RequestID: requestID, OK: true, Data: payload, Meta: &contracts.Meta{ProfileID: item.Name}}
 	if err := cli.WriteResponse(output, format, response); err != nil {
-		_ = runtime.Shutdown(context.Background())
+		_ = runtimeInstance.Shutdown(context.Background())
 		return 1
 	}
-	if err := runtime.Wait(serveContext); err != nil && !errors.Is(err, context.Canceled) {
+	if err := runtimeInstance.Wait(serveContext); err != nil && !errors.Is(err, context.Canceled) {
 		return 1
 	}
 	return 0
 }
 
-func businessMessagePolicy(base daemon.Policy) daemon.Policy {
-	return daemon.PolicyFunc(func(ctx context.Context, inbound daemon.InboundContext) (daemon.Decision, bool, error) {
-		if strings.TrimSpace(inbound.BusinessConnectionID) != "" {
-			return daemon.Decision{
-				Principal:  "business:" + inbound.BusinessConnectionID,
-				Methods:    []string{businesscapability.SendMessageMethod},
-				RateBudget: 8,
-			}, true, nil
-		}
-		return base.Decide(ctx, inbound)
-	})
-}
-
-func directMessagePolicy(userID string, toolsEnabled bool, methods []proxy.Method) daemon.Policy {
-	methodNames := make([]string, 0, len(methods))
-	if toolsEnabled {
-		for _, method := range methods {
-			methodNames = append(methodNames, method.Name)
-		}
+func prepareIdentity(ctx context.Context, item profile.Profile, paths profile.Paths, identity profile.Identity, credentials profile.CredentialStore) (*connector.Prepared, error) {
+	account := item.Bot
+	if identity == profile.IdentityUser {
+		account = item.User
 	}
-	return daemon.PolicyFunc(func(_ context.Context, inbound daemon.InboundContext) (daemon.Decision, bool, error) {
-		senderID := strings.TrimSpace(inbound.SenderID)
-		if senderID == "" || senderID == userID || inbound.SessionType != 1 {
-			return daemon.Decision{}, false, nil
-		}
-		decision := daemon.Decision{Principal: "openim:" + senderID, RateBudget: 1}
-		if toolsEnabled {
-			decision.Methods = methodNames
-			decision.HistoryBeforeTrigger = true
-			decision.AttachmentByteLimit = 32 * 1024 * 1024
-			decision.RateBudget = 64
-		}
-		return decision, true, nil
+	return connector.Prepare(ctx, connector.Config{
+		ProfileID: item.Name, UserID: account.UserID, CredentialRef: account.CredentialRef,
+		Credentials: credentials, SDKConfig: daemonSDKConfig(paths, item.Deployment, identity),
 	})
 }
 
-func agentWorkspacePolicy(base daemon.Policy, userID string, toolsEnabled bool, methods []proxy.Method) daemon.Policy {
-	return daemon.PolicyFunc(func(ctx context.Context, inbound daemon.InboundContext) (daemon.Decision, bool, error) {
-		if decision, allowed, err := base.Decide(ctx, inbound); err != nil || allowed {
-			return decision, allowed, err
-		}
-		if inbound.ConversationKind != contracts.ConversationKindAgentWorkspace || strings.TrimSpace(inbound.SenderID) == "" || inbound.SenderID == userID || strings.TrimSpace(inbound.GroupID) == "" || (inbound.SessionType != 2 && inbound.SessionType != 3) || !agentPromptContentType(inbound.ContentType) {
-			return daemon.Decision{}, false, nil
-		}
-		decision := daemon.Decision{Principal: "openim:" + inbound.SenderID, RateBudget: 1}
-		if toolsEnabled {
-			decision.HistoryBeforeTrigger = true
-			decision.AttachmentByteLimit = 32 * 1024 * 1024
-			decision.RateBudget = 64
-			for _, method := range methods {
-				decision.Methods = append(decision.Methods, method.Name)
-			}
-		}
-		return decision, true, nil
-	})
-}
-
-func agentPromptContentType(contentType int32) bool {
-	switch contentType {
-	case pbconstant.Text, pbconstant.AtText, pbconstant.Quote:
-		return true
-	default:
-		return false
+func identityMethods(profileID string, prepared *connector.Prepared, status func() profileservice.DaemonStatus) ([]daemon.Method, messageservice.Source, error) {
+	profileSource, err := prepared.ProfileSource(status)
+	if err != nil {
+		return nil, nil, err
 	}
+	conversationSource, err := prepared.ConversationSource()
+	if err != nil {
+		return nil, nil, err
+	}
+	messageSource, err := prepared.MessageSource()
+	if err != nil {
+		return nil, nil, err
+	}
+	groupSource, err := prepared.GroupSource()
+	if err != nil {
+		return nil, nil, err
+	}
+	socialSource, err := prepared.SocialSource()
+	if err != nil {
+		return nil, nil, err
+	}
+	services, err := daemon.NewServices(profileID, profileSource, conversationSource, messageSource, groupSource, socialSource)
+	if err != nil {
+		return nil, nil, err
+	}
+	methods, err := daemon.Methods(services)
+	if err != nil {
+		return nil, nil, err
+	}
+	send, err := daemon.MessageSendMethod(profileID, prepared.Adapter)
+	if err != nil {
+		return nil, nil, err
+	}
+	return append(methods, send), messageSource, nil
 }
 
 type agentLaunchSpec struct {
@@ -603,11 +353,8 @@ func agentLaunch(agent string) (agentLaunchSpec, error) {
 	}
 }
 
-func agentEnvironment(agent string) []string {
-	result := []string{
-		"PATH=" + os.Getenv("PATH"),
-		"TERM=dumb",
-	}
+func agentEnvironment(agent, profileID string) []string {
+	result := []string{"PATH=" + os.Getenv("PATH"), "TERM=dumb", "ABDIM_PROFILE=" + profileID}
 	if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
 		result = append(result, "HOME="+home)
 	}
@@ -620,27 +367,20 @@ func agentEnvironment(agent string) []string {
 	return result
 }
 
-func newAgentProvider(agent, executable string, args []string, workingDir, dataDir string) (contracts.Provider, error) {
+func newAgentProvider(agent, profileID, executable string, args []string, workingDir, dataDir string) (contracts.Provider, error) {
 	if agent == "codex" {
 		codexHome, err := currentCodexHome()
 		if err != nil {
 			return nil, err
 		}
 		return codexprovider.New(codexprovider.Config{
-			Executable:      executable,
-			WorkingDir:      workingDir,
-			StateDir:        filepath.Join(dataDir, "codex"),
-			SourceCodexHome: codexHome,
-			Environment:     agentEnvironment(agent),
-			CLICommand:      executablePath(),
+			Executable: executable, WorkingDir: workingDir, StateDir: filepath.Join(dataDir, "codex"),
+			SourceCodexHome: codexHome, Environment: agentEnvironment(agent, profileID), CLICommand: executablePath(),
 		})
 	}
 	return acpprovider.New(acpprovider.Config{
-		Executable:  executable,
-		Args:        args,
-		WorkingDir:  workingDir,
-		Environment: agentEnvironment(agent),
-		CLICommand:  executablePath(),
+		Executable: executable, Args: args, WorkingDir: workingDir,
+		Environment: agentEnvironment(agent, profileID), CLICommand: executablePath(),
 	})
 }
 
@@ -658,25 +398,15 @@ func currentCodexHome() (string, error) {
 	return filepath.Join(home, ".codex"), nil
 }
 
-func serviceMethods(services daemon.OwnerServices) []proxy.Method {
-	methods := make([]proxy.Method, 0, 22)
-	methods = append(methods, services.Profile.Methods()...)
-	methods = append(methods, services.Conversation.Methods()...)
-	methods = append(methods, services.Message.Methods()...)
-	methods = append(methods, services.Group.Methods()...)
-	methods = append(methods, services.Social.Methods()...)
-	return methods
-}
-
-func daemonSDKConfig(paths profile.Paths, deployment profile.Deployment) sdk_struct.IMConfig {
+func daemonSDKConfig(paths profile.Paths, deployment profile.Deployment, identity profile.Identity) sdk_struct.IMConfig {
+	dataDir, logName := paths.BotSDKDir, "sdk-bot.log"
+	if identity == profile.IdentityUser {
+		dataDir, logName = paths.UserSDKDir, "sdk-user.log"
+	}
 	return sdk_struct.IMConfig{
-		SystemType:  runtime.GOOS,
-		PlatformID:  deployment.PlatformID,
-		ApiAddr:     deployment.APIAddr,
-		WsAddr:      deployment.WSAddr,
-		DataDir:     paths.SDKDir,
-		LogLevel:    4,
-		LogFilePath: filepath.Join(paths.LogsDir, "sdk.log"),
+		SystemType: runtime.GOOS, PlatformID: deployment.PlatformID,
+		ApiAddr: deployment.APIAddr, WsAddr: deployment.WSAddr, DataDir: dataDir,
+		LogLevel: 4, LogFilePath: filepath.Join(paths.LogsDir, logName),
 	}
 }
 
@@ -708,11 +438,8 @@ func commandParams(args []string, input io.Reader) (json.RawMessage, error) {
 	}
 	const maxParamsBytes = 1 << 20
 	payload, err := io.ReadAll(io.LimitReader(input, maxParamsBytes+1))
-	if err != nil {
+	if err != nil || len(payload) > maxParamsBytes {
 		return nil, errors.New("read command parameters")
-	}
-	if len(payload) > maxParamsBytes {
-		return nil, errors.New("command parameters are too large")
 	}
 	payload = []byte(strings.TrimSpace(string(payload)))
 	var object map[string]json.RawMessage
@@ -720,16 +447,6 @@ func commandParams(args []string, input io.Reader) (json.RawMessage, error) {
 		return nil, errors.New("command parameters must be a JSON object")
 	}
 	return json.RawMessage(payload), nil
-}
-
-func commandIdempotencyKey(params json.RawMessage) string {
-	var values map[string]json.RawMessage
-	if json.Unmarshal(params, &values) != nil {
-		return ""
-	}
-	var key string
-	_ = json.Unmarshal(values["idempotency_key"], &key)
-	return key
 }
 
 func writeInvalidArgument(output io.Writer, requestID, message string) int {

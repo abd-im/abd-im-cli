@@ -51,30 +51,6 @@ func TestPrepareResolvesCredentialWithoutStartingSDK(t *testing.T) {
 	if source, err := prepared.GroupSource(); err != nil || source == nil {
 		t.Fatalf("GroupSource() = %v, %v", source, err)
 	}
-	if creator, err := prepared.GroupCreator(); err != nil || creator == nil {
-		t.Fatalf("GroupCreator() = %v, %v", creator, err)
-	}
-	if actions, err := prepared.GroupMembershipActions(); err != nil || actions == nil {
-		t.Fatalf("GroupMembershipActions() = %v, %v", actions, err)
-	}
-	if actions, err := prepared.GroupAdministrationActions(); err != nil || actions == nil {
-		t.Fatalf("GroupAdministrationActions() = %v, %v", actions, err)
-	}
-	if sender, err := prepared.MessageSender(); err != nil || sender == nil {
-		t.Fatalf("MessageSender() = %v, %v", sender, err)
-	}
-	if sender, err := prepared.MessageAtSender(); err != nil || sender == nil {
-		t.Fatalf("MessageAtSender() = %v, %v", sender, err)
-	}
-	if sender, err := prepared.MessageMediaSender(); err != nil || sender == nil {
-		t.Fatalf("MessageMediaSender() = %v, %v", sender, err)
-	}
-	if source, err := prepared.MessageQuoteSource(); err != nil || source == nil {
-		t.Fatalf("MessageQuoteSource() = %v, %v", source, err)
-	}
-	if action, err := prepared.ConversationMarkRead(); err != nil || action == nil {
-		t.Fatalf("ConversationMarkRead() = %v, %v", action, err)
-	}
 	if source, err := prepared.ConversationSource(); err != nil || source == nil {
 		t.Fatalf("ConversationSource() = %v, %v", source, err)
 	}

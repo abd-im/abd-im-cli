@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/abd-im/abd-im-cli/internal/agent/grant"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
@@ -62,21 +61,6 @@ type Page[T any] struct {
 // list responses.
 type Item[T any] struct {
 	Item T `json:"item"`
-}
-
-// Access captures the caller's authorization context. Owner callers bypass
-// run grants; provider callers must supply a grant issued for the run.
-type Access struct {
-	Owner bool
-	Grant grant.Grant
-}
-
-func OwnerAccess() Access {
-	return Access{Owner: true}
-}
-
-func ProviderAccess(item grant.Grant) Access {
-	return Access{Grant: item}
 }
 
 // Cursor is encoded as an opaque, query-bound value. Services should reject a

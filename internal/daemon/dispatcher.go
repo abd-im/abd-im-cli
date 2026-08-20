@@ -10,32 +10,42 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
-// OwnerMethod is one daemon-owned typed service. Methods are registered when
-// the daemon is composed; callers cannot select an endpoint or SDK function.
-type OwnerMethod struct {
+// Method is one daemon-owned SDK operation.
+type Method struct {
 	Name   string
-	Handle func(context.Context, json.RawMessage) (OwnerResult, error)
+	Handle func(context.Context, json.RawMessage) (MethodResult, error)
 }
 
-// OwnerResult is the in-process result of one typed owner method.
-type OwnerResult struct {
+// MethodResult is the in-process result of one method.
+type MethodResult struct {
 	Data any
 	Meta contracts.Meta
 }
 
-// Dispatcher exposes the daemon's fixed owner typed-method registry over the
-// shared local RPC contract.
+// Dispatcher routes local requests to the selected SDK identity.
 type Dispatcher struct {
 	profileID string
-	methods   map[string]OwnerMethod
+	methods   map[string]map[string]Method
 }
 
-// NewDispatcher registers the owner methods available for one daemon profile.
-func NewDispatcher(profileID string, methods []OwnerMethod) (*Dispatcher, error) {
+// NewDispatcher registers the methods backed by each local SDK identity.
+func NewDispatcher(profileID string, userMethods, botMethods []Method) (*Dispatcher, error) {
 	if strings.TrimSpace(profileID) == "" {
 		return nil, errors.New("profile ID is required")
 	}
-	registered := make(map[string]OwnerMethod, len(methods))
+	user, err := registerMethods(userMethods)
+	if err != nil {
+		return nil, fmt.Errorf("register user methods: %w", err)
+	}
+	bot, err := registerMethods(botMethods)
+	if err != nil {
+		return nil, fmt.Errorf("register bot methods: %w", err)
+	}
+	return &Dispatcher{profileID: profileID, methods: map[string]map[string]Method{"user": user, "bot": bot}}, nil
+}
+
+func registerMethods(methods []Method) (map[string]Method, error) {
+	registered := make(map[string]Method, len(methods))
 	for _, method := range methods {
 		if strings.TrimSpace(method.Name) == "" || method.Handle == nil {
 			return nil, errors.New("typed method name and handler are required")
@@ -45,7 +55,7 @@ func NewDispatcher(profileID string, methods []OwnerMethod) (*Dispatcher, error)
 		}
 		registered[method.Name] = method
 	}
-	return &Dispatcher{profileID: profileID, methods: registered}, nil
+	return registered, nil
 }
 
 // Handle dispatches a validated local request to one registered typed method.
@@ -53,12 +63,12 @@ func NewDispatcher(profileID string, methods []OwnerMethod) (*Dispatcher, error)
 // service errors never reach the local socket.
 func (d *Dispatcher) Handle(ctx context.Context, request contracts.Request) (contracts.Response, error) {
 	if err := request.Validate(); err != nil {
-		return dispatcherFailure(request.RequestID, contracts.CodeInvalidArgument, "invalid owner request", false), nil
+		return dispatcherFailure(request.RequestID, contracts.CodeInvalidArgument, "invalid request", false), nil
 	}
 	if request.ProfileID != d.profileID {
 		return dispatcherFailure(request.RequestID, contracts.CodeInvalidArgument, "profile does not match daemon", false), nil
 	}
-	method, exists := d.methods[request.Method]
+	method, exists := d.methods[request.As][request.Method]
 	if !exists {
 		return dispatcherFailure(request.RequestID, contracts.CodeInvalidArgument, "method is not an exposed typed service", false), nil
 	}

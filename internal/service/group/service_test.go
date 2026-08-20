@@ -12,11 +12,11 @@ func TestGroupAndMemberReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	members, err := reader.Members(context.Background(), service.OwnerAccess(), MembersInput{GroupID: "group-1", Limit: 10})
+	members, err := reader.Members(context.Background(), MembersInput{GroupID: "group-1", Limit: 10})
 	if err != nil || len(members.Data.Items) != 2 || !members.Meta.Stale || members.Meta.Schema != service.SchemaVersion {
 		t.Fatalf("Members() = %+v, %v", members, err)
 	}
-	group, err := reader.Get(context.Background(), service.OwnerAccess(), GetInput{GroupID: "group-1"})
+	group, err := reader.Get(context.Background(), GetInput{GroupID: "group-1"})
 	if err != nil || group.Data.ID != "group-1" {
 		t.Fatalf("Get() = %+v, %v", group, err)
 	}

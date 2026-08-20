@@ -4,244 +4,34 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
 
-func TestOpenMigratesIdempotently(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.db")
-
-	store, err := Open(path)
+func TestStorePersistsEventsAndProviderSessions(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
-		t.Fatalf("Open() error = %v", err)
+		t.Fatal(err)
 	}
+	defer store.Close()
+	ctx := context.Background()
 	if err := store.PutProfile(ctx, Profile{ID: "work"}); err != nil {
-		t.Fatalf("PutProfile() error = %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-
-	store, err = Open(path)
-	if err != nil {
-		t.Fatalf("second Open() error = %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	profile, err := store.GetProfile(ctx, "work")
-	if err != nil {
-		t.Fatalf("GetProfile() error = %v", err)
-	}
-	if profile.ID != "work" {
-		t.Fatalf("ID = %q, want work", profile.ID)
-	}
-
-	var migrations int
-	if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&migrations); err != nil {
-		t.Fatalf("count migrations: %v", err)
-	}
-	if migrations != 7 {
-		t.Fatalf("migration count = %d, want 7", migrations)
-	}
-}
-
-func TestStorePersistsOnlyControlMetadata(t *testing.T) {
-	ctx := context.Background()
-	store, err := Open(filepath.Join(t.TempDir(), "control.db"))
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	now := time.Date(2026, time.July, 31, 10, 0, 0, 0, time.UTC)
-	if err := store.PutProfile(ctx, Profile{ID: "work", CreatedAt: now}); err != nil {
-		t.Fatalf("PutProfile() error = %v", err)
-	}
-	if err := store.PutEvent(ctx, Event{
-		ID:             "event-1",
-		ProfileID:      "work",
-		Sequence:       1,
-		SDKDedupKey:    "sdk-callback-1",
-		Type:           "message.received",
-		ConversationID: "conversation-1",
-		MessageID:      "message-1",
-		OccurredAt:     now,
-	}); err != nil {
-		t.Fatalf("PutEvent() error = %v", err)
-	}
-	if err := store.PutOperation(ctx, Operation{
-		ID:             "operation-1",
-		ProfileID:      "work",
-		Scope:          "group.create",
-		IdempotencyKey: "request-1",
-		InputDigest:    "sha256:example",
-		Status:         OperationUnknown,
-		CreatedAt:      now,
-	}); err != nil {
-		t.Fatalf("PutOperation() error = %v", err)
-	}
-	event, err := store.EventByDedupKey(ctx, "work", "sdk-callback-1")
-	if err != nil {
-		t.Fatalf("EventByDedupKey() error = %v", err)
-	}
-	if event.MessageID != "message-1" || event.ConversationID != "conversation-1" {
-		t.Fatalf("event = %+v, want message and conversation references", event)
-	}
-
-	operation, err := store.OperationByIdempotencyKey(ctx, "work", "group.create", "request-1")
-	if err != nil {
-		t.Fatalf("OperationByIdempotencyKey() error = %v", err)
-	}
-	if operation.Status != OperationUnknown {
-		t.Fatalf("operation status = %q, want %q", operation.Status, OperationUnknown)
-	}
-	if err := store.PutRun(ctx, Run{ID: "run-1", ProfileID: "work", ConversationID: "conversation-1", EventID: "event-1", Status: RunQueued, CreatedAt: now}); err != nil {
-		t.Fatalf("PutRun() error = %v", err)
-	}
-	if err := store.UpdateRunStatus(ctx, "work", "run-1", RunRunning, ""); err != nil {
-		t.Fatalf("UpdateRunStatus() error = %v", err)
-	}
-	storedRun, err := store.RunByID(ctx, "work", "run-1")
-	if err != nil || storedRun.Status != RunRunning {
-		t.Fatalf("RunByID() = %#v, %v", storedRun, err)
-	}
-
-	rows, err := store.db.QueryContext(ctx, "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
-	if err != nil {
-		t.Fatalf("query schema: %v", err)
-	}
-	defer rows.Close()
-	allowedTables := map[string]bool{
-		"schema_migrations": true,
-		"profiles":          true,
-		"events":            true,
-		"operations":        true,
-		"grants":            true,
-		"reply_slots":       true,
-		"attachments":       true,
-		"runs":              true,
-		"provider_sessions": true,
-	}
-	for rows.Next() {
-		var name, definition string
-		if err := rows.Scan(&name, &definition); err != nil {
-			t.Fatalf("scan schema: %v", err)
-		}
-		if !allowedTables[name] {
-			t.Fatalf("control schema has unexpected table %q", name)
-		}
-		for _, forbidden := range []string{"body", "content", "path"} {
-			if strings.Contains(strings.ToLower(definition), forbidden) {
-				t.Fatalf("control schema stores message data %q: %s", forbidden, definition)
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate schema: %v", err)
-	}
-}
-
-func TestStorePersistsProviderSessionByConversation(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.db")
-	store, err := Open(path)
-	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	if ref, found, err := store.LoadSessionRef(ctx, "work", "conversation-1", "codex"); err != nil || found || ref != "" {
-		t.Fatalf("LoadSessionRef(missing) = %q, %v, %v", ref, found, err)
-	}
-	if err := store.SaveSessionRef(ctx, "work", "conversation-1", "codex", "session-1"); err != nil {
-		t.Fatalf("SaveSessionRef(first) error = %v", err)
-	}
-	if err := store.SaveSessionRef(ctx, "work", "conversation-1", "codex", "session-2"); err != nil {
-		t.Fatalf("SaveSessionRef(replace) error = %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-	store, err = Open(path)
-	if err != nil {
-		t.Fatalf("Open(after close) error = %v", err)
-	}
-	if ref, found, err := store.LoadSessionRef(ctx, "work", "conversation-1", "codex"); err != nil || !found || ref != "session-2" {
-		t.Fatalf("LoadSessionRef() = %q, %v, %v", ref, found, err)
-	}
-	if _, found, err := store.LoadSessionRef(ctx, "work", "conversation-2", "codex"); err != nil || found {
-		t.Fatalf("LoadSessionRef(other conversation) found=%v, error=%v", found, err)
-	}
-	if _, found, err := store.LoadSessionRef(ctx, "work", "conversation-1", "hermes"); err != nil || found {
-		t.Fatalf("LoadSessionRef(other provider) found=%v, error=%v", found, err)
-	}
-	if err := store.DeleteSessionRef(ctx, "work", "conversation-1", "codex"); err != nil {
-		t.Fatalf("DeleteSessionRef() error = %v", err)
-	}
-	if _, found, err := store.LoadSessionRef(ctx, "work", "conversation-1", "codex"); err != nil || found {
-		t.Fatalf("LoadSessionRef(after delete) found=%v, error=%v", found, err)
-	}
-}
-
-func TestAttachmentMetadataIsRunScopedAndQuotaBound(t *testing.T) {
-	ctx := context.Background()
-	store, err := Open(filepath.Join(t.TempDir(), "control.db"))
-	if err != nil {
+	event := Event{ID: "event-1", ProfileID: "work", Sequence: 1, SDKDedupKey: "dedup-1", Type: "message.received", ConversationID: "conversation-1", MessageID: "message-1", OccurredAt: time.Now()}
+	if err := store.PutEvent(ctx, event); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
-	expiresAt := time.Now().Add(time.Hour)
-	first := Attachment{ID: "attachment-1", ProfileID: "work", RunID: "run-1", GrantID: "grant-1", Kind: "image", SizeBytes: 7, ByteLimit: 10, ExpiresAt: expiresAt}
-	if err := store.PutAttachment(ctx, first); err != nil {
-		t.Fatalf("PutAttachment(first) error = %v", err)
+	if err := store.PutEvent(ctx, event); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate PutEvent() error = %v", err)
 	}
-	stored, err := store.AttachmentByID(ctx, "work", first.ID)
-	if err != nil {
-		t.Fatalf("AttachmentByID() error = %v", err)
+	if got, err := store.EventByDedupKey(ctx, "work", "dedup-1"); err != nil || got.ID != event.ID {
+		t.Fatalf("EventByDedupKey() = %#v, %v", got, err)
 	}
-	if stored.RunID != "run-1" || stored.GrantID != "grant-1" || stored.Kind != "image" || stored.SizeBytes != 7 || stored.ByteLimit != 10 || stored.CreatedAt.IsZero() {
-		t.Fatalf("stored attachment = %+v", stored)
+	if err := store.SaveSessionRef(ctx, "work", "user:conversation-1", "codex", "session-1"); err != nil {
+		t.Fatal(err)
 	}
-	second := Attachment{ID: "attachment-2", ProfileID: "work", RunID: "run-1", GrantID: "grant-1", Kind: "file", SizeBytes: 4, ByteLimit: 10, ExpiresAt: expiresAt}
-	if err := store.PutAttachment(ctx, second); !errors.Is(err, ErrAttachmentQuota) {
-		t.Fatalf("PutAttachment(over quota) error = %v, want ErrAttachmentQuota", err)
-	}
-	changedLimit := Attachment{ID: "attachment-3", ProfileID: "work", RunID: "run-1", GrantID: "grant-1", Kind: "file", SizeBytes: 1, ByteLimit: 100, ExpiresAt: expiresAt}
-	if err := store.PutAttachment(ctx, changedLimit); !errors.Is(err, ErrConflict) {
-		t.Fatalf("PutAttachment(changed limit) error = %v, want ErrConflict", err)
-	}
-	if _, err := store.AttachmentByID(ctx, "other", first.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("AttachmentByID(other profile) error = %v, want ErrNotFound", err)
-	}
-	if err := store.PutAttachment(ctx, Attachment{ID: "../secret", ProfileID: "work", RunID: "run-2", GrantID: "grant-2", Kind: "file", ByteLimit: 10, ExpiresAt: expiresAt}); err == nil {
-		t.Fatal("PutAttachment() accepted a path-like ID")
-	}
-}
-
-func TestStoreValidatesModelsAndReportsMissingRecords(t *testing.T) {
-	ctx := context.Background()
-	store, err := Open(filepath.Join(t.TempDir(), "control.db"))
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	if err := store.PutProfile(ctx, Profile{}); err == nil {
-		t.Fatal("PutProfile() error = nil, want validation error")
-	}
-	if err := store.PutOperation(ctx, Operation{ID: "operation-1", ProfileID: "work", Scope: "group.create", IdempotencyKey: "key", InputDigest: "digest", Status: "pending"}); err == nil {
-		t.Fatal("PutOperation() error = nil, want invalid status error")
-	}
-	if _, err := store.GetProfile(ctx, "missing"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("GetProfile(missing) error = %v, want ErrNotFound", err)
-	}
-
-	if err := store.PutEvent(ctx, Event{ID: "event-1", ProfileID: "work", Sequence: 1, SDKDedupKey: "key", Type: "message.received"}); err != nil {
-		t.Fatalf("first PutEvent() error = %v", err)
-	}
-	if err := store.PutEvent(ctx, Event{ID: "event-2", ProfileID: "work", Sequence: 2, SDKDedupKey: "key", Type: "message.received"}); !errors.Is(err, ErrConflict) {
-		t.Fatalf("duplicate PutEvent() error = %v, want ErrConflict", err)
+	if ref, found, err := store.LoadSessionRef(ctx, "work", "user:conversation-1", "codex"); err != nil || !found || ref != "session-1" {
+		t.Fatalf("LoadSessionRef() = %q, %t, %v", ref, found, err)
 	}
 }

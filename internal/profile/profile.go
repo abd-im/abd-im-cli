@@ -14,7 +14,6 @@ import (
 )
 
 var profileNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
-var attachmentReferencePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$`)
 
 var (
 	ErrInvalidName       = errors.New("invalid profile name")
@@ -24,14 +23,38 @@ var (
 
 const DefaultAgent = "codex"
 
-// Profile contains public profile metadata. CredentialRef is opaque and never
-// contains a token or an absolute local path.
+type Identity string
+
+const (
+	IdentityUser Identity = "user"
+	IdentityBot  Identity = "bot"
+)
+
+func ParseIdentity(value string) (Identity, error) {
+	switch Identity(strings.TrimSpace(value)) {
+	case IdentityUser:
+		return IdentityUser, nil
+	case IdentityBot:
+		return IdentityBot, nil
+	default:
+		return "", errors.New("identity must be user or bot")
+	}
+}
+
+// Account identifies one locally logged-in SDK context. CredentialRef is
+// opaque and never contains a token or an absolute local path.
+type Account struct {
+	UserID        string
+	CredentialRef string
+}
+
+// Profile contains the two identities owned by one daemon process.
 type Profile struct {
-	Name                string
-	CredentialRef       string
-	InboundToolsEnabled bool
-	Agent               string
-	Deployment          Deployment
+	Name       string
+	User       Account
+	Bot        Account
+	Agent      string
+	Deployment Deployment
 }
 
 func NormalizeAgent(value string) (string, error) {
@@ -47,29 +70,26 @@ func NormalizeAgent(value string) (string, error) {
 	}
 }
 
-// Deployment is the non-secret server configuration required to start one
-// daemon profile. The IM token remains behind Profile.CredentialRef.
+// Deployment is the shared non-secret server configuration for both SDKs.
 type Deployment struct {
-	UserID      string
-	APIAddr     string
-	ChatAPIAddr string
-	WSAddr      string
-	PlatformID  int32
+	APIAddr    string
+	WSAddr     string
+	PlatformID int32
 }
 
 // Paths describes the exclusive on-disk resources of one profile.
 type Paths struct {
-	ProfileID      string
-	ConfigFile     string
-	DataDir        string
-	SDKDir         string
-	ControlDB      string
-	AttachmentsDir string
-	LogsDir        string
-	RuntimeDir     string
-	RunsDir        string
-	Socket         string
-	LockFile       string
+	ProfileID  string
+	ConfigFile string
+	DataDir    string
+	UserSDKDir string
+	BotSDKDir  string
+	ControlDB  string
+	LogsDir    string
+	RuntimeDir string
+	RunsDir    string
+	Socket     string
+	LockFile   string
 }
 
 // NewPaths creates the layout defined by the product specification.
@@ -84,34 +104,25 @@ func NewPaths(configDir, dataDir, runtimeDir, profileName string) (Paths, error)
 	profileDataDir := filepath.Join(dataDir, "abdim", "profiles", profileName)
 	profileRuntimeDir := filepath.Join(runtimeDir, "abdim", profileName)
 	return Paths{
-		ProfileID:      profileName,
-		ConfigFile:     filepath.Join(configDir, "abdim", "profiles", profileName+".toml"),
-		DataDir:        profileDataDir,
-		SDKDir:         filepath.Join(profileDataDir, "sdk"),
-		ControlDB:      filepath.Join(profileDataDir, "control.db"),
-		AttachmentsDir: filepath.Join(profileDataDir, "attachments"),
-		LogsDir:        filepath.Join(profileDataDir, "logs"),
-		RuntimeDir:     profileRuntimeDir,
-		RunsDir:        filepath.Join(profileRuntimeDir, "runs"),
-		Socket:         filepath.Join(profileRuntimeDir, "daemon.sock"),
-		LockFile:       filepath.Join(profileRuntimeDir, "daemon.lock"),
+		ProfileID:  profileName,
+		ConfigFile: filepath.Join(configDir, "abdim", "profiles", profileName+".toml"),
+		DataDir:    profileDataDir,
+		UserSDKDir: filepath.Join(profileDataDir, "sdk", string(IdentityUser)),
+		BotSDKDir:  filepath.Join(profileDataDir, "sdk", string(IdentityBot)),
+		ControlDB:  filepath.Join(profileDataDir, "control.db"),
+		LogsDir:    filepath.Join(profileDataDir, "logs"),
+		RuntimeDir: profileRuntimeDir,
+		RunsDir:    filepath.Join(profileRuntimeDir, "runs"),
+		Socket:     filepath.Join(profileRuntimeDir, "daemon.sock"),
+		LockFile:   filepath.Join(profileRuntimeDir, "daemon.lock"),
 	}, nil
-}
-
-// AttachmentPath resolves an opaque attachment reference within this profile's
-// private attachment directory. It rejects path-like values at the boundary.
-func (p Paths) AttachmentPath(reference string) (string, error) {
-	if !attachmentReferencePattern.MatchString(reference) {
-		return "", errors.New("invalid attachment reference")
-	}
-	return filepath.Join(p.AttachmentsDir, reference), nil
 }
 
 // EnsurePrivate creates the directories owned by this profile with owner-only
 // permissions. Existing directories are tightened as well.
 func (p Paths) EnsurePrivate() error {
 	for _, dir := range []string{
-		filepath.Dir(p.ConfigFile), p.DataDir, p.SDKDir, p.AttachmentsDir,
+		filepath.Dir(p.ConfigFile), p.DataDir, p.UserSDKDir, p.BotSDKDir,
 		p.LogsDir, p.RuntimeDir, p.RunsDir,
 	} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -134,21 +145,15 @@ func ValidateName(name string) error {
 
 // Configured reports whether all deployment inputs have been supplied.
 func (d Deployment) Configured() bool {
-	return strings.TrimSpace(d.UserID) != "" || strings.TrimSpace(d.APIAddr) != "" || strings.TrimSpace(d.ChatAPIAddr) != "" || strings.TrimSpace(d.WSAddr) != "" || d.PlatformID != 0
+	return strings.TrimSpace(d.APIAddr) != "" || strings.TrimSpace(d.WSAddr) != "" || d.PlatformID != 0
 }
 
 // Validate verifies complete, non-secret SDK deployment inputs.
 func (d Deployment) Validate() error {
-	if strings.TrimSpace(d.UserID) == "" || d.PlatformID <= 0 {
-		return fmt.Errorf("%w: user ID and positive platform ID are required", ErrInvalidDeployment)
+	if d.PlatformID <= 0 {
+		return fmt.Errorf("%w: positive platform ID is required", ErrInvalidDeployment)
 	}
 	if err := validateEndpoint(d.APIAddr, "http", "https"); err != nil {
-		return err
-	}
-	if strings.TrimSpace(d.ChatAPIAddr) == "" {
-		return fmt.Errorf("%w: Chat API address is required", ErrInvalidDeployment)
-	}
-	if err := validateEndpoint(d.ChatAPIAddr, "http", "https"); err != nil {
 		return err
 	}
 	return validateEndpoint(d.WSAddr, "ws", "wss")
@@ -172,11 +177,11 @@ func Save(path string, profile Profile) error {
 	if err := ValidateName(profile.Name); err != nil {
 		return err
 	}
-	if strings.TrimSpace(profile.CredentialRef) == "" {
-		return errors.New("credential reference is required")
+	if err := validateAccount(IdentityUser, profile.User); err != nil {
+		return err
 	}
-	if filepath.IsAbs(profile.CredentialRef) {
-		return errors.New("credential reference must not be an absolute path")
+	if err := validateAccount(IdentityBot, profile.Bot); err != nil {
+		return err
 	}
 	if profile.Deployment.Configured() {
 		if err := profile.Deployment.Validate(); err != nil {
@@ -204,13 +209,14 @@ func Save(path string, profile Profile) error {
 		_ = file.Close()
 		return fmt.Errorf("secure profile file: %w", err)
 	}
-	contents := "name = " + strconv.Quote(profile.Name) + "\ncredential_ref = " + strconv.Quote(profile.CredentialRef) + "\n"
-	contents += "inbound_tools_enabled = " + strconv.FormatBool(profile.InboundToolsEnabled) + "\n"
+	contents := "name = " + strconv.Quote(profile.Name) + "\n"
+	contents += "user_id = " + strconv.Quote(profile.User.UserID) + "\n"
+	contents += "user_credential_ref = " + strconv.Quote(profile.User.CredentialRef) + "\n"
+	contents += "bot_id = " + strconv.Quote(profile.Bot.UserID) + "\n"
+	contents += "bot_credential_ref = " + strconv.Quote(profile.Bot.CredentialRef) + "\n"
 	contents += "agent = " + strconv.Quote(agent) + "\n"
 	if profile.Deployment.Configured() {
-		contents += "user_id = " + strconv.Quote(profile.Deployment.UserID) + "\n"
 		contents += "api_addr = " + strconv.Quote(profile.Deployment.APIAddr) + "\n"
-		contents += "chat_api_addr = " + strconv.Quote(profile.Deployment.ChatAPIAddr) + "\n"
 		contents += "ws_addr = " + strconv.Quote(profile.Deployment.WSAddr) + "\n"
 		contents += "platform_id = " + strconv.FormatInt(int64(profile.Deployment.PlatformID), 10) + "\n"
 	}
@@ -234,9 +240,8 @@ func Load(path string) (Profile, error) {
 		return Profile{}, fmt.Errorf("read profile file: %w", err)
 	}
 
-	values := make(map[string]string, 9)
+	values := make(map[string]string, 10)
 	var platformID int32
-	var inboundToolsEnabled bool
 	for _, line := range strings.Split(string(contents), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -247,10 +252,7 @@ func Load(path string) (Profile, error) {
 			return Profile{}, errors.New("invalid profile TOML")
 		}
 		key = strings.TrimSpace(key)
-		if key == "owner_user_id" || key == "pairing_code_hash" || key == "pairing_expires_at" {
-			continue // Compatibility with profiles written by the removed pairing flow.
-		}
-		if key != "name" && key != "credential_ref" && key != "inbound_tools_enabled" && key != "agent" && key != "user_id" && key != "api_addr" && key != "chat_api_addr" && key != "ws_addr" && key != "platform_id" {
+		if key != "name" && key != "user_id" && key != "user_credential_ref" && key != "bot_id" && key != "bot_credential_ref" && key != "agent" && key != "api_addr" && key != "ws_addr" && key != "platform_id" {
 			return Profile{}, fmt.Errorf("unsupported profile field %q", key)
 		}
 		if _, exists := values[key]; exists {
@@ -262,15 +264,6 @@ func Load(path string) (Profile, error) {
 				return Profile{}, fmt.Errorf("decode profile field %q: %w", key, err)
 			}
 			platformID = int32(value)
-			values[key] = "configured"
-			continue
-		}
-		if key == "inbound_tools_enabled" {
-			value, err := strconv.ParseBool(strings.TrimSpace(rawValue))
-			if err != nil {
-				return Profile{}, fmt.Errorf("decode profile field %q: %w", key, err)
-			}
-			inboundToolsEnabled = value
 			values[key] = "configured"
 			continue
 		}
@@ -286,17 +279,20 @@ func Load(path string) (Profile, error) {
 		return Profile{}, err
 	}
 	profile := Profile{
-		Name:                values["name"],
-		CredentialRef:       values["credential_ref"],
-		InboundToolsEnabled: inboundToolsEnabled,
-		Agent:               agent,
-		Deployment:          Deployment{UserID: values["user_id"], APIAddr: values["api_addr"], ChatAPIAddr: values["chat_api_addr"], WSAddr: values["ws_addr"], PlatformID: platformID},
+		Name:       values["name"],
+		User:       Account{UserID: values["user_id"], CredentialRef: values["user_credential_ref"]},
+		Bot:        Account{UserID: values["bot_id"], CredentialRef: values["bot_credential_ref"]},
+		Agent:      agent,
+		Deployment: Deployment{APIAddr: values["api_addr"], WSAddr: values["ws_addr"], PlatformID: platformID},
 	}
 	if err := ValidateName(profile.Name); err != nil {
 		return Profile{}, err
 	}
-	if strings.TrimSpace(profile.CredentialRef) == "" || filepath.IsAbs(profile.CredentialRef) {
-		return Profile{}, errors.New("invalid credential reference")
+	if err := validateAccount(IdentityUser, profile.User); err != nil {
+		return Profile{}, err
+	}
+	if err := validateAccount(IdentityBot, profile.Bot); err != nil {
+		return Profile{}, err
 	}
 	if profile.Deployment.Configured() {
 		if err := profile.Deployment.Validate(); err != nil {
@@ -304,4 +300,14 @@ func Load(path string) (Profile, error) {
 		}
 	}
 	return profile, nil
+}
+
+func validateAccount(identity Identity, account Account) error {
+	if strings.TrimSpace(account.UserID) == "" {
+		return fmt.Errorf("%s user ID is required", identity)
+	}
+	if strings.TrimSpace(account.CredentialRef) == "" || filepath.IsAbs(account.CredentialRef) {
+		return fmt.Errorf("invalid %s credential reference", identity)
+	}
+	return nil
 }

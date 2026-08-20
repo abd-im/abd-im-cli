@@ -1,8 +1,8 @@
 # Setup and Local Runtime
 
-## Codex
+## Setup
 
-先安装并登录 Codex CLI，确认 `codex` 位于 `PATH`：
+安装并登录 Codex CLI，然后构建和配置 `abdim`：
 
 ```bash
 codex --version
@@ -10,79 +10,78 @@ go build -o ./abdim ./cmd/abdim
 ./abdim setup
 ```
 
-`setup` 默认登录当前 ABD 部署，保存当前用户私有的 profile/token，并启动 daemon。
-不要使用 `sudo`。密码不持久化，token 文件权限为 `0600`。
+`setup` 依次要求 owner user 和 Agent bot 两个不同的 ABD 账号。密码不持久化；两个 OpenIM
+token 保存为独立的 `0600` 文件，profile 只记录 credential reference。
+
+默认服务地址：
 
 ```text
 Account login = https://2.alissa.xin/chat/account/login
 OpenIM API    = https://2.alissa.xin/api
-Chat API      = https://2.alissa.xin/chat
 OpenIM WS     = wss://2.alissa.xin/msg_gateway
 Platform      = 7
 ```
 
-可在执行 `setup` 时通过环境变量覆盖服务地址。OpenIM API、Chat API 和 WebSocket 地址会保存到
-profile，后续执行 `start` 或 `restart` 时不需要重复传入：
+本地部署可在 setup 时覆盖：
 
 ```bash
 ABDIM_ACCOUNT_LOGIN_URL=http://127.0.0.1:10008/account/login \
 ABDIM_OPENIM_API_ADDR=http://127.0.0.1:10002 \
-ABDIM_CHAT_API_ADDR=http://127.0.0.1:10008 \
 ABDIM_OPENIM_WS_ADDR=ws://127.0.0.1:10001 \
 ./abdim setup
 ```
 
-日常命令：
+Chat API 不写入 profile。账号登录使用独立的 login URL，daemon 运行时的普通 IM 能力与托管
+上下文均通过两个本地 SDK session 完成。
+
+## Lifecycle
 
 ```bash
-./abdim status
-./abdim restart
-./abdim stop
-./abdim start
+./abdim daemon start
+./abdim daemon status
+./abdim daemon restart
+./abdim daemon stop
 ```
 
-## IM Tools
+不要使用 `sudo`。一个 profile 同时只能运行一个 daemon。
 
-默认入站 run 是 reply-only。需要 Codex 查询或修改 IM 数据时显式启用：
+## CLI identities
+
+默认身份是 bot。访问 owner 资源时显式选择 user：
 
 ```bash
-./abdim inbound tools enable
-./abdim inbound tools status
-./abdim inbound tools disable
+./abdim --as bot user me
+./abdim --as user user me
+printf '%s\n' '{"conversation_id":"conversation-id","limit":20}' \
+  | ./abdim --as user message history --params-stdin
 ```
 
-daemon 自动向每个 run 注入 `ABDIM_CLI`、私有 socket、grant 和方法快照。
-Agent 可直接运行：
-
-```bash
-"$ABDIM_CLI" commands
-printf '%s' '{"conversation_id":"conversation-1","limit":20}' \
-  | "$ABDIM_CLI" message history --params-stdin
-```
-
-不需要配置额外工具服务。命令、文件和网络能力由 Codex app-server 正常提供；
-IM 调用仍必须经过 `abdim` 的 run grant。启用 tools 后会对所有能私聊该 bot 的
-账号生效，因此当前版本只适合受控 bot 账号。
+daemon 根据 `--as` 将请求交给对应 SDK context。CLI 不持有 token，也没有额外 grant 或工具
+开关；OpenIM 服务端决定所选身份是否有权执行请求。
 
 ## Other Agents
 
-profile 仍接受固定 ID：
+profile 接受固定 provider ID：
 
 ```bash
 ./abdim setup --agent hermes
 ./abdim setup --agent openclaw
 ```
 
-它们分别使用 `hermes acp` 和 `openclaw acp`。这部分是后续接入点；当前主路径和
-真实集成验证只保证 Codex app-server。
+它们分别使用 `hermes acp` 和 `openclaw acp`。Codex app-server 是当前稳定验证路径。
 
-## Runtime Files
+## Runtime files
 
 ```text
 <config-dir>/abdim/profiles/<profile>.toml
-<data-dir>/abdim/profiles/<profile>/{sdk,control.db,attachments,logs}/
-<runtime-dir>/abdim/<profile>/{daemon.sock,daemon.lock,runs/}
+<data-dir>/abdim/profiles/<profile>/sdk/user/
+<data-dir>/abdim/profiles/<profile>/sdk/bot/
+<data-dir>/abdim/profiles/<profile>/control.db
+<data-dir>/abdim/profiles/<profile>/logs/
+<runtime-dir>/abdim/<profile>/daemon.sock
+<runtime-dir>/abdim/<profile>/daemon.lock
+<runtime-dir>/abdim/<profile>/runs/
 ```
 
-owner CLI 连接已运行 daemon，不自行初始化 SDK。Agent 和 daemon 运行在同一 OS
-用户下，所以应只选择可信的本机 Agent。
+Codex run 使用独立 workdir，并在其中安装 `.agents/skills/abd-im`。Agent 与 daemon 运行在同一
+OS 用户下，因此只能使用可信的本机 Agent。

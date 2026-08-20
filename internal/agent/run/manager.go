@@ -24,29 +24,24 @@ var (
 type Status string
 
 const (
-	StatusCompleted    Status = "completed"
-	StatusCanceled     Status = "canceled"
-	StatusDeadline     Status = "deadline_exceeded"
-	StatusGrantExpired Status = "grant_expired"
-	StatusOverflow     Status = "overflow"
-	StatusInterrupted  Status = "interrupted"
-	StatusFailed       Status = "failed"
+	StatusCompleted   Status = "completed"
+	StatusCanceled    Status = "canceled"
+	StatusDeadline    Status = "deadline_exceeded"
+	StatusOverflow    Status = "overflow"
+	StatusInterrupted Status = "interrupted"
+	StatusFailed      Status = "failed"
 )
 
-// Request binds one provider turn to its triggering event and private proxy.
+// Request binds one provider turn to its triggering IM event.
 type Request struct {
-	ID              string
-	ProfileID       string
-	ConversationID  string
-	EventID         string
-	GrantCredential string
-	GrantExpiresAt  time.Time
-	AllowedMethods  []string
-	Proxy           contracts.ToolProxy
-	Prompt          string
-	Output          contracts.TurnOutputSink
-	Activity        contracts.TurnActivitySink
-	Started         func(context.Context) error
+	ID             string
+	ProfileID      string
+	ConversationID string
+	EventID        string
+	Prompt         string
+	Output         contracts.TurnOutputSink
+	Activity       contracts.TurnActivitySink
+	Started        func(context.Context) error
 }
 
 // Result is delivered exactly once for every accepted or rejected run.
@@ -83,8 +78,8 @@ type SessionStore interface {
 }
 
 // Observer receives lifecycle facts after a run is accepted. Implementations
-// must retain only daemon-owned operational metadata and never prompts,
-// credentials, provider output, or proxy internals.
+// must retain only daemon-owned operational metadata and never prompts or
+// provider output.
 type Observer interface {
 	Queued(Request) error
 	Started(runID string) error
@@ -108,7 +103,7 @@ type conversation struct {
 }
 
 // Manager creates one provider process session per run while resuming the
-// conversation's provider state. Each process receives only its run's proxy.
+// conversation's provider state.
 type Manager struct {
 	provider         contracts.Provider
 	sessions         SessionStore
@@ -166,7 +161,6 @@ func (m *Manager) Submit(request Request) (*Handle, error) {
 	if m.stopped {
 		m.mu.Unlock()
 		cancel()
-		_ = request.Proxy.Close(context.Background())
 		return nil, ErrStopped
 	}
 	if _, exists := m.jobs[request.ID]; exists {
@@ -196,7 +190,6 @@ func (m *Manager) Submit(request Request) (*Handle, error) {
 			}
 			m.mu.Unlock()
 			cancel()
-			_ = request.Proxy.Close(context.Background())
 			return nil, fmt.Errorf("record accepted run: %w", err)
 		}
 	}
@@ -221,7 +214,6 @@ func (m *Manager) Cancel(runID string) bool {
 	item.markCanceled(StatusCanceled)
 	m.mu.Unlock()
 	item.cancel()
-	_ = item.request.Proxy.Close(context.Background())
 	return true
 }
 
@@ -241,7 +233,6 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	for _, item := range items {
 		item.markCanceled(StatusInterrupted)
 		item.cancel()
-		_ = item.request.Proxy.Close(context.Background())
 	}
 	m.workers.Wait()
 
@@ -271,10 +262,8 @@ func (m *Manager) execute(item *job) {
 		return
 	}
 
-	waitContext, waitCancel := context.WithDeadline(item.context, item.request.GrantExpiresAt)
-	defer waitCancel()
-	if err := m.acquireSlot(waitContext, item.request.ID); err != nil {
-		status := deadlineStatus(item.request.GrantExpiresAt)
+	if err := m.acquireSlot(item.context, item.request.ID); err != nil {
+		status := StatusCanceled
 		if canceledStatus, canceled := item.cancellation(); canceled {
 			status = canceledStatus
 		}
@@ -303,15 +292,12 @@ func (m *Manager) execute(item *job) {
 		}
 	}
 
-	turnContext, turnCancel := withTurnDeadline(item.context, m.deadline, item.request.GrantExpiresAt)
+	turnContext, turnCancel := context.WithTimeout(item.context, m.deadline)
 	defer turnCancel()
 	startRequest := contracts.StartRequest{
-		ProfileID:       item.request.ProfileID,
-		RunID:           item.request.ID,
-		StateKey:        providerStateKey(item.request.ProfileID, item.request.ConversationID),
-		GrantCredential: item.request.GrantCredential,
-		AllowedMethods:  append([]string(nil), item.request.AllowedMethods...),
-		Proxy:           item.request.Proxy,
+		ProfileID: item.request.ProfileID,
+		RunID:     item.request.ID,
+		StateKey:  providerStateKey(item.request.ProfileID, item.request.ConversationID),
 	}
 	if m.sessions != nil {
 		sessionRef, _, loadErr := m.sessions.LoadSessionRef(turnContext, item.request.ProfileID, item.request.ConversationID, m.sessionNamespace)
@@ -353,14 +339,14 @@ func (m *Manager) execute(item *job) {
 	}()
 	result, err := session.Turn(turnContext, contracts.TurnRequest{
 		RunID: item.request.ID, EventID: item.request.EventID,
-		GrantCredential: item.request.GrantCredential, Prompt: item.request.Prompt,
+		Prompt: item.request.Prompt,
 		Output: item.request.Output, Activity: item.request.Activity,
 	})
 	close(finished)
 	if status, canceled := item.cancellation(); canceled {
 		m.complete(item, Result{RunID: item.request.ID, Status: status, Err: turnContext.Err()})
 	} else if turnContext.Err() != nil {
-		m.complete(item, Result{RunID: item.request.ID, Status: deadlineStatus(item.request.GrantExpiresAt), Err: turnContext.Err()})
+		m.complete(item, Result{RunID: item.request.ID, Status: StatusDeadline, Err: turnContext.Err()})
 	} else if err != nil {
 		m.complete(item, Result{RunID: item.request.ID, Status: StatusFailed, Err: err})
 	} else if m.sessions != nil && strings.TrimSpace(result.SessionRef) != "" {
@@ -446,7 +432,6 @@ func (item *job) finish(result Result) bool {
 	item.finished = true
 	item.mu.Unlock()
 	item.cancel()
-	_ = item.request.Proxy.Close(context.Background())
 	item.done <- result
 	close(item.done)
 	return true
@@ -459,26 +444,8 @@ func (m *Manager) report(err error) {
 }
 
 func validateRequest(request Request) error {
-	if request.ID == "" || request.ProfileID == "" || request.ConversationID == "" || request.EventID == "" || request.GrantCredential == "" || request.Proxy == nil {
-		return errors.New("run ID, profile ID, conversation ID, event ID, grant credential, and proxy are required")
-	}
-	if request.GrantExpiresAt.IsZero() {
-		return errors.New("run grant expiry is required")
+	if request.ID == "" || request.ProfileID == "" || request.ConversationID == "" || request.EventID == "" {
+		return errors.New("run ID, profile ID, conversation ID, and event ID are required")
 	}
 	return nil
-}
-
-func withTurnDeadline(parent context.Context, deadline time.Duration, grantExpiry time.Time) (context.Context, context.CancelFunc) {
-	limit := time.Now().Add(deadline)
-	if grantExpiry.Before(limit) {
-		limit = grantExpiry
-	}
-	return context.WithDeadline(parent, limit)
-}
-
-func deadlineStatus(grantExpiry time.Time) Status {
-	if !time.Now().Before(grantExpiry) {
-		return StatusGrantExpired
-	}
-	return StatusDeadline
 }

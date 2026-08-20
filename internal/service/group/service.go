@@ -3,15 +3,11 @@ package group
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/abd-im/abd-im-cli/internal/agent/grant"
-	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/service"
 )
 
@@ -99,7 +95,7 @@ func (s *Service) meta() service.Meta {
 	return service.NewMeta(s.options.ProfileID, s.options.Stale())
 }
 
-func (s *Service) List(ctx context.Context, _ service.Access, input ListInput) (service.PageResult[Group], error) {
+func (s *Service) List(ctx context.Context, input ListInput) (service.PageResult[Group], error) {
 	if err := service.ValidateLimit(input.Limit); err != nil {
 		return service.PageResult[Group]{}, err
 	}
@@ -118,7 +114,7 @@ func (s *Service) List(ctx context.Context, _ service.Access, input ListInput) (
 	return service.PageResult[Group]{Data: page, Meta: s.meta()}, nil
 }
 
-func (s *Service) Get(ctx context.Context, _ service.Access, input GetInput) (service.Result[Group], error) {
+func (s *Service) Get(ctx context.Context, input GetInput) (service.Result[Group], error) {
 	if strings.TrimSpace(input.GroupID) == "" {
 		return service.Result[Group]{}, fmt.Errorf("%w: group ID is required", service.ErrInvalidArgument)
 	}
@@ -134,7 +130,7 @@ func (s *Service) Get(ctx context.Context, _ service.Access, input GetInput) (se
 	return service.Result[Group]{Data: item, Meta: s.meta()}, nil
 }
 
-func (s *Service) Search(ctx context.Context, _ service.Access, input SearchInput) (service.PageResult[Group], error) {
+func (s *Service) Search(ctx context.Context, input SearchInput) (service.PageResult[Group], error) {
 	if err := validSearch(input.Query, input.Limit); err != nil {
 		return service.PageResult[Group]{}, err
 	}
@@ -154,7 +150,7 @@ func (s *Service) Search(ctx context.Context, _ service.Access, input SearchInpu
 	return service.PageResult[Group]{Data: page, Meta: s.meta()}, nil
 }
 
-func (s *Service) Members(ctx context.Context, _ service.Access, input MembersInput) (service.PageResult[Member], error) {
+func (s *Service) Members(ctx context.Context, input MembersInput) (service.PageResult[Member], error) {
 	if strings.TrimSpace(input.GroupID) == "" {
 		return service.PageResult[Member]{}, fmt.Errorf("%w: group ID is required", service.ErrInvalidArgument)
 	}
@@ -182,7 +178,7 @@ func (s *Service) Members(ctx context.Context, _ service.Access, input MembersIn
 	return service.PageResult[Member]{Data: page, Meta: s.meta()}, nil
 }
 
-func (s *Service) SearchMembers(ctx context.Context, _ service.Access, input MembersSearchInput) (service.PageResult[Member], error) {
+func (s *Service) SearchMembers(ctx context.Context, input MembersSearchInput) (service.PageResult[Member], error) {
 	if strings.TrimSpace(input.GroupID) == "" {
 		return service.PageResult[Member]{}, fmt.Errorf("%w: group ID is required", service.ErrInvalidArgument)
 	}
@@ -243,60 +239,4 @@ func memberPage(items []Member, offset, limit int, query string) (service.Page[M
 		result.NextCursor, _ = service.EncodeCursor(query, end)
 	}
 	return result, nil
-}
-
-func (s *Service) Methods() []proxy.Method {
-	wrap := func(name string, handle func(context.Context, contracts.Request, grant.Grant) (interface{}, error)) proxy.Method {
-		return proxy.Method{Name: name, Meta: func() contracts.Meta {
-			return service.ContractMeta(s.meta())
-		}, Handle: func(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {
-			value, err := handle(ctx, request, item)
-			if err != nil {
-				return nil, proxy.Failure(contracts.CodePolicyDenied, err.Error())
-			}
-			return json.Marshal(value)
-		}}
-	}
-	return []proxy.Method{
-		wrap(ListMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input ListInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.List(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-		wrap(GetMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input GetInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.Get(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-		wrap(SearchMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input SearchInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.Search(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-		wrap(MembersListMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input MembersInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.Members(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-		wrap(MembersSearchMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input MembersSearchInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.SearchMembers(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-	}
 }

@@ -3,7 +3,6 @@ package testkit
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -85,35 +84,5 @@ func TestFakeProviderAndSessionRecordCalls(t *testing.T) {
 	}
 	if session.CancelCount() != 1 || session.CloseCount() != 1 {
 		t.Fatalf("lifecycle counts = cancel:%d close:%d, want 1 each", session.CancelCount(), session.CloseCount())
-	}
-}
-
-func TestFakeProxyIsInMemoryAndCloses(t *testing.T) {
-	response := &contracts.Response{
-		APIVersion: contracts.APIVersionV1,
-		RequestID:  "req-1",
-		OK:         true,
-		Data:       json.RawMessage(`{}`),
-		Meta:       &contracts.Meta{ProfileID: "work"},
-	}
-	proxy := &FakeProxy{Response: response}
-	request := contracts.Request{
-		APIVersion: contracts.APIVersionV1,
-		RequestID:  "req-1",
-		ProfileID:  "work",
-		Method:     "profile.get",
-		Params:     json.RawMessage(`{}`),
-	}
-	if _, err := proxy.Call(context.Background(), request); err != nil {
-		t.Fatalf("Call() error = %v", err)
-	}
-	if got := proxy.Calls(); len(got) != 1 || got[0].Method != "profile.get" {
-		t.Fatalf("Calls() = %+v, want one profile.get call", got)
-	}
-	if err := proxy.Close(context.Background()); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-	if _, err := proxy.Call(context.Background(), request); !errors.Is(err, ErrProxyClosed) {
-		t.Fatalf("Call() after Close() error = %v, want ErrProxyClosed", err)
 	}
 }

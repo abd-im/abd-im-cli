@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
-	"github.com/abd-im/abd-im-cli/internal/testkit"
 )
 
 func TestAdapterRunsFixedAppServerTurn(t *testing.T) {
@@ -26,7 +25,7 @@ func TestAdapterRunsFixedAppServerTurn(t *testing.T) {
 	var outputs []string
 	var activities []contracts.TurnActivity
 	result, err := session.Turn(context.Background(), contracts.TurnRequest{
-		RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "inbound body marker",
+		RunID: "run-1", EventID: "event-1", Prompt: "inbound body marker",
 		Output: func(_ context.Context, output contracts.TurnOutput) error {
 			outputs = append(outputs, output.Text)
 			return nil
@@ -86,7 +85,7 @@ func TestAdapterCancellationReapsBlockedServer(t *testing.T) {
 	defer value.Close(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := value.Turn(context.Background(), contracts.TurnRequest{RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "wait"})
+		_, err := value.Turn(context.Background(), contracts.TurnRequest{RunID: "run-1", EventID: "event-1", Prompt: "wait"})
 		done <- err
 	}()
 	if err := waitForFile(filepath.Join(adapter.config.WorkingDir, "started"), time.Second); err != nil {
@@ -115,7 +114,7 @@ func TestAdapterEndsTurnOnTerminalAppServerError(t *testing.T) {
 	defer session.Close(context.Background())
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err = session.Turn(ctx, contracts.TurnRequest{RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "fail"})
+	_, err = session.Turn(ctx, contracts.TurnRequest{RunID: "run-1", EventID: "event-1", Prompt: "fail"})
 	if err == nil || err.Error() != "Codex turn did not complete: stream disconnected" {
 		t.Fatalf("Turn() error = %v, want terminal app-server error", err)
 	}
@@ -150,13 +149,12 @@ func TestSessionKeepsTurnOpenForRetryingAppServerError(t *testing.T) {
 	}
 }
 
-func TestAdapterCreatesRunPrivateCLIConfiguration(t *testing.T) {
+func TestAdapterCreatesIsolatedCodexConfiguration(t *testing.T) {
 	adapter := newAdapter(t, "", false)
 	if err := os.WriteFile(filepath.Join(adapter.sourceCodexHome, "config.toml"), []byte("model = 'gpt-test'\nmodel_provider = 'OpenIM'\n\n[model_providers.OpenIM]\nbase_url = 'https://api.example.test/v1'\nsupports_websockets = true\n\n[projects.'/workspace']\nhook = 'must-not-inherit'\n"), 0o600); err != nil {
 		t.Fatalf("write source Codex config: %v", err)
 	}
 	request := startRequest()
-	request.AllowedMethods = []string{"message.history", "daemon.shutdown"}
 	session, err := adapter.Start(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -167,15 +165,16 @@ func TestAdapterCreatesRunPrivateCLIConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read run config: %v", err)
 	}
-	if strings.Contains(string(config), "must-not-inherit") || !strings.Contains(string(config), "model_provider = 'OpenIM'") || !strings.Contains(string(config), "base_url = 'https://api.example.test/v1'") || strings.Contains(string(config), "supports_websockets = true") || !strings.Contains(string(config), "supports_websockets = false") || !strings.Contains(string(config), "[shell_environment_policy]") || !strings.Contains(string(config), "ABDIM_AGENT_GRANT") {
+	if strings.Contains(string(config), "must-not-inherit") || !strings.Contains(string(config), "model_provider = 'OpenIM'") || !strings.Contains(string(config), "base_url = 'https://api.example.test/v1'") || strings.Contains(string(config), "supports_websockets = true") || !strings.Contains(string(config), "supports_websockets = false") || !strings.Contains(string(config), "[shell_environment_policy]") || !strings.Contains(string(config), "ABDIM_PROFILE") || strings.Contains(string(config), "ABDIM_AGENT_GRANT") {
 		t.Fatalf("run CLI config = %s", config)
 	}
 	info, err := os.Stat(configPath)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("run config mode = %v, %v", info.Mode(), err)
 	}
-	if info, err := os.Stat(filepath.Join(runRoot, "work", ".abdim.sock")); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("run CLI socket mode = %v, %v", info.Mode(), err)
+	skill, err := os.ReadFile(filepath.Join(runRoot, "work", ".agents", "skills", "abd-im", "SKILL.md"))
+	if err != nil || !strings.Contains(string(skill), "name: abd-im") {
+		t.Fatalf("read installed ABD IM skill: %v", err)
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -307,7 +306,7 @@ func newAdapter(t *testing.T, capture string, block bool) *Adapter {
 }
 
 func startRequest() contracts.StartRequest {
-	return contracts.StartRequest{ProfileID: "work", RunID: "run-1", StateKey: strings.Repeat("a", 64), GrantCredential: "grant-1", Proxy: &testkit.FakeProxy{}}
+	return contracts.StartRequest{ProfileID: "work", RunID: "run-1", StateKey: strings.Repeat("a", 64)}
 }
 
 func waitForFile(path string, timeout time.Duration) error {

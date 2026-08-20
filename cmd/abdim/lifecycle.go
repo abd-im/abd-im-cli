@@ -198,6 +198,7 @@ func readDaemonStatus(ctx context.Context, paths profile.Paths) (daemonProcessSt
 		APIVersion: contracts.APIVersionV1,
 		RequestID:  "lifecycle",
 		ProfileID:  paths.ProfileID,
+		As:         "bot",
 		Method:     "daemon.status",
 		Params:     json.RawMessage(`{}`),
 	})

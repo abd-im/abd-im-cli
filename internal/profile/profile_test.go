@@ -21,7 +21,7 @@ func TestPathsCreatePrivateProfileLayout(t *testing.T) {
 	if paths.ControlDB != filepath.Join(root, "data", "abdim", "profiles", "work", "control.db") {
 		t.Fatalf("ControlDB = %q", paths.ControlDB)
 	}
-	for _, path := range []string{filepath.Dir(paths.ConfigFile), paths.DataDir, paths.SDKDir, paths.AttachmentsDir, paths.LogsDir, paths.RuntimeDir} {
+	for _, path := range []string{filepath.Dir(paths.ConfigFile), paths.DataDir, paths.UserSDKDir, paths.BotSDKDir, paths.LogsDir, paths.RuntimeDir} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatalf("stat %q: %v", path, err)
@@ -37,26 +37,6 @@ func TestPathsCreatePrivateProfileLayout(t *testing.T) {
 	}
 }
 
-func TestAttachmentPathAcceptsOnlyOpaqueReferences(t *testing.T) {
-	root := t.TempDir()
-	paths, err := NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"), filepath.Join(root, "runtime"), "work")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path, err := paths.AttachmentPath("a1b2c3d4e5f6g7h8")
-	if err != nil {
-		t.Fatalf("AttachmentPath() error = %v", err)
-	}
-	if path != filepath.Join(paths.AttachmentsDir, "a1b2c3d4e5f6g7h8") {
-		t.Fatalf("AttachmentPath() = %q", path)
-	}
-	for _, reference := range []string{"", "short", "../secret", "/tmp/secret", "reference/child", `reference\\child`} {
-		if _, err := paths.AttachmentPath(reference); err == nil {
-			t.Errorf("AttachmentPath(%q) error = nil", reference)
-		}
-	}
-}
-
 func TestFileStoreKeepsTokenOutOfProfile(t *testing.T) {
 	const token = "test-token-marker-4d2a0d"
 	root := t.TempDir()
@@ -68,14 +48,15 @@ func TestFileStoreKeepsTokenOutOfProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileStore() error = %v", err)
 	}
-	reference, err := store.Put(context.Background(), "work", []byte(token))
+	reference, err := store.Put(context.Background(), "work-user", []byte(token))
 	if err != nil {
 		t.Fatalf("Put() error = %v", err)
 	}
-	if reference != "file:work" {
-		t.Fatalf("reference = %q, want file:work", reference)
+	if reference != "file:work-user" {
+		t.Fatalf("reference = %q, want file:work-user", reference)
 	}
-	item := Profile{Name: "work", CredentialRef: reference, InboundToolsEnabled: true, Agent: DefaultAgent}
+	item := validProfile()
+	item.User.CredentialRef = reference
 	if err := Save(paths.ConfigFile, item); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -93,7 +74,7 @@ func TestFileStoreKeepsTokenOutOfProfile(t *testing.T) {
 	if loaded != item {
 		t.Fatalf("Load() = %#v, want %#v", loaded, item)
 	}
-	restored, err := store.Get(context.Background(), loaded.CredentialRef)
+	restored, err := store.Get(context.Background(), loaded.User.CredentialRef)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -101,7 +82,7 @@ func TestFileStoreKeepsTokenOutOfProfile(t *testing.T) {
 		t.Fatalf("Get() token = %q, want marker", restored)
 	}
 
-	info, err := os.Stat(filepath.Join(root, "data", "abdim", "credentials", "work.token"))
+	info, err := os.Stat(filepath.Join(root, "data", "abdim", "credentials", "work-user.token"))
 	if err != nil {
 		t.Fatalf("stat credential file: %v", err)
 	}
@@ -110,15 +91,14 @@ func TestFileStoreKeepsTokenOutOfProfile(t *testing.T) {
 	}
 }
 
-func TestLoadIgnoresRemovedPairingFields(t *testing.T) {
+func TestLoadRejectsLegacySingleIdentityProfile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "work.toml")
 	contents := "name = \"work\"\ncredential_ref = \"file:work\"\nuser_id = \"bot-user\"\napi_addr = \"https://example.test/api\"\nchat_api_addr = \"https://example.test/chat\"\nws_addr = \"wss://example.test/ws\"\nplatform_id = 7\npairing_code_hash = \"legacy\"\npairing_expires_at = 1\nowner_user_id = \"legacy-owner\"\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := Load(path)
-	if err != nil || loaded.Name != "work" || loaded.Deployment.UserID != "bot-user" || loaded.InboundToolsEnabled || loaded.Agent != DefaultAgent {
-		t.Fatalf("Load() = %#v, %v", loaded, err)
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() accepted a legacy single-identity profile")
 	}
 }
 
@@ -140,30 +120,21 @@ func TestNormalizeAgentAcceptsOnlyFixedProviders(t *testing.T) {
 
 func TestSaveRejectsPartialOrInvalidDeployment(t *testing.T) {
 	for _, deployment := range []Deployment{
-		{UserID: "user-1"},
-		{UserID: "user-1", APIAddr: "https://2.example.test/api", WSAddr: "wss://2.example.test/ws", PlatformID: 7},
-		{UserID: "user-1", APIAddr: "https://2.example.test/api", ChatAPIAddr: "wss://2.example.test/chat", WSAddr: "wss://2.example.test/ws", PlatformID: 7},
+		{APIAddr: "https://2.example.test/api"},
+		{APIAddr: "https://2.example.test/api", WSAddr: "wss://2.example.test/ws"},
+		{APIAddr: "wss://2.example.test/api", WSAddr: "wss://2.example.test/ws", PlatformID: 7},
 	} {
-		if err := Save(filepath.Join(t.TempDir(), "work.toml"), Profile{Name: "work", CredentialRef: "file:work", Deployment: deployment}); !errors.Is(err, ErrInvalidDeployment) {
+		item := validProfile()
+		item.Deployment = deployment
+		if err := Save(filepath.Join(t.TempDir(), "work.toml"), item); !errors.Is(err, ErrInvalidDeployment) {
 			t.Errorf("Save(%#v) error = %v, want ErrInvalidDeployment", deployment, err)
 		}
 	}
 }
 
-func TestProfileRoundTripIncludesChatAPIAddr(t *testing.T) {
+func TestProfileRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "work.toml")
-	want := Profile{
-		Name:          "work",
-		CredentialRef: "file:work",
-		Agent:         DefaultAgent,
-		Deployment: Deployment{
-			UserID:      "bot-user",
-			APIAddr:     "https://example.test/api",
-			ChatAPIAddr: "https://example.test/chat",
-			WSAddr:      "wss://example.test/ws",
-			PlatformID:  7,
-		},
-	}
+	want := validProfile()
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
 	}
@@ -173,15 +144,29 @@ func TestProfileRoundTripIncludesChatAPIAddr(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsProfileMissingChatAPIAddr(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "work.toml")
-	contents := "name = \"work\"\ncredential_ref = \"file:work\"\nuser_id = \"bot-user\"\napi_addr = \"https://example.test/api\"\nws_addr = \"wss://example.test/ws\"\nplatform_id = 7\n"
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
+func TestParseIdentity(t *testing.T) {
+	for _, identity := range []Identity{IdentityUser, IdentityBot} {
+		got, err := ParseIdentity(string(identity))
+		if err != nil || got != identity {
+			t.Fatalf("ParseIdentity(%q) = %q, %v", identity, got, err)
+		}
 	}
-	_, err := Load(path)
-	if !errors.Is(err, ErrInvalidDeployment) || !strings.Contains(err.Error(), "Chat API address is required") {
-		t.Fatalf("Load() error = %v", err)
+	if _, err := ParseIdentity("owner"); err == nil {
+		t.Fatal("ParseIdentity() accepted an unknown identity")
+	}
+}
+
+func validProfile() Profile {
+	return Profile{
+		Name:  "work",
+		User:  Account{UserID: "owner", CredentialRef: "file:work-user"},
+		Bot:   Account{UserID: "bot", CredentialRef: "file:work-bot"},
+		Agent: DefaultAgent,
+		Deployment: Deployment{
+			APIAddr:    "https://example.test/api",
+			WSAddr:     "wss://example.test/ws",
+			PlatformID: 7,
+		},
 	}
 }
 

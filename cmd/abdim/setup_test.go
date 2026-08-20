@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"os"
@@ -14,7 +15,8 @@ import (
 
 func TestPromptAccountDefaultsPhoneAreaCodeAndKeepsPasswordOutOfPrompts(t *testing.T) {
 	var prompts bytes.Buffer
-	account, areaCode, password, err := promptAccount(strings.NewReader("15500000000\n\nsecret-marker\n"), &prompts)
+	input := strings.NewReader("15500000000\n\nsecret-marker\n")
+	account, areaCode, password, err := promptAccount(bufio.NewReader(input), input, &prompts, profile.IdentityUser)
 	if err != nil || account != "15500000000" || areaCode != "+86" || password != "secret-marker" {
 		t.Fatalf("promptAccount() = %q, %q, %q, %v", account, areaCode, password, err)
 	}
@@ -42,20 +44,31 @@ func TestRunSetupPersistsTokenFreeProfileAndStartsDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := profile.Save(paths.ConfigFile, profile.Profile{
-		Name: "default", CredentialRef: "file:default", InboundToolsEnabled: true,
-		Deployment: profile.Deployment{UserID: "old-bot", APIAddr: "https://example.test/api", ChatAPIAddr: "https://example.test/chat", WSAddr: "wss://example.test/ws", PlatformID: 7},
+		Name: "default", User: profile.Account{UserID: "old-user", CredentialRef: "file:default-user"}, Bot: profile.Account{UserID: "old-bot", CredentialRef: "file:default-bot"},
+		Deployment: profile.Deployment{APIAddr: "https://example.test/api", WSAddr: "wss://example.test/ws", PlatformID: 7},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	const token = "token-marker-must-not-leak"
 	started := false
 	dependencies := setupDependencies{
-		endpoints: connector.ABDEndpoints{APIAddr: "http://127.0.0.1:10002", ChatAPIAddr: "http://127.0.0.1:10008", WSAddr: "ws://127.0.0.1:10001"},
+		endpoints: connector.ABDEndpoints{APIAddr: "http://127.0.0.1:10002", WSAddr: "ws://127.0.0.1:10001"},
 		login: func(_ context.Context, account, areaCode, password string) (string, string, error) {
-			if account != "15500000000" || areaCode != "+86" || password != "password" {
-				t.Fatalf("login input = %q, %q, %q", account, areaCode, password)
+			switch account {
+			case "15500000000":
+				if areaCode != "+86" || password != "user-password" {
+					t.Fatalf("user login input = %q, %q, %q", account, areaCode, password)
+				}
+				return "owner-user", "user-" + token, nil
+			case "bot@example.com":
+				if areaCode != "" || password != "bot-password" {
+					t.Fatalf("bot login input = %q, %q, %q", account, areaCode, password)
+				}
+				return "bot-user", "bot-" + token, nil
+			default:
+				t.Fatalf("unexpected login account %q", account)
+				return "", "", nil
 			}
-			return "bot-user", token, nil
 		},
 		stop: func(context.Context, commandRoots, string) (bool, error) { return false, nil },
 		start: func(context.Context, commandRoots, string) (daemonProcessStatus, bool, error) {
@@ -64,14 +77,14 @@ func TestRunSetupPersistsTokenFreeProfileAndStartsDaemon(t *testing.T) {
 		},
 	}
 	var output, prompts bytes.Buffer
-	if got := runSetupWith(context.Background(), nil, strings.NewReader("15500000000\n\npassword\n"), &output, &prompts, roots, "default", dependencies); got != 0 {
+	if got := runSetupWith(context.Background(), nil, strings.NewReader("15500000000\n\nuser-password\nbot@example.com\nbot-password\n"), &output, &prompts, roots, "default", dependencies); got != 0 {
 		t.Fatalf("runSetupWith() = %d: %s", got, output.String())
 	}
 	if !started || output.String() != "Setup complete. abdim is running (pid 42).\n" || strings.Contains(output.String(), token) || strings.Contains(output.String(), "password") {
 		t.Fatalf("setup output = %q, started=%t", output.String(), started)
 	}
 	item, err := profile.Load(paths.ConfigFile)
-	if err != nil || item.Deployment.UserID != "bot-user" || item.Deployment.APIAddr != "http://127.0.0.1:10002" || item.Deployment.ChatAPIAddr != "http://127.0.0.1:10008" || item.Deployment.WSAddr != "ws://127.0.0.1:10001" || !item.InboundToolsEnabled || item.Agent != "codex" {
+	if err != nil || item.User.UserID != "owner-user" || item.Bot.UserID != "bot-user" || item.User.CredentialRef != "file:default-user" || item.Bot.CredentialRef != "file:default-bot" || item.Deployment.APIAddr != "http://127.0.0.1:10002" || item.Deployment.WSAddr != "ws://127.0.0.1:10001" || item.Agent != "codex" {
 		t.Fatalf("profile = %#v, %v", item, err)
 	}
 	profileContents, _ := os.ReadFile(paths.ConfigFile)

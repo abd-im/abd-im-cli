@@ -38,36 +38,31 @@ func TestOpenIMSocialReadsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	owner := service.OwnerAccess()
-	friends, err := reader.Friends(ctx, owner, ListInput{Limit: 100})
+	friends, err := reader.Friends(ctx, ListInput{Limit: 100})
 	if err != nil || !containsFriend(friends.Data.Items, friendID) {
 		t.Fatalf("friend.list = %#v, %v", friends, err)
 	}
 	assertSocialIntegrationMeta(t, friends.Meta, FriendListMethod)
 
-	owner = service.OwnerAccess()
-	friend, err := reader.Friend(ctx, owner, GetInput{UserID: friendID})
+	friend, err := reader.Friend(ctx, GetInput{UserID: friendID})
 	if err != nil || friend.Data.UserID != friendID {
 		t.Fatalf("friend.get = %#v, %v", friend, err)
 	}
 	assertSocialIntegrationMeta(t, friend.Meta, FriendGetMethod)
 
-	owner = service.OwnerAccess()
-	search, err := reader.SearchFriends(ctx, owner, SearchInput{Query: friendQuery, Limit: 100})
+	search, err := reader.SearchFriends(ctx, SearchInput{Query: friendQuery, Limit: 100})
 	if err != nil || len(search.Data.Items) == 0 {
 		t.Fatalf("friend.search = %#v, %v", search, err)
 	}
 	assertSocialIntegrationMeta(t, search.Meta, FriendSearchMethod)
 
-	owner = service.OwnerAccess()
-	blacklist, err := reader.Blacklist(ctx, owner, ListInput{Limit: 100})
+	blacklist, err := reader.Blacklist(ctx, ListInput{Limit: 100})
 	if err != nil || !containsBlack(blacklist.Data.Items, blackID) {
 		t.Fatalf("blacklist.list = %#v, %v", blacklist, err)
 	}
 	assertSocialIntegrationMeta(t, blacklist.Meta, BlackListMethod)
 
-	owner = service.OwnerAccess()
-	black, err := reader.Black(ctx, owner, GetInput{UserID: blackID})
+	black, err := reader.Black(ctx, GetInput{UserID: blackID})
 	if err != nil || black.Data.UserID != blackID {
 		t.Fatalf("blacklist.get = %#v, %v", black, err)
 	}

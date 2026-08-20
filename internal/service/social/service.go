@@ -3,15 +3,11 @@ package social
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/abd-im/abd-im-cli/internal/agent/grant"
-	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/service"
 )
 
@@ -83,7 +79,7 @@ func (s *Service) meta() service.Meta {
 	return service.NewMeta(s.options.ProfileID, s.options.Stale())
 }
 
-func (s *Service) Friends(ctx context.Context, _ service.Access, input ListInput) (service.PageResult[Friend], error) {
+func (s *Service) Friends(ctx context.Context, input ListInput) (service.PageResult[Friend], error) {
 	if err := service.ValidateLimit(input.Limit); err != nil {
 		return service.PageResult[Friend]{}, err
 	}
@@ -102,7 +98,7 @@ func (s *Service) Friends(ctx context.Context, _ service.Access, input ListInput
 	return service.PageResult[Friend]{Data: page, Meta: s.meta()}, nil
 }
 
-func (s *Service) Friend(ctx context.Context, _ service.Access, input GetInput) (service.Result[Friend], error) {
+func (s *Service) Friend(ctx context.Context, input GetInput) (service.Result[Friend], error) {
 	if strings.TrimSpace(input.UserID) == "" {
 		return service.Result[Friend]{}, fmt.Errorf("%w: user ID is required", service.ErrInvalidArgument)
 	}
@@ -118,7 +114,7 @@ func (s *Service) Friend(ctx context.Context, _ service.Access, input GetInput) 
 	return service.Result[Friend]{Data: item, Meta: s.meta()}, nil
 }
 
-func (s *Service) SearchFriends(ctx context.Context, _ service.Access, input SearchInput) (service.PageResult[Friend], error) {
+func (s *Service) SearchFriends(ctx context.Context, input SearchInput) (service.PageResult[Friend], error) {
 	if err := validSearch(input.Query, input.Limit); err != nil {
 		return service.PageResult[Friend]{}, err
 	}
@@ -138,7 +134,7 @@ func (s *Service) SearchFriends(ctx context.Context, _ service.Access, input Sea
 	return service.PageResult[Friend]{Data: page, Meta: s.meta()}, nil
 }
 
-func (s *Service) Blacklist(ctx context.Context, _ service.Access, input ListInput) (service.PageResult[BlacklistEntry], error) {
+func (s *Service) Blacklist(ctx context.Context, input ListInput) (service.PageResult[BlacklistEntry], error) {
 	if err := service.ValidateLimit(input.Limit); err != nil {
 		return service.PageResult[BlacklistEntry]{}, err
 	}
@@ -157,7 +153,7 @@ func (s *Service) Blacklist(ctx context.Context, _ service.Access, input ListInp
 	return service.PageResult[BlacklistEntry]{Data: page, Meta: s.meta()}, nil
 }
 
-func (s *Service) Black(ctx context.Context, _ service.Access, input GetInput) (service.Result[BlacklistEntry], error) {
+func (s *Service) Black(ctx context.Context, input GetInput) (service.Result[BlacklistEntry], error) {
 	if strings.TrimSpace(input.UserID) == "" {
 		return service.Result[BlacklistEntry]{}, fmt.Errorf("%w: user ID is required", service.ErrInvalidArgument)
 	}
@@ -206,60 +202,4 @@ func blackPage(items []BlacklistEntry, offset, limit int, query string) (service
 		result.NextCursor, _ = service.EncodeCursor(query, end)
 	}
 	return result, nil
-}
-
-func (s *Service) Methods() []proxy.Method {
-	wrap := func(name string, handle func(context.Context, contracts.Request, grant.Grant) (interface{}, error)) proxy.Method {
-		return proxy.Method{Name: name, Meta: func() contracts.Meta {
-			return service.ContractMeta(s.meta())
-		}, Handle: func(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {
-			value, err := handle(ctx, request, item)
-			if err != nil {
-				return nil, proxy.Failure(contracts.CodePolicyDenied, err.Error())
-			}
-			return json.Marshal(value)
-		}}
-	}
-	return []proxy.Method{
-		wrap(FriendListMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input ListInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.Friends(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-		wrap(FriendGetMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input GetInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.Friend(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-		wrap(FriendSearchMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input SearchInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.SearchFriends(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-		wrap(BlackListMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input ListInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.Blacklist(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-		wrap(BlackGetMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input GetInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.Black(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-	}
 }

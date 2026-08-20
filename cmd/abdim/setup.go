@@ -49,9 +49,7 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 	if err != nil {
 		return writeTextError(output, err.Error())
 	}
-	inboundToolsEnabled := false
 	if existing, loadErr := profile.Load(paths.ConfigFile); loadErr == nil {
-		inboundToolsEnabled = existing.InboundToolsEnabled
 		if !specified {
 			agent = existing.Agent
 		}
@@ -63,14 +61,27 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 	if _, err := exec.LookPath(launch.command); err != nil {
 		return writeTextError(output, launch.command+" is not installed or is unavailable on PATH")
 	}
-	account, areaCode, password, err := promptAccount(input, prompt)
+	reader := bufio.NewReader(input)
+	userAccount, userAreaCode, userPassword, err := promptAccount(reader, input, prompt, profile.IdentityUser)
 	if err != nil {
 		return writeTextError(output, err.Error())
 	}
-	userID, token, err := dependencies.login(ctx, account, areaCode, password)
-	password = ""
+	userID, userToken, err := dependencies.login(ctx, userAccount, userAreaCode, userPassword)
+	userPassword = ""
 	if err != nil {
 		return writeTextError(output, err.Error())
+	}
+	botAccount, botAreaCode, botPassword, err := promptAccount(reader, input, prompt, profile.IdentityBot)
+	if err != nil {
+		return writeTextError(output, err.Error())
+	}
+	botID, botToken, err := dependencies.login(ctx, botAccount, botAreaCode, botPassword)
+	botPassword = ""
+	if err != nil {
+		return writeTextError(output, err.Error())
+	}
+	if userID == botID {
+		return writeTextError(output, "user and bot accounts must be different")
 	}
 	if _, err := dependencies.stop(ctx, roots, profileName); err != nil {
 		return writeTextError(output, err.Error())
@@ -83,22 +94,25 @@ func runSetupWith(ctx context.Context, args []string, input io.Reader, output, p
 	if err != nil {
 		return writeTextError(output, err.Error())
 	}
-	credentialRef, err := store.Put(ctx, profileName, []byte(token))
-	token = ""
+	userCredentialRef, err := store.Put(ctx, profileName+"-user", []byte(userToken))
+	userToken = ""
+	if err != nil {
+		return writeTextError(output, err.Error())
+	}
+	botCredentialRef, err := store.Put(ctx, profileName+"-bot", []byte(botToken))
+	botToken = ""
 	if err != nil {
 		return writeTextError(output, err.Error())
 	}
 	item := profile.Profile{
-		Name:                profileName,
-		CredentialRef:       credentialRef,
-		InboundToolsEnabled: inboundToolsEnabled,
-		Agent:               agent,
+		Name:  profileName,
+		User:  profile.Account{UserID: userID, CredentialRef: userCredentialRef},
+		Bot:   profile.Account{UserID: botID, CredentialRef: botCredentialRef},
+		Agent: agent,
 		Deployment: profile.Deployment{
-			UserID:      userID,
-			APIAddr:     dependencies.endpoints.APIAddr,
-			ChatAPIAddr: dependencies.endpoints.ChatAPIAddr,
-			WSAddr:      dependencies.endpoints.WSAddr,
-			PlatformID:  connector.ABDPlatformID,
+			APIAddr:    dependencies.endpoints.APIAddr,
+			WSAddr:     dependencies.endpoints.WSAddr,
+			PlatformID: connector.ABDPlatformID,
 		},
 	}
 	if err := profile.Save(paths.ConfigFile, item); err != nil {
@@ -124,15 +138,14 @@ func setupAgent(args []string) (string, bool, error) {
 	return agent, true, err
 }
 
-func promptAccount(input io.Reader, prompt io.Writer) (account, areaCode, password string, err error) {
-	if input == nil || prompt == nil {
+func promptAccount(reader *bufio.Reader, input io.Reader, prompt io.Writer, identity profile.Identity) (account, areaCode, password string, err error) {
+	if reader == nil || input == nil || prompt == nil {
 		return "", "", "", errors.New("interactive input is unavailable")
 	}
-	reader := bufio.NewReader(input)
-	fmt.Fprint(prompt, "ABD bot account (phone or email): ")
+	fmt.Fprintf(prompt, "ABD %s account (phone or email): ", identity)
 	account, err = readSetupLine(reader)
 	if err != nil || account == "" {
-		return "", "", "", errors.New("ABD bot account is required")
+		return "", "", "", fmt.Errorf("ABD %s account is required", identity)
 	}
 	if !strings.Contains(account, "@") {
 		fmt.Fprint(prompt, "Area code [+86]: ")

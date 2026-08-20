@@ -1,0 +1,4 @@
+interface:
+  display_name: "ABD IM"
+  short_description: "Use abdim for ABD IM messages and contacts."
+  default_prompt: "Use $abd-im to handle this ABD IM request with the correct user or bot identity."

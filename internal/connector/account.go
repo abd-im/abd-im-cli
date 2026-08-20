@@ -17,22 +17,19 @@ import (
 )
 
 const (
-	ABDLoginURL          = "https://2.alissa.xin/chat/account/login"
-	ABDAPIAddr           = "https://2.alissa.xin/api"
-	ABDChatAPIAddr       = "https://2.alissa.xin/chat"
-	ABDWSAddr            = "wss://2.alissa.xin/msg_gateway"
-	ABDPlatformID  int32 = 7
+	ABDLoginURL         = "https://2.alissa.xin/chat/account/login"
+	ABDAPIAddr          = "https://2.alissa.xin/api"
+	ABDWSAddr           = "wss://2.alissa.xin/msg_gateway"
+	ABDPlatformID int32 = 7
 
 	EnvABDAccountLoginURL = "ABDIM_ACCOUNT_LOGIN_URL"
 	EnvABDOpenIMAPIAddr   = "ABDIM_OPENIM_API_ADDR"
-	EnvABDChatAPIAddr     = "ABDIM_CHAT_API_ADDR"
 	EnvABDOpenIMWSAddr    = "ABDIM_OPENIM_WS_ADDR"
 )
 
 type ABDEndpoints struct {
 	AccountLoginURL string
 	APIAddr         string
-	ChatAPIAddr     string
 	WSAddr          string
 }
 
@@ -49,7 +46,6 @@ func ResolveABDEndpoints(getenv func(string) string) ABDEndpoints {
 	return ABDEndpoints{
 		AccountLoginURL: resolve(EnvABDAccountLoginURL, ABDLoginURL),
 		APIAddr:         resolve(EnvABDOpenIMAPIAddr, ABDAPIAddr),
-		ChatAPIAddr:     resolve(EnvABDChatAPIAddr, ABDChatAPIAddr),
 		WSAddr:          resolve(EnvABDOpenIMWSAddr, ABDWSAddr),
 	}
 }

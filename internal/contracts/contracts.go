@@ -12,35 +12,19 @@ import (
 
 const APIVersionV1 = "v1"
 
-// ConversationKind is a product presentation classification. It is not an
-// authorization or transport boundary.
-type ConversationKind string
-
-const (
-	ConversationKindChat           ConversationKind = "chat"
-	ConversationKindAgentWorkspace ConversationKind = "agent_workspace"
-)
-
-// ConversationClassifier exposes only the classification needed by inbound
-// routing. Implementations must not expose arbitrary group extensions here.
-type ConversationClassifier interface {
-	ConversationKind(context.Context, string) (ConversationKind, error)
-}
-
 var (
 	ErrInvalidContract = errors.New("invalid v1 contract")
 	ErrSessionNotFound = errors.New("provider session not found")
 )
 
-// Request is the JSON envelope sent over local RPC and run-scoped proxies.
+// Request is the JSON envelope sent over the daemon's local RPC socket.
 type Request struct {
-	APIVersion     string          `json:"api_version"`
-	RequestID      string          `json:"request_id"`
-	ProfileID      string          `json:"profile_id"`
-	Method         string          `json:"method"`
-	Params         json.RawMessage `json:"params"`
-	Grant          string          `json:"grant,omitempty"`
-	IdempotencyKey string          `json:"idempotency_key,omitempty"`
+	APIVersion string          `json:"api_version"`
+	RequestID  string          `json:"request_id"`
+	ProfileID  string          `json:"profile_id"`
+	As         string          `json:"as"`
+	Method     string          `json:"method"`
+	Params     json.RawMessage `json:"params"`
 }
 
 func (r Request) Validate() error {
@@ -52,6 +36,9 @@ func (r Request) Validate() error {
 	}
 	if strings.TrimSpace(r.ProfileID) == "" {
 		return contractError("profile_id is required")
+	}
+	if r.As != "user" && r.As != "bot" {
+		return contractError("as must be user or bot")
 	}
 	if strings.TrimSpace(r.Method) == "" {
 		return contractError("method is required")
@@ -69,7 +56,7 @@ type Meta struct {
 	Schema    string `json:"schema,omitempty"`
 }
 
-// Response is the JSON envelope returned by local RPC and tool proxies.
+// Response is the JSON envelope returned by local RPC.
 type Response struct {
 	APIVersion string          `json:"api_version"`
 	RequestID  string          `json:"request_id"`
@@ -116,23 +103,17 @@ const (
 	CodeDaemonNotReady        ErrorCode = "DAEMON_NOT_READY"
 	CodeProtocolUnsupported   ErrorCode = "PROTOCOL_UNSUPPORTED"
 	CodeAuthLocked            ErrorCode = "AUTH_LOCKED"
-	CodeGrantInvalid          ErrorCode = "GRANT_INVALID"
-	CodePolicyDenied          ErrorCode = "POLICY_DENIED"
-	CodeIdempotencyConflict   ErrorCode = "IDEMPOTENCY_CONFLICT"
 	CodeConnectionUnavailable ErrorCode = "CONNECTION_UNAVAILABLE"
 	CodeSDKError              ErrorCode = "SDK_ERROR"
-	CodeOutcomeUnknown        ErrorCode = "OUTCOME_UNKNOWN"
 	CodeCursorExpired         ErrorCode = "CURSOR_EXPIRED"
-	CodeConfirmationRequired  ErrorCode = "CONFIRMATION_REQUIRED"
 	CodeInternal              ErrorCode = "INTERNAL"
 )
 
 func (c ErrorCode) Valid() bool {
 	switch c {
 	case CodeInvalidArgument, CodeDaemonUnavailable, CodeDaemonNotReady,
-		CodeProtocolUnsupported, CodeAuthLocked, CodeGrantInvalid, CodePolicyDenied,
-		CodeIdempotencyConflict, CodeConnectionUnavailable, CodeSDKError,
-		CodeOutcomeUnknown, CodeCursorExpired, CodeConfirmationRequired, CodeInternal:
+		CodeProtocolUnsupported, CodeAuthLocked, CodeConnectionUnavailable,
+		CodeSDKError, CodeCursorExpired, CodeInternal:
 		return true
 	default:
 		return false
@@ -219,7 +200,16 @@ type SDKEvent struct {
 	Data       json.RawMessage
 	// MessageText is transient provider input. It is excluded from ledger,
 	// IPC and JSON serialization.
-	MessageText string `json:"-"`
+	MessageText  string        `json:"-"`
+	MessageQuote *MessageQuote `json:"-"`
+}
+
+// MessageQuote is untrusted, transient context attached to an inbound reply.
+type MessageQuote struct {
+	Text              string
+	Offset            int32
+	SourceClientMsgID string
+	SourceServerMsgID string
 }
 
 func (e SDKEvent) Validate() error {
@@ -259,12 +249,8 @@ type StartRequest struct {
 	RunID     string
 	// StateKey is a stable, opaque key for provider state shared by runs in
 	// the same conversation. It must not contain the conversation ID itself.
-	StateKey        string
-	SessionRef      string
-	GrantCredential string
-	// AllowedMethods is the fixed method snapshot selected for this run.
-	AllowedMethods []string
-	Proxy          ToolProxy
+	StateKey   string
+	SessionRef string
 }
 
 type Session interface {
@@ -274,9 +260,8 @@ type Session interface {
 }
 
 type TurnRequest struct {
-	RunID           string
-	EventID         string
-	GrantCredential string
+	RunID   string
+	EventID string
 	// Prompt is transient provider input derived from the SDK callback.
 	Prompt string
 	// Output receives the complete current user-visible Agent text after each
@@ -316,10 +301,4 @@ type TurnResult struct {
 	ToolSummary []string
 	SessionRef  string
 	Diagnostic  string
-}
-
-// ToolProxy is the only request path made available to a restricted provider.
-type ToolProxy interface {
-	Call(context.Context, Request) (Response, error)
-	Close(context.Context) error
 }

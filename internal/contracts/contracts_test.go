@@ -9,13 +9,12 @@ import (
 
 func TestV1RequestJSONContract(t *testing.T) {
 	request := Request{
-		APIVersion:     APIVersionV1,
-		RequestID:      "req-1",
-		ProfileID:      "work",
-		Method:         "conversation.list",
-		Params:         json.RawMessage(`{"limit":20}`),
-		Grant:          "opaque-grant",
-		IdempotencyKey: "operation-1",
+		APIVersion: APIVersionV1,
+		RequestID:  "req-1",
+		ProfileID:  "work",
+		As:         "user",
+		Method:     "conversation.list",
+		Params:     json.RawMessage(`{"limit":20}`),
 	}
 	if err := request.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -25,7 +24,7 @@ func TestV1RequestJSONContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	const want = `{"api_version":"v1","request_id":"req-1","profile_id":"work","method":"conversation.list","params":{"limit":20},"grant":"opaque-grant","idempotency_key":"operation-1"}`
+	const want = `{"api_version":"v1","request_id":"req-1","profile_id":"work","as":"user","method":"conversation.list","params":{"limit":20}}`
 	if string(got) != want {
 		t.Fatalf("Marshal() = %s, want %s", got, want)
 	}
@@ -60,10 +59,10 @@ func TestV1ResponseJSONContracts(t *testing.T) {
 		APIVersion: APIVersionV1,
 		RequestID:  "req-1",
 		Error: &Error{
-			Code:      CodeGrantInvalid,
-			Message:   "grant expired",
+			Code:      CodeSDKError,
+			Message:   "SDK request failed",
 			Retryable: false,
-			Details:   json.RawMessage(`{"grant_id":"grant-1"}`),
+			Details:   json.RawMessage(`{"request":"message.send"}`),
 		},
 	}
 	if err := failure.Validate(); err != nil {
@@ -73,7 +72,7 @@ func TestV1ResponseJSONContracts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal(failure) error = %v", err)
 	}
-	const failureJSON = `{"api_version":"v1","request_id":"req-1","ok":false,"error":{"code":"GRANT_INVALID","message":"grant expired","retryable":false,"details":{"grant_id":"grant-1"}}}`
+	const failureJSON = `{"api_version":"v1","request_id":"req-1","ok":false,"error":{"code":"SDK_ERROR","message":"SDK request failed","retryable":false,"details":{"request":"message.send"}}}`
 	if string(got) != failureJSON {
 		t.Fatalf("Marshal(failure) = %s, want %s", got, failureJSON)
 	}

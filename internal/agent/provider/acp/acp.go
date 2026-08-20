@@ -16,7 +16,6 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
-	"github.com/abd-im/abd-im-cli/internal/agent/access"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
 
@@ -67,7 +66,7 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("ACP provider context is unavailable")
 	}
-	if strings.TrimSpace(request.ProfileID) == "" || !validRunID(request.RunID) || request.Proxy == nil {
+	if strings.TrimSpace(request.ProfileID) == "" || !validRunID(request.RunID) {
 		return nil, errors.New("ACP provider start request is invalid")
 	}
 	paths, err := prepareRun(a.config.WorkingDir, request.RunID)
@@ -82,22 +81,7 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 	}
 
 	processContext, processCancel := context.WithCancel(context.Background())
-	accessServer, err := access.Listen(paths.socket, request.Proxy)
-	if err != nil {
-		processCancel()
-		cleanup()
-		return nil, err
-	}
-	environment, err := access.Environment(a.config.Environment, a.config.CLICommand, access.Context{
-		Socket: paths.socket, ProfileID: request.ProfileID, RunID: request.RunID,
-		Grant: request.GrantCredential, AllowedMethods: request.AllowedMethods,
-	})
-	if err != nil {
-		processCancel()
-		_ = accessServer.Close()
-		cleanup()
-		return nil, err
-	}
+	environment := append(append([]string(nil), a.config.Environment...), "ABDIM_CLI="+a.config.CLICommand)
 	command := exec.CommandContext(processContext, executable, a.config.Args...)
 	command.Dir = paths.work
 	command.Env = environment
@@ -106,20 +90,17 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		processCancel()
-		_ = accessServer.Close()
 		cleanup()
 		return nil, errors.New("create ACP stdin pipe")
 	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		processCancel()
-		_ = accessServer.Close()
 		cleanup()
 		return nil, errors.New("create ACP stdout pipe")
 	}
 	if err := command.Start(); err != nil {
 		processCancel()
-		_ = accessServer.Close()
 		cleanup()
 		return nil, fmt.Errorf("start ACP Agent: %w", err)
 	}
@@ -129,7 +110,6 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 		stdin:   stdin,
 		cancel:  processCancel,
 		done:    make(chan struct{}),
-		access:  accessServer,
 		cleanup: cleanup,
 	}
 	client := &client{session: session}
@@ -214,7 +194,6 @@ type session struct {
 	stdin      io.Closer
 	cancel     context.CancelFunc
 	connection *acpsdk.ClientSideConnection
-	access     *access.Server
 	cleanup    func()
 	done       chan struct{}
 	close      sync.Once
@@ -310,12 +289,8 @@ func (s *session) closeProcess() {
 	s.close.Do(func() {
 		s.mu.Lock()
 		s.closed = true
-		accessServer := s.access
 		s.mu.Unlock()
 		_ = s.stdin.Close()
-		if accessServer != nil {
-			_ = accessServer.Close()
-		}
 		terminateProcessGroup(s.command)
 		s.cancel()
 	})
@@ -323,12 +298,6 @@ func (s *session) closeProcess() {
 
 func (s *session) wait() {
 	_ = s.command.Wait()
-	s.mu.Lock()
-	accessServer := s.access
-	s.mu.Unlock()
-	if accessServer != nil {
-		_ = accessServer.Close()
-	}
 	if s.cleanup != nil {
 		s.cleanup()
 	}
@@ -483,9 +452,8 @@ func (*client) WaitForTerminalExit(context.Context, acpsdk.WaitForTerminalExitRe
 
 func prepareRun(workingDir, runID string) (runPaths, error) {
 	paths := runPaths{
-		root:   filepath.Join(workingDir, runID),
-		work:   filepath.Join(workingDir, runID, "work"),
-		socket: filepath.Join(workingDir, runID, "work", ".abdim.sock"),
+		root: filepath.Join(workingDir, runID),
+		work: filepath.Join(workingDir, runID, "work"),
 	}
 	if err := os.RemoveAll(paths.root); err != nil {
 		return runPaths{}, fmt.Errorf("remove previous ACP run directory: %w", err)
@@ -504,9 +472,8 @@ func prepareRun(workingDir, runID string) (runPaths, error) {
 }
 
 type runPaths struct {
-	root   string
-	work   string
-	socket string
+	root string
+	work string
 }
 
 func validRunID(value string) bool {

@@ -3,15 +3,11 @@ package profile
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/abd-im/abd-im-cli/internal/agent/grant"
-	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/service"
 )
 
@@ -101,7 +97,7 @@ func (s *Service) meta() service.Meta {
 	return service.NewMeta(s.options.ProfileID, s.options.Stale())
 }
 
-func (s *Service) Profile(ctx context.Context, _ service.Access) (service.Result[Profile], error) {
+func (s *Service) Profile(ctx context.Context) (service.Result[Profile], error) {
 	item, err := s.source.Profile(ctx)
 	if err != nil {
 		return service.Result[Profile]{}, fmt.Errorf("read profile: %w", err)
@@ -114,7 +110,7 @@ func (s *Service) Profile(ctx context.Context, _ service.Access) (service.Result
 	return service.Result[Profile]{Data: item, Meta: s.meta()}, nil
 }
 
-func (s *Service) Self(ctx context.Context, _ service.Access) (service.Result[User], error) {
+func (s *Service) Self(ctx context.Context) (service.Result[User], error) {
 	item, err := s.source.Self(ctx)
 	if err != nil {
 		return service.Result[User]{}, fmt.Errorf("read self user: %w", err)
@@ -122,7 +118,7 @@ func (s *Service) Self(ctx context.Context, _ service.Access) (service.Result[Us
 	return service.Result[User]{Data: item, Meta: s.meta()}, nil
 }
 
-func (s *Service) Users(ctx context.Context, _ service.Access, ids []string) (service.Result[[]User], error) {
+func (s *Service) Users(ctx context.Context, ids []string) (service.Result[[]User], error) {
 	if len(ids) == 0 || len(ids) > 100 {
 		return service.Result[[]User]{}, fmt.Errorf("%w: user IDs must contain 1-100 items", service.ErrInvalidArgument)
 	}
@@ -147,7 +143,7 @@ func (s *Service) Users(ctx context.Context, _ service.Access, ids []string) (se
 	return service.Result[[]User]{Data: items, Meta: s.meta()}, nil
 }
 
-func (s *Service) Daemon(ctx context.Context, _ service.Access) (service.Result[DaemonStatus], error) {
+func (s *Service) Daemon(ctx context.Context) (service.Result[DaemonStatus], error) {
 	item, err := s.source.Daemon(ctx)
 	if err != nil {
 		return service.Result[DaemonStatus]{}, fmt.Errorf("read daemon status: %w", err)
@@ -155,55 +151,10 @@ func (s *Service) Daemon(ctx context.Context, _ service.Access) (service.Result[
 	return service.Result[DaemonStatus]{Data: item, Meta: s.meta()}, nil
 }
 
-func (s *Service) Doctor(ctx context.Context, _ service.Access) (service.Result[DoctorReport], error) {
+func (s *Service) Doctor(ctx context.Context) (service.Result[DoctorReport], error) {
 	item, err := s.source.Doctor(ctx)
 	if err != nil {
 		return service.Result[DoctorReport]{}, fmt.Errorf("run doctor: %w", err)
 	}
 	return service.Result[DoctorReport]{Data: item, Meta: s.meta()}, nil
-}
-
-// Methods adapts the typed reads to the existing run-scoped tool proxy.
-func (s *Service) Methods() []proxy.Method {
-	method := func(name string, handle func(context.Context, contracts.Request, service.Access) (interface{}, error)) proxy.Method {
-		return proxy.Method{
-			Name: name,
-			Meta: func() contracts.Meta { return service.ContractMeta(s.meta()) },
-			Handle: func(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {
-				value, err := handle(ctx, request, service.ProviderAccess(item))
-				if err != nil {
-					return nil, proxy.Failure(contracts.CodePolicyDenied, err.Error())
-				}
-				return json.Marshal(value)
-			},
-		}
-	}
-	return []proxy.Method{
-		method(ProfileGet, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
-			result, err := s.Profile(ctx, access)
-			return result.Data, err
-		}),
-		method(UserMe, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
-			result, err := s.Self(ctx, access)
-			return result.Data, err
-		}),
-		method(UserGet, func(ctx context.Context, request contracts.Request, access service.Access) (interface{}, error) {
-			var input struct {
-				UserIDs []string `json:"user_ids"`
-			}
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.Users(ctx, access, input.UserIDs)
-			return result.Data, err
-		}),
-		method(DaemonGet, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
-			result, err := s.Daemon(ctx, access)
-			return result.Data, err
-		}),
-		method(DoctorGet, func(ctx context.Context, _ contracts.Request, access service.Access) (interface{}, error) {
-			result, err := s.Doctor(ctx, access)
-			return result.Data, err
-		}),
-	}
 }

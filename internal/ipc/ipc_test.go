@@ -67,7 +67,7 @@ func TestUnixSocketIsOwnerOnlyAndUsesV1Contracts(t *testing.T) {
 	if info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0o600 {
 		t.Fatalf("socket mode = %v, want owner-only socket", info.Mode())
 	}
-	request := contracts.Request{APIVersion: contracts.APIVersionV1, RequestID: "req-1", ProfileID: "work", Method: "profile.get", Params: json.RawMessage(`{}`)}
+	request := contracts.Request{APIVersion: contracts.APIVersionV1, RequestID: "req-1", ProfileID: "work", As: "bot", Method: "profile.get", Params: json.RawMessage(`{}`)}
 	response, err := Call(context.Background(), path, request)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)

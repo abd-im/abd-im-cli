@@ -13,23 +13,22 @@ func TestConversationReadsUseOpaqueCursors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := service.OwnerAccess()
-	first, err := reader.List(context.Background(), owner, ListInput{Limit: 2})
+	first, err := reader.List(context.Background(), ListInput{Limit: 2})
 	if err != nil || len(first.Data.Items) != 2 || first.Data.NextCursor == "" {
 		t.Fatalf("List() = %+v, %v", first, err)
 	}
-	second, err := reader.List(context.Background(), owner, ListInput{Limit: 2, Cursor: first.Data.NextCursor})
+	second, err := reader.List(context.Background(), ListInput{Limit: 2, Cursor: first.Data.NextCursor})
 	if err != nil || len(second.Data.Items) != 1 || second.Data.Items[0].ID != "conversation-3" {
 		t.Fatalf("second List() = %+v, %v", second, err)
 	}
-	if _, err := reader.Search(context.Background(), owner, SearchInput{Query: "team", Limit: 2, Cursor: first.Data.NextCursor}); !errors.Is(err, service.ErrCursorInvalid) {
+	if _, err := reader.Search(context.Background(), SearchInput{Query: "team", Limit: 2, Cursor: first.Data.NextCursor}); !errors.Is(err, service.ErrCursorInvalid) {
 		t.Fatalf("Search() foreign cursor error = %v", err)
 	}
-	conversation, err := reader.Get(context.Background(), owner, GetInput{ConversationID: "conversation-1"})
+	conversation, err := reader.Get(context.Background(), GetInput{ConversationID: "conversation-1"})
 	if err != nil || conversation.Data.ID != "conversation-1" {
 		t.Fatalf("Get() = %+v, %v", conversation, err)
 	}
-	search, err := reader.Search(context.Background(), owner, SearchInput{Query: "team", Limit: 2})
+	search, err := reader.Search(context.Background(), SearchInput{Query: "team", Limit: 2})
 	if err != nil || len(search.Data.Items) != 1 || search.Data.Items[0].ID != "conversation-2" {
 		t.Fatalf("Search() = %+v, %v", search, err)
 	}

@@ -37,36 +37,31 @@ func TestOpenIMGroupReadsIntegration(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	owner := service.OwnerAccess()
-	list, err := reader.List(ctx, owner, ListInput{Limit: 10})
+	list, err := reader.List(ctx, ListInput{Limit: 10})
 	if err != nil {
 		t.Fatalf("group.list error = %v", err)
 	}
 	assertIntegrationMeta(t, list.Meta, ListMethod)
 
-	owner = service.OwnerAccess()
-	get, err := reader.Get(ctx, owner, GetInput{GroupID: groupID})
+	get, err := reader.Get(ctx, GetInput{GroupID: groupID})
 	if err != nil || get.Data.ID != groupID {
 		t.Fatalf("group.get failed")
 	}
 	assertIntegrationMeta(t, get.Meta, GetMethod)
 
-	owner = service.OwnerAccess()
-	search, err := reader.Search(ctx, owner, SearchInput{Query: groupID, Limit: 10})
+	search, err := reader.Search(ctx, SearchInput{Query: groupID, Limit: 10})
 	if err != nil {
 		t.Fatalf("group.search error = %v", err)
 	}
 	assertIntegrationMeta(t, search.Meta, SearchMethod)
 
-	owner = service.OwnerAccess()
-	members, err := reader.Members(ctx, owner, MembersInput{GroupID: groupID, Limit: 10})
+	members, err := reader.Members(ctx, MembersInput{GroupID: groupID, Limit: 10})
 	if err != nil {
 		t.Fatalf("group.members.list error = %v", err)
 	}
 	assertIntegrationMeta(t, members.Meta, MembersListMethod)
 
-	owner = service.OwnerAccess()
-	memberSearch, err := reader.SearchMembers(ctx, owner, MembersSearchInput{GroupID: groupID, Query: memberQuery, Limit: 10})
+	memberSearch, err := reader.SearchMembers(ctx, MembersSearchInput{GroupID: groupID, Query: memberQuery, Limit: 10})
 	if err != nil {
 		t.Fatalf("group.members.search error = %v", err)
 	}

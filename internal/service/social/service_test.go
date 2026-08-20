@@ -12,24 +12,23 @@ func TestSocialReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := service.OwnerAccess()
-	friends, err := reader.Friends(context.Background(), owner, ListInput{Limit: 10})
+	friends, err := reader.Friends(context.Background(), ListInput{Limit: 10})
 	if err != nil || len(friends.Data.Items) != 2 || friends.Data.Items[0].UserID != "user-1" {
 		t.Fatalf("Friends() = %+v, %v", friends, err)
 	}
-	friend, err := reader.Friend(context.Background(), owner, GetInput{UserID: "user-2"})
+	friend, err := reader.Friend(context.Background(), GetInput{UserID: "user-2"})
 	if err != nil || friend.Data.UserID != "user-2" {
 		t.Fatalf("Friend() = %+v, %v", friend, err)
 	}
-	search, err := reader.SearchFriends(context.Background(), owner, SearchInput{Query: "user", Limit: 10})
+	search, err := reader.SearchFriends(context.Background(), SearchInput{Query: "user", Limit: 10})
 	if err != nil || len(search.Data.Items) != 1 {
 		t.Fatalf("SearchFriends() = %+v, %v", search, err)
 	}
-	blacklist, err := reader.Blacklist(context.Background(), owner, ListInput{Limit: 10})
+	blacklist, err := reader.Blacklist(context.Background(), ListInput{Limit: 10})
 	if err != nil || len(blacklist.Data.Items) != 2 {
 		t.Fatalf("Blacklist() = %+v, %v", blacklist, err)
 	}
-	black, err := reader.Black(context.Background(), owner, GetInput{UserID: "user-2"})
+	black, err := reader.Black(context.Background(), GetInput{UserID: "user-2"})
 	if err != nil || black.Data.UserID != "user-2" {
 		t.Fatalf("Black() = %+v, %v", black, err)
 	}

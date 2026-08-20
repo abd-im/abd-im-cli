@@ -35,14 +35,13 @@ func TestOpenIMConversationReadsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	owner := service.OwnerAccess()
-	list, err := reader.List(ctx, owner, ListInput{Limit: 1})
+	list, err := reader.List(ctx, ListInput{Limit: 1})
 	if err != nil || len(list.Data.Items) == 0 {
 		t.Fatalf("conversation.list = %#v, %v", list, err)
 	}
 	assertConversationIntegrationMeta(t, list.Meta, ListMethod)
 	if list.Data.NextCursor != "" {
-		second, err := reader.List(ctx, owner, ListInput{Limit: 1, Cursor: list.Data.NextCursor})
+		second, err := reader.List(ctx, ListInput{Limit: 1, Cursor: list.Data.NextCursor})
 		if err != nil {
 			t.Fatalf("conversation.list cursor = %v", err)
 		}
@@ -50,15 +49,13 @@ func TestOpenIMConversationReadsIntegration(t *testing.T) {
 	}
 
 	conversationID := list.Data.Items[0].ID
-	owner = service.OwnerAccess()
-	get, err := reader.Get(ctx, owner, GetInput{ConversationID: conversationID})
+	get, err := reader.Get(ctx, GetInput{ConversationID: conversationID})
 	if err != nil || get.Data.ID != conversationID {
 		t.Fatalf("conversation.get = %#v, %v", get, err)
 	}
 	assertConversationIntegrationMeta(t, get.Meta, GetMethod)
 
-	owner = service.OwnerAccess()
-	search, err := reader.Search(ctx, owner, SearchInput{Query: conversationID, Limit: 1})
+	search, err := reader.Search(ctx, SearchInput{Query: conversationID, Limit: 1})
 	if err != nil || len(search.Data.Items) == 0 || search.Data.Items[0].ID != conversationID {
 		t.Fatalf("conversation.search = %#v, %v", search, err)
 	}

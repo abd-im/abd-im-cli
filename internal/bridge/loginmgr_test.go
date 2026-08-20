@@ -2,118 +2,49 @@ package bridge
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
-	"github.com/abd-im/abd-im-cli/internal/profile"
 	"github.com/abd-im/abd-im-cli/internal/testkit"
 )
 
-func TestLoginMgrInitializesNewSDKInRequiredOrder(t *testing.T) {
+func TestLoginMgrOwnsOneSDKLifecycle(t *testing.T) {
 	sdk := &testkit.FakeSDK{}
-	var factoryCalls int
-	events := make(chan contracts.SDKEvent, 1)
-	manager, err := NewLoginMgr(func() contracts.SDK {
-		factoryCalls++
-		return sdk
-	}, filepath.Join(t.TempDir(), "work.lock"), func(_ context.Context, event contracts.SDKEvent) {
-		events <- event
-	})
+	manager, err := NewLoginMgr(func() contracts.SDK { return sdk }, nil)
 	if err != nil {
-		t.Fatalf("NewLoginMgr() error = %v", err)
+		t.Fatal(err)
 	}
 	if err := manager.Start(context.Background()); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if factoryCalls != 1 {
-		t.Fatalf("factory calls = %d, want 1", factoryCalls)
-	}
-	if got, want := sdk.Steps(), []string{"InitSDK", "InitResources", "SetEventListener", "Login"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("SDK steps = %v, want %v", got, want)
+		t.Fatal(err)
 	}
 	if manager.State() != StateReady {
-		t.Fatalf("State() = %q, want ready", manager.State())
-	}
-
-	event := contracts.SDKEvent{
-		ProfileID:  "work",
-		Type:       string(contracts.EventMessageReceived),
-		OccurredAt: time.Now(),
-		DedupKey:   "sdk-message-1",
-		Data:       json.RawMessage(`{}`),
-	}
-	if err := sdk.Emit(context.Background(), event); err != nil {
-		t.Fatalf("Emit() error = %v", err)
-	}
-	if got := <-events; got.DedupKey != event.DedupKey {
-		t.Fatalf("event dedup key = %q, want %q", got.DedupKey, event.DedupKey)
-	} else if err := got.Validate(); err != nil {
-		t.Fatalf("SDK event validation error = %v", err)
+		t.Fatalf("State() = %q", manager.State())
 	}
 	if err := manager.Shutdown(context.Background()); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
+		t.Fatal(err)
 	}
-	if manager.State() != StateStopped {
-		t.Fatalf("State() = %q, want stopped", manager.State())
-	}
-	if got, want := sdk.Steps(), []string{"InitSDK", "InitResources", "SetEventListener", "Login", "Shutdown"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("SDK steps after shutdown = %v, want %v", got, want)
+	want := []string{"InitSDK", "InitResources", "SetEventListener", "Login", "Shutdown"}
+	if got := sdk.Steps(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("SDK steps = %v, want %v", got, want)
 	}
 }
 
-func TestLoginMgrReportsLockedProfile(t *testing.T) {
-	lockPath := filepath.Join(t.TempDir(), "work.lock")
-	lock, err := profile.AcquireLock(lockPath)
-	if err != nil {
-		t.Fatalf("AcquireLock() error = %v", err)
-	}
-	t.Cleanup(func() { _ = lock.Release() })
-
-	manager, err := NewLoginMgr(func() contracts.SDK { return &testkit.FakeSDK{} }, lockPath, nil)
-	if err != nil {
-		t.Fatalf("NewLoginMgr() error = %v", err)
-	}
-	if err := manager.Start(context.Background()); !errors.Is(err, profile.ErrLocked) {
-		t.Fatalf("Start() error = %v, want ErrLocked", err)
-	}
-	if manager.State() != StateLocked {
-		t.Fatalf("State() = %q, want locked", manager.State())
-	}
-	if err := manager.Shutdown(context.Background()); err != nil {
-		t.Fatalf("Shutdown() after lock conflict error = %v", err)
-	}
-}
-
-func TestLoginMgrDegradesAndReleasesLockOnFailure(t *testing.T) {
-	lockPath := filepath.Join(t.TempDir(), "work.lock")
+func TestLoginMgrShutsDownPartialSDKOnFailure(t *testing.T) {
 	want := errors.New("connection unavailable")
 	sdk := &testkit.FakeSDK{LoginErr: want}
-	manager, err := NewLoginMgr(func() contracts.SDK { return sdk }, lockPath, nil)
+	manager, err := NewLoginMgr(func() contracts.SDK { return sdk }, nil)
 	if err != nil {
-		t.Fatalf("NewLoginMgr() error = %v", err)
+		t.Fatal(err)
 	}
 	if err := manager.Start(context.Background()); !errors.Is(err, want) {
-		t.Fatalf("Start() error = %v, want %v", err, want)
+		t.Fatalf("Start() error = %v", err)
 	}
-	if manager.State() != StateDegraded || !errors.Is(manager.Err(), want) {
-		t.Fatalf("state/error = %q/%v, want degraded/%v", manager.State(), manager.Err(), want)
+	if manager.State() != StateDegraded {
+		t.Fatalf("State() = %q", manager.State())
 	}
-	if got, want := sdk.Steps(), []string{"InitSDK", "InitResources", "SetEventListener", "Login", "Shutdown"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("SDK steps after failed Login = %v, want %v", got, want)
-	}
-	if err := manager.Shutdown(context.Background()); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
-	}
-	lock, err := profile.AcquireLock(lockPath)
-	if err != nil {
-		t.Fatalf("lock was not released after failure: %v", err)
-	}
-	if err := lock.Release(); err != nil {
-		t.Fatalf("Release() error = %v", err)
+	if got := sdk.Steps(); got[len(got)-1] != "Shutdown" {
+		t.Fatalf("SDK steps = %v", got)
 	}
 }

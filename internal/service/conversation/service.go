@@ -3,15 +3,11 @@ package conversation
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/abd-im/abd-im-cli/internal/agent/grant"
-	"github.com/abd-im/abd-im-cli/internal/agent/proxy"
-	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/service"
 )
 
@@ -83,7 +79,7 @@ func (s *Service) meta() service.Meta {
 	return service.NewMeta(s.options.ProfileID, s.options.Stale())
 }
 
-func (s *Service) List(ctx context.Context, _ service.Access, input ListInput) (service.PageResult[Conversation], error) {
+func (s *Service) List(ctx context.Context, input ListInput) (service.PageResult[Conversation], error) {
 	if err := service.ValidateLimit(input.Limit); err != nil {
 		return service.PageResult[Conversation]{}, err
 	}
@@ -103,7 +99,7 @@ func (s *Service) List(ctx context.Context, _ service.Access, input ListInput) (
 	return service.PageResult[Conversation]{Data: page, Meta: s.meta()}, nil
 }
 
-func (s *Service) Get(ctx context.Context, _ service.Access, input GetInput) (service.Result[Conversation], error) {
+func (s *Service) Get(ctx context.Context, input GetInput) (service.Result[Conversation], error) {
 	if strings.TrimSpace(input.ConversationID) == "" {
 		return service.Result[Conversation]{}, fmt.Errorf("%w: conversation ID is required", service.ErrInvalidArgument)
 	}
@@ -119,7 +115,7 @@ func (s *Service) Get(ctx context.Context, _ service.Access, input GetInput) (se
 	return service.Result[Conversation]{Data: item, Meta: s.meta()}, nil
 }
 
-func (s *Service) Search(ctx context.Context, _ service.Access, input SearchInput) (service.PageResult[Conversation], error) {
+func (s *Service) Search(ctx context.Context, input SearchInput) (service.PageResult[Conversation], error) {
 	if strings.TrimSpace(input.Query) == "" || len(input.Query) > 256 {
 		return service.PageResult[Conversation]{}, fmt.Errorf("%w: search query must contain 1-256 characters", service.ErrInvalidArgument)
 	}
@@ -155,44 +151,4 @@ func page(items []Conversation, offset, limit int, query string) (service.Page[C
 		result.NextCursor, _ = service.EncodeCursor(query, end)
 	}
 	return result, nil
-}
-
-func (s *Service) Methods() []proxy.Method {
-	wrap := func(name string, handle func(context.Context, contracts.Request, grant.Grant) (interface{}, error)) proxy.Method {
-		return proxy.Method{Name: name, Meta: func() contracts.Meta {
-			return service.ContractMeta(s.meta())
-		}, Handle: func(ctx context.Context, request contracts.Request, item grant.Grant) (json.RawMessage, error) {
-			value, err := handle(ctx, request, item)
-			if err != nil {
-				return nil, proxy.Failure(contracts.CodePolicyDenied, err.Error())
-			}
-			return json.Marshal(value)
-		}}
-	}
-	return []proxy.Method{
-		wrap(ListMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input ListInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.List(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-		wrap(GetMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input GetInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.Get(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-		wrap(SearchMethod, func(ctx context.Context, request contracts.Request, item grant.Grant) (interface{}, error) {
-			var input SearchInput
-			if err := json.Unmarshal(request.Params, &input); err != nil {
-				return nil, service.ErrInvalidArgument
-			}
-			result, err := s.Search(ctx, service.ProviderAccess(item), input)
-			return result.Data, err
-		}),
-	}
 }

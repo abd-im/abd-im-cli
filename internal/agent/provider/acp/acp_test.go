@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
-	"github.com/abd-im/abd-im-cli/internal/testkit"
 )
 
 func TestAdapterRunsV1PromptAndStreamsAgentText(t *testing.T) {
@@ -27,7 +26,7 @@ func TestAdapterRunsV1PromptAndStreamsAgentText(t *testing.T) {
 	var updates []string
 	var activities []contracts.TurnActivity
 	result, err := session.Turn(context.Background(), contracts.TurnRequest{
-		RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "hello",
+		RunID: "run-1", EventID: "event-1", Prompt: "hello",
 		Output: func(_ context.Context, output contracts.TurnOutput) error {
 			mu.Lock()
 			defer mu.Unlock()
@@ -113,7 +112,7 @@ func TestAdapterFailsWhenAgentExitsDuringPrompt(t *testing.T) {
 	}
 	defer session.Close(context.Background())
 	_, err = session.Turn(context.Background(), contracts.TurnRequest{
-		RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "hello",
+		RunID: "run-1", EventID: "event-1", Prompt: "hello",
 	})
 	if err == nil || !strings.Contains(err.Error(), "prompt failed") {
 		t.Fatalf("Turn() error = %v, want prompt failure", err)
@@ -129,7 +128,7 @@ func TestAdapterCancellationWaitsForIdleCancelled(t *testing.T) {
 	defer session.Close(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := session.Turn(context.Background(), contracts.TurnRequest{RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "wait"})
+		_, err := session.Turn(context.Background(), contracts.TurnRequest{RunID: "run-1", EventID: "event-1", Prompt: "wait"})
 		done <- err
 	}()
 	if err := waitForFile(filepath.Join(adapter.config.WorkingDir, "cancel-ready"), time.Second); err != nil {
@@ -157,7 +156,7 @@ func TestAdapterPropagatesOutputSinkFailure(t *testing.T) {
 	defer session.Close(context.Background())
 	want := errors.New("stream unavailable")
 	_, err = session.Turn(context.Background(), contracts.TurnRequest{
-		RunID: "run-1", EventID: "event-1", GrantCredential: "grant-1", Prompt: "hello",
+		RunID: "run-1", EventID: "event-1", Prompt: "hello",
 		Output: func(context.Context, contracts.TurnOutput) error { return want },
 	})
 	if !errors.Is(err, want) {
@@ -194,11 +193,7 @@ func newTestAdapter(t *testing.T, scenario string) (*Adapter, string) {
 }
 
 func startRequest(withTools bool) contracts.StartRequest {
-	request := contracts.StartRequest{ProfileID: "work", RunID: "run-1", GrantCredential: "grant-1", Proxy: &testkit.FakeProxy{}}
-	if withTools {
-		request.AllowedMethods = []string{"message.history"}
-	}
-	return request
+	return contracts.StartRequest{ProfileID: "work", RunID: "run-1"}
 }
 
 func waitForFile(path string, timeout time.Duration) error {
