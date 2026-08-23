@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/agent/run"
+	abdimbridge "github.com/abd-im/abd-im-cli/internal/bridge/abdim"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/control"
 	"github.com/abd-im/abd-im-cli/internal/events"
@@ -24,13 +25,16 @@ func TestInboundDirectRepliesThroughBotSDK(t *testing.T) {
 	if err != nil || outcome.Ignored || outcome.RunID == "" {
 		t.Fatalf("Process() = %#v, %v", outcome, err)
 	}
-	delivery := receiveDelivery(t, botSender.sent)
-	if delivery.text != "answer" || delivery.recipientID != "peer" {
-		t.Fatalf("bot delivery = %#v", delivery)
+	stream := receiveTextStream(t, botSender.texts)
+	receiveTextFinish(t, stream.finished)
+	stream.mu.Lock()
+	if stream.initial != "ans" || len(stream.packets) != 1 || stream.packets[0] != "wer" || stream.recipientID != "peer" {
+		t.Fatalf("bot stream = %#v", stream)
 	}
+	stream.mu.Unlock()
 	select {
-	case delivery := <-userSender.sent:
-		t.Fatalf("direct reply used user SDK: %#v", delivery)
+	case stream := <-userSender.texts:
+		t.Fatalf("direct reply used user SDK: %#v", stream)
 	default:
 	}
 	if prompt := provider.lastPrompt(); !strings.Contains(prompt, "Reply mode: direct") || !strings.Contains(prompt, "--as bot") || !strings.Contains(prompt, "hello") {
@@ -42,6 +46,56 @@ func TestInboundDirectRepliesThroughBotSDK(t *testing.T) {
 	}
 }
 
+func TestInboundRepliesToAgentWorkspaceOnly(t *testing.T) {
+	inbound, _, _, botSender, closeStore := newInboundHarness(t)
+	defer closeStore()
+	inbound.workspaceClassifier = conversationClassifierFunc(func(_ context.Context, groupID string) (contracts.ConversationKind, error) {
+		if groupID == "workspace" {
+			return contracts.ConversationKindAgentWorkspace, nil
+		}
+		return contracts.ConversationKindChat, nil
+	})
+
+	workspace := sdkEvent("workspace", `{"conversation_id":"sg_workspace","message_id":"message-1","sender_id":"owner","group_id":"workspace","session_type":3,"content_type":101}`, "hello")
+	outcome, err := inbound.Process(context.Background(), workspace)
+	if err != nil || outcome.Ignored {
+		t.Fatalf("workspace Process() = %#v, %v", outcome, err)
+	}
+	stream := receiveRunStream(t, botSender.runs)
+	finish := receiveRunFinish(t, stream.finished)
+	if finish.Outcome != "completed" || finish.Reason != "end_turn" {
+		t.Fatalf("workspace finish = %#v", finish)
+	}
+	stream.mu.Lock()
+	events := append([]contracts.RunEvent(nil), stream.events...)
+	stream.mu.Unlock()
+	if len(events) != 6 {
+		t.Fatalf("workspace events = %#v", events)
+	}
+	answer, ok := events[3].(contracts.ItemDeltaEvent)
+	answerTail, tailOK := events[4].(contracts.ItemDeltaEvent)
+	if !ok || !tailOK || answer.Content.(contracts.TextBlock).Text+answerTail.Content.(contracts.TextBlock).Text != "answer" {
+		t.Fatalf("workspace answer = %#v", events[3])
+	}
+	select {
+	case delivery := <-botSender.sent:
+		t.Fatalf("workspace also sent plain text: %#v", delivery)
+	default:
+	}
+
+	ordinary := sdkEvent("ordinary", `{"conversation_id":"sg_ordinary","message_id":"message-2","sender_id":"owner","group_id":"ordinary","session_type":3,"content_type":101}`, "hello")
+	outcome, err = inbound.Process(context.Background(), ordinary)
+	if err != nil || !outcome.Ignored {
+		t.Fatalf("ordinary group Process() = %#v, %v", outcome, err)
+	}
+}
+
+type conversationClassifierFunc func(context.Context, string) (contracts.ConversationKind, error)
+
+func (f conversationClassifierFunc) ConversationKind(ctx context.Context, groupID string) (contracts.ConversationKind, error) {
+	return f(ctx, groupID)
+}
+
 func TestInboundHostedLoadsUserContextAndRepliesThroughUserSDK(t *testing.T) {
 	inbound, provider, userSender, botSender, closeStore := newInboundHarness(t)
 	defer closeStore()
@@ -50,13 +104,16 @@ func TestInboundHostedLoadsUserContextAndRepliesThroughUserSDK(t *testing.T) {
 	if err != nil || outcome.Ignored {
 		t.Fatalf("Process() = %#v, %v", outcome, err)
 	}
-	delivery := receiveDelivery(t, userSender.sent)
-	if delivery.text != "answer" || delivery.recipientID != "peer" {
-		t.Fatalf("user delivery = %#v", delivery)
+	stream := receiveTextStream(t, userSender.texts)
+	receiveTextFinish(t, stream.finished)
+	stream.mu.Lock()
+	if stream.initial != "ans" || len(stream.packets) != 1 || stream.packets[0] != "wer" || stream.recipientID != "peer" {
+		t.Fatalf("user stream = %#v", stream)
 	}
+	stream.mu.Unlock()
 	select {
-	case delivery := <-botSender.sent:
-		t.Fatalf("hosted reply used bot SDK: %#v", delivery)
+	case stream := <-botSender.texts:
+		t.Fatalf("hosted reply used bot SDK: %#v", stream)
 	default:
 	}
 	prompt := provider.lastPrompt()
@@ -76,6 +133,55 @@ func TestInboundRejectsHostedNotificationForAnotherOwner(t *testing.T) {
 	}
 }
 
+func TestReplyTextStreamFiltersCommentaryAndFallsBackToFinalText(t *testing.T) {
+	sender := &captureSender{texts: make(chan *captureTextStream, 1)}
+	stream := newReplyTextStream(sender, replyTarget{recipientID: "peer"})
+	itemID := "commentary-1"
+	if err := stream.Event(context.Background(), contracts.NewItemStartedEvent(time.Now().UnixMilli(), contracts.MessageItem{
+		ID: itemID, Type: "message", Role: "assistant", Phase: "commentary", Content: []contracts.ContentBlock{},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Event(context.Background(), contracts.NewItemDeltaEvent(time.Now().UnixMilli(), itemID, contracts.TextBlock{Type: "text", Text: "working"})); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case output := <-sender.texts:
+		t.Fatalf("commentary created a text stream: %#v", output)
+	default:
+	}
+	if err := stream.Finish(context.Background(), "answer"); err != nil {
+		t.Fatal(err)
+	}
+	output := receiveTextStream(t, sender.texts)
+	receiveTextFinish(t, output.finished)
+	if output.initial != "answer" || len(output.packets) != 0 {
+		t.Fatalf("fallback stream = %#v", output)
+	}
+}
+
+func TestReplyTextStreamClosesPartialOutputOnFailure(t *testing.T) {
+	sender := &captureSender{texts: make(chan *captureTextStream, 1)}
+	stream := newReplyTextStream(sender, replyTarget{recipientID: "peer"})
+	itemID := "answer-1"
+	if err := stream.Event(context.Background(), contracts.NewItemStartedEvent(time.Now().UnixMilli(), contracts.MessageItem{
+		ID: itemID, Type: "message", Role: "assistant", Phase: "final", Content: []contracts.ContentBlock{},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Event(context.Background(), contracts.NewItemDeltaEvent(time.Now().UnixMilli(), itemID, contracts.TextBlock{Type: "text", Text: "partial"})); err != nil {
+		t.Fatal(err)
+	}
+	output := receiveTextStream(t, sender.texts)
+	if err := stream.Finish(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	receiveTextFinish(t, output.finished)
+	if output.initial != "partial" {
+		t.Fatalf("partial stream = %#v", output)
+	}
+}
+
 func newInboundHarness(t *testing.T) (*Inbound, *promptProvider, *captureSender, *captureSender, func()) {
 	t.Helper()
 	store, err := control.Open(filepath.Join(t.TempDir(), "control.db"))
@@ -88,10 +194,11 @@ func newInboundHarness(t *testing.T) (*Inbound, *promptProvider, *captureSender,
 	if err != nil {
 		t.Fatal(err)
 	}
-	userSender, botSender := &captureSender{sent: make(chan delivery, 2)}, &captureSender{sent: make(chan delivery, 2)}
+	userSender := &captureSender{sent: make(chan delivery, 2), texts: make(chan *captureTextStream, 2), runs: make(chan *captureRunStream, 2)}
+	botSender := &captureSender{sent: make(chan delivery, 2), texts: make(chan *captureTextStream, 2), runs: make(chan *captureRunStream, 2)}
 	inbound, err := New(Config{
 		ProfileID: "work", UserID: "owner", BotID: "agent", Ledger: ledger, Runs: runs,
-		UserMessages: fakeMessages{}, UserSender: userSender, BotSender: botSender,
+		UserMessages: fakeMessages{}, UserSender: userSender, BotSender: botSender, WorkspaceSender: botSender,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -135,16 +242,100 @@ func (s promptSession) Turn(_ context.Context, request contracts.TurnRequest) (c
 	s.provider.mu.Lock()
 	s.provider.prompts = append(s.provider.prompts, request.Prompt)
 	s.provider.mu.Unlock()
+	if request.Events != nil {
+		itemID := "message-answer"
+		_ = request.Events(context.Background(), contracts.NewItemStartedEvent(time.Now().UnixMilli(), contracts.MessageItem{
+			ID: itemID, Type: "message", Role: "assistant", Phase: "final", Content: []contracts.ContentBlock{},
+		}))
+		_ = request.Events(context.Background(), contracts.NewItemDeltaEvent(time.Now().UnixMilli(), itemID, contracts.TextBlock{Type: "text", Text: "ans"}))
+		_ = request.Events(context.Background(), contracts.NewItemDeltaEvent(time.Now().UnixMilli(), itemID, contracts.TextBlock{Type: "text", Text: "wer"}))
+		_ = request.Events(context.Background(), contracts.NewItemCompletedEvent(time.Now().UnixMilli(), itemID, "completed"))
+	}
 	return contracts.TurnResult{FinalText: "answer"}, nil
 }
 func (promptSession) Cancel(context.Context) error { return nil }
 func (promptSession) Close(context.Context) error  { return nil }
 
 type delivery struct{ text, recipientID, groupID string }
-type captureSender struct{ sent chan delivery }
+type captureSender struct {
+	sent  chan delivery
+	texts chan *captureTextStream
+	runs  chan *captureRunStream
+}
 
 func (s *captureSender) SendText(_ context.Context, text, recipientID, groupID string) error {
 	s.sent <- delivery{text: text, recipientID: recipientID, groupID: groupID}
+	return nil
+}
+
+func (s *captureSender) StartTextStream(_ context.Context, initialText, recipientID, groupID string) (abdimbridge.TextStream, error) {
+	stream := &captureTextStream{
+		initial: initialText, recipientID: recipientID, groupID: groupID,
+		finished: make(chan struct{}, 1),
+	}
+	s.texts <- stream
+	return stream, nil
+}
+
+type captureTextStream struct {
+	mu          sync.Mutex
+	initial     string
+	recipientID string
+	groupID     string
+	packets     []string
+	finished    chan struct{}
+}
+
+func (s *captureTextStream) Append(_ context.Context, text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.packets = append(s.packets, text)
+	return nil
+}
+
+func (s *captureTextStream) Finish(context.Context) error {
+	s.finished <- struct{}{}
+	return nil
+}
+
+func (s *captureSender) StartAgentRun(_ context.Context, metadata contracts.AgentRunMetadata, recipientID, groupID string) (abdimbridge.AgentRunStream, error) {
+	stream := &captureRunStream{metadata: metadata, recipientID: recipientID, groupID: groupID, finished: make(chan abdimbridge.RunFinish, 1)}
+	s.runs <- stream
+	return stream, nil
+}
+
+type captureRunStream struct {
+	mu          sync.Mutex
+	metadata    contracts.AgentRunMetadata
+	recipientID string
+	groupID     string
+	events      []contracts.RunEvent
+	finished    chan abdimbridge.RunFinish
+}
+
+func (s *captureRunStream) Queued(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, contracts.NewRunLifecycleEvent("run.queued", time.Now().UnixMilli()))
+	return nil
+}
+
+func (s *captureRunStream) Started(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, contracts.NewRunLifecycleEvent("run.started", time.Now().UnixMilli()))
+	return nil
+}
+
+func (s *captureRunStream) Append(_ context.Context, event contracts.RunEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (s *captureRunStream) Finish(_ context.Context, finish abdimbridge.RunFinish) error {
+	s.finished <- finish
 	return nil
 }
 
@@ -156,5 +347,47 @@ func receiveDelivery(t *testing.T, deliveries <-chan delivery) delivery {
 	case <-time.After(time.Second):
 		t.Fatal("reply was not sent")
 		return delivery{}
+	}
+}
+
+func receiveTextStream(t *testing.T, streams <-chan *captureTextStream) *captureTextStream {
+	t.Helper()
+	select {
+	case stream := <-streams:
+		return stream
+	case <-time.After(time.Second):
+		t.Fatal("text stream was not created")
+		return nil
+	}
+}
+
+func receiveTextFinish(t *testing.T, finished <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("text stream was not finished")
+	}
+}
+
+func receiveRunStream(t *testing.T, streams <-chan *captureRunStream) *captureRunStream {
+	t.Helper()
+	select {
+	case stream := <-streams:
+		return stream
+	case <-time.After(time.Second):
+		t.Fatal("Agent run stream was not created")
+		return nil
+	}
+}
+
+func receiveRunFinish(t *testing.T, finishes <-chan abdimbridge.RunFinish) abdimbridge.RunFinish {
+	t.Helper()
+	select {
+	case finish := <-finishes:
+		return finish
+	case <-time.After(time.Second):
+		t.Fatal("Agent run stream was not finished")
+		return abdimbridge.RunFinish{}
 	}
 }

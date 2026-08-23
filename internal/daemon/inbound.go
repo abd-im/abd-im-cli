@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/agent/run"
+	abdimbridge "github.com/abd-im/abd-im-cli/internal/bridge/abdim"
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 	"github.com/abd-im/abd-im-cli/internal/events"
 	messageservice "github.com/abd-im/abd-im-cli/internal/service/message"
@@ -32,30 +33,39 @@ type TextSender interface {
 	SendText(context.Context, string, string, string) error
 }
 
+type ReplySender interface {
+	TextSender
+	abdimbridge.TextStreamSender
+}
+
 type Config struct {
-	ProfileID    string
-	UserID       string
-	BotID        string
-	Ledger       *events.Ledger
-	Runs         *run.Manager
-	UserMessages messageservice.Source
-	UserSender   TextSender
-	BotSender    TextSender
-	OnError      func(error)
+	ProfileID           string
+	UserID              string
+	BotID               string
+	Ledger              *events.Ledger
+	Runs                *run.Manager
+	UserMessages        messageservice.Source
+	UserSender          ReplySender
+	BotSender           ReplySender
+	WorkspaceSender     abdimbridge.AgentRunSender
+	WorkspaceClassifier contracts.ConversationClassifier
+	OnError             func(error)
 }
 
 // Inbound receives callbacks only from the bot SDK. Normal callbacks are
 // direct replies; secretary.business_message callbacks are hosted replies.
 type Inbound struct {
-	profileID    string
-	userID       string
-	botID        string
-	ledger       *events.Ledger
-	runs         *run.Manager
-	userMessages messageservice.Source
-	userSender   TextSender
-	botSender    TextSender
-	onError      func(error)
+	profileID           string
+	userID              string
+	botID               string
+	ledger              *events.Ledger
+	runs                *run.Manager
+	userMessages        messageservice.Source
+	userSender          ReplySender
+	botSender           ReplySender
+	workspaceSender     abdimbridge.AgentRunSender
+	workspaceClassifier contracts.ConversationClassifier
+	onError             func(error)
 
 	mu          sync.Mutex
 	stopped     bool
@@ -71,7 +81,7 @@ type Outcome struct {
 }
 
 func New(config Config) (*Inbound, error) {
-	if strings.TrimSpace(config.ProfileID) == "" || strings.TrimSpace(config.UserID) == "" || strings.TrimSpace(config.BotID) == "" || config.Ledger == nil || config.Runs == nil || config.UserMessages == nil || config.UserSender == nil || config.BotSender == nil {
+	if strings.TrimSpace(config.ProfileID) == "" || strings.TrimSpace(config.UserID) == "" || strings.TrimSpace(config.BotID) == "" || config.Ledger == nil || config.Runs == nil || config.UserMessages == nil || config.UserSender == nil || config.BotSender == nil || config.WorkspaceSender == nil {
 		return nil, errors.New("profile, user, bot, ledger, runs, messages, and senders are required")
 	}
 	if config.UserID == config.BotID {
@@ -80,7 +90,9 @@ func New(config Config) (*Inbound, error) {
 	return &Inbound{
 		profileID: config.ProfileID, userID: config.UserID, botID: config.BotID,
 		ledger: config.Ledger, runs: config.Runs, userMessages: config.UserMessages,
-		userSender: config.UserSender, botSender: config.BotSender, onError: config.OnError,
+		userSender: config.UserSender, botSender: config.BotSender,
+		workspaceSender:     config.WorkspaceSender,
+		workspaceClassifier: config.WorkspaceClassifier, onError: config.OnError,
 		runsByEvent: make(map[string]string),
 	}, nil
 }
@@ -128,6 +140,7 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	}
 
 	mode := ReplyDirect
+	workspace := false
 	identity := "bot"
 	prompt := directPrompt(d.botID, event.MessageText, event.MessageQuote)
 	sender := d.botSender
@@ -142,9 +155,15 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		if err != nil {
 			return outcome, err
 		}
-	} else if reference.SessionType != 1 || reference.SenderID == d.botID {
+	} else if reference.SenderID == d.botID {
 		outcome.Ignored = true
 		return outcome, nil
+	} else if reference.SessionType != 1 {
+		workspace = d.isAgentWorkspacePrompt(ctx, reference)
+		if !workspace {
+			outcome.Ignored = true
+			return outcome, nil
+		}
 	}
 	target, err := reference.replyTarget()
 	if err != nil {
@@ -157,22 +176,55 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 		ConversationID: identity + ":" + reference.ConversationID,
 		EventID:        recorded.Event.EventID, Prompt: prompt,
 	}
+	var runStream abdimbridge.AgentRunStream
+	var textStream *replyTextStream
+	if workspace {
+		runStream, err = d.workspaceSender.StartAgentRun(ctx, contracts.AgentRunMetadata{
+			Schema: contracts.AgentRunSchema, SchemaVersion: contracts.AgentRunSchemaVersion,
+			RunID: runID, TriggerMessageID: reference.MessageID,
+		}, target.recipientID, target.groupID)
+		if err != nil {
+			return outcome, err
+		}
+		if err := runStream.Queued(ctx); err != nil {
+			return outcome, err
+		}
+		request.Started = runStream.Started
+		request.Events = runStream.Append
+	} else {
+		textStream = newReplyTextStream(sender, target)
+		request.Events = textStream.Event
+	}
 	d.mu.Lock()
 	if d.stopped {
 		d.mu.Unlock()
+		if runStream != nil {
+			_ = runStream.Finish(context.Background(), abdimbridge.RunFinish{Outcome: "failed", Reason: "interrupted", ErrorCode: "interrupted"})
+		}
 		return outcome, ErrStopped
 	}
 	handle, err := d.runs.Submit(request)
 	if err != nil {
 		d.mu.Unlock()
+		if runStream != nil {
+			_ = runStream.Finish(context.Background(), abdimbridge.RunFinish{Outcome: "failed", Reason: "submit_failed", ErrorCode: "submit_failed"})
+		}
 		return outcome, err
 	}
 	d.runsByEvent[recorded.Event.EventID] = runID
 	d.finishers.Add(1)
 	d.mu.Unlock()
 	outcome.RunID = runID
-	go d.finish(recorded.Event.EventID, mode, sender, target, handle)
+	go d.finish(recorded.Event.EventID, mode, runStream, textStream, handle)
 	return outcome, nil
+}
+
+func (d *Inbound) isAgentWorkspacePrompt(ctx context.Context, reference eventRef) bool {
+	if d.workspaceClassifier == nil || (reference.SessionType != 2 && reference.SessionType != 3) || (reference.ContentType != 101 && reference.ContentType != 106 && reference.ContentType != 114) {
+		return false
+	}
+	kind, err := d.workspaceClassifier.ConversationKind(ctx, reference.GroupID)
+	return err == nil && kind == contracts.ConversationKindAgentWorkspace
 }
 
 func (d *Inbound) hostedPrompt(ctx context.Context, reference eventRef) (string, eventRef, error) {
@@ -235,19 +287,143 @@ func (d *Inbound) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (d *Inbound) finish(eventID string, mode ReplyMode, sender TextSender, target replyTarget, handle *run.Handle) {
+func (d *Inbound) finish(eventID string, mode ReplyMode, stream abdimbridge.AgentRunStream, textStream *replyTextStream, handle *run.Handle) {
 	defer d.finishers.Done()
 	result, ok := <-handle.Done
 	d.mu.Lock()
 	delete(d.runsByEvent, eventID)
 	d.mu.Unlock()
-	if !ok || result.Status != run.StatusCompleted || strings.TrimSpace(result.Turn.FinalText) == "" {
+	if stream != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		finish := runFinish(result, ok)
+		if err := stream.Finish(ctx, finish); err != nil {
+			d.report(fmt.Errorf("finish Agent workspace run: %w", err))
+		}
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := sender.SendText(ctx, result.Turn.FinalText, target.recipientID, target.groupID); err != nil {
-		d.report(fmt.Errorf("send %s reply: %w", mode, err))
+	if textStream != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		finalText := ""
+		if ok && result.Status == run.StatusCompleted {
+			finalText = result.Turn.FinalText
+		}
+		if err := textStream.Finish(ctx, finalText); err != nil {
+			d.report(fmt.Errorf("finish %s reply stream: %w", mode, err))
+		}
+	}
+}
+
+type replyTextStream struct {
+	sender abdimbridge.TextStreamSender
+	target replyTarget
+
+	mu         sync.Mutex
+	stream     abdimbridge.TextStream
+	finalItems map[string]bool
+	text       strings.Builder
+	finished   bool
+}
+
+func newReplyTextStream(sender abdimbridge.TextStreamSender, target replyTarget) *replyTextStream {
+	return &replyTextStream{sender: sender, target: target, finalItems: make(map[string]bool)}
+}
+
+func (s *replyTextStream) Event(ctx context.Context, event contracts.RunEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finished {
+		return errors.New("reply text stream is already finished")
+	}
+	switch value := event.(type) {
+	case contracts.ItemStartedEvent:
+		item, ok := value.Item.(contracts.MessageItem)
+		if !ok || item.Role != "assistant" || item.Phase != "final" {
+			return nil
+		}
+		s.finalItems[item.ID] = true
+		for _, content := range item.Content {
+			if block, ok := content.(contracts.TextBlock); ok {
+				if err := s.appendLocked(ctx, block.Text); err != nil {
+					return err
+				}
+			}
+		}
+	case contracts.ItemDeltaEvent:
+		if !s.finalItems[value.ItemID] {
+			return nil
+		}
+		if block, ok := value.Content.(contracts.TextBlock); ok {
+			return s.appendLocked(ctx, block.Text)
+		}
+	}
+	return nil
+}
+
+func (s *replyTextStream) Finish(ctx context.Context, finalText string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finished {
+		return errors.New("reply text stream is already finished")
+	}
+	current := s.text.String()
+	if finalText != "" && current != finalText {
+		if strings.HasPrefix(finalText, current) {
+			if err := s.appendLocked(ctx, strings.TrimPrefix(finalText, current)); err != nil {
+				return err
+			}
+		} else {
+			if s.stream != nil {
+				_ = s.stream.Finish(ctx)
+			}
+			s.finished = true
+			return errors.New("streamed reply does not match final result")
+		}
+	}
+	if s.stream != nil {
+		if err := s.stream.Finish(ctx); err != nil {
+			return err
+		}
+	}
+	s.finished = true
+	return nil
+}
+
+func (s *replyTextStream) appendLocked(ctx context.Context, text string) error {
+	if text == "" {
+		return nil
+	}
+	if s.stream == nil {
+		stream, err := s.sender.StartTextStream(ctx, text, s.target.recipientID, s.target.groupID)
+		if err != nil {
+			return err
+		}
+		s.stream = stream
+	} else if err := s.stream.Append(ctx, text); err != nil {
+		return err
+	}
+	s.text.WriteString(text)
+	return nil
+}
+
+func runFinish(result run.Result, ok bool) abdimbridge.RunFinish {
+	if !ok {
+		return abdimbridge.RunFinish{Outcome: "failed", Reason: "internal_error", ErrorCode: "internal_error"}
+	}
+	switch result.Status {
+	case run.StatusCompleted:
+		return abdimbridge.RunFinish{Outcome: "completed", Reason: "end_turn"}
+	case run.StatusCanceled:
+		return abdimbridge.RunFinish{Outcome: "cancelled", Reason: "cancelled"}
+	case run.StatusDeadline:
+		return abdimbridge.RunFinish{Outcome: "failed", Reason: "deadline_exceeded", ErrorCode: "deadline_exceeded"}
+	case run.StatusOverflow:
+		return abdimbridge.RunFinish{Outcome: "failed", Reason: "queue_overflow", ErrorCode: "queue_overflow"}
+	case run.StatusInterrupted:
+		return abdimbridge.RunFinish{Outcome: "failed", Reason: "interrupted", ErrorCode: "interrupted"}
+	default:
+		return abdimbridge.RunFinish{Outcome: "failed", Reason: "provider_error", ErrorCode: "provider_error"}
 	}
 }
 

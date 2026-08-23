@@ -219,37 +219,15 @@ func (a *Adapter) Shutdown(ctx context.Context) error {
 }
 
 func (a *Adapter) SendText(ctx context.Context, text, recipientID, groupID string) error {
-	if err := contextError(ctx); err != nil {
-		return err
-	}
 	text = strings.TrimSpace(text)
-	if text == "" || len(text) > 4096 || (strings.TrimSpace(recipientID) == "") == (strings.TrimSpace(groupID) == "") {
+	if text == "" {
 		return errors.New("invalid text message delivery")
 	}
-	user, err := a.currentUser()
+	stream, err := a.StartTextStream(ctx, text, recipientID, groupID)
 	if err != nil {
 		return err
 	}
-	callback := newSendCallback()
-	config := a.config
-	sendContext := ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
-	clientMsgID := uuid.NewString()
-	conversationID, err := user.StartStreamMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), callback, "text", text, clientMsgID, recipientID, groupID)
-	if err != nil {
-		return errors.New("OpenIM text stream submission failed")
-	}
-	select {
-	case err := <-callback.done:
-		if err != nil {
-			return err
-		}
-	case <-ctx.Done():
-		return errors.New("OpenIM message outcome is unknown")
-	}
-	if err := user.AppendStreamMessage(ccontext.WithOperationID(sendContext, uuid.NewString()), conversationID, clientMsgID, 0, nil, true); err != nil {
-		return errors.New("OpenIM message outcome is unknown")
-	}
-	return nil
+	return stream.Finish(ctx)
 }
 
 func (a *Adapter) Context() context.Context {

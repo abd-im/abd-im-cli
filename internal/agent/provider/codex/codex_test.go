@@ -22,16 +22,11 @@ func TestAdapterRunsFixedAppServerTurn(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	defer session.Close(context.Background())
-	var outputs []string
-	var activities []contracts.TurnActivity
+	var events []contracts.RunEvent
 	result, err := session.Turn(context.Background(), contracts.TurnRequest{
 		RunID: "run-1", EventID: "event-1", Prompt: "inbound body marker",
-		Output: func(_ context.Context, output contracts.TurnOutput) error {
-			outputs = append(outputs, output.Text)
-			return nil
-		},
-		Activity: func(_ context.Context, activity contracts.TurnActivity) error {
-			activities = append(activities, activity)
+		Events: func(_ context.Context, event contracts.RunEvent) error {
+			events = append(events, event)
 			return nil
 		},
 	})
@@ -41,15 +36,24 @@ func TestAdapterRunsFixedAppServerTurn(t *testing.T) {
 	if result.FinalText != "final reply" || result.SessionRef != "thread-1" {
 		t.Fatalf("Turn() result = %#v", result)
 	}
-	if len(outputs) != 2 || outputs[0] != "final" || outputs[1] != "final reply" {
-		t.Fatalf("Turn() outputs = %#v", outputs)
+	if len(events) != 13 {
+		t.Fatalf("Turn() events = %#v", events)
 	}
-	if len(activities) != 4 || activities[0].Kind != "activity.summary" || activities[0].Summary != "intermediate reply" ||
-		activities[1].Kind != "activity.summary" || activities[1].Summary != "checked the available weather sources" ||
-		activities[2].Kind != "tool.started" || activities[2].CallID != "command-1" || activities[2].Name != "shell" ||
-		activities[2].Summary != "git status" || activities[3].Kind != "tool.completed" || activities[3].Status != "completed" ||
-		activities[3].Summary != "git status" {
-		t.Fatalf("Turn() activities = %#v", activities)
+	commentary, ok := events[0].(contracts.ItemStartedEvent)
+	if !ok || commentary.Item.(contracts.MessageItem).Phase != "commentary" {
+		t.Fatalf("commentary start = %#v", events[0])
+	}
+	reasoning, ok := events[4].(contracts.ItemDeltaEvent)
+	if !ok || reasoning.ItemID != "reasoning-1" || reasoning.Content.(contracts.TextBlock).Text != "checked the available " {
+		t.Fatalf("reasoning delta = %#v", events[4])
+	}
+	tool, ok := events[6].(contracts.ItemStartedEvent)
+	if !ok || tool.Item.(contracts.ToolItem).ID != "command-1" || tool.Item.(contracts.ToolItem).Category != "execute" {
+		t.Fatalf("tool start = %#v", events[6])
+	}
+	finalDelta, ok := events[11].(contracts.ItemDeltaEvent)
+	if !ok || finalDelta.ItemID != "final-1" || finalDelta.Content.(contracts.TextBlock).Text != " reply" {
+		t.Fatalf("final delta = %#v", events[11])
 	}
 	prompt, err := os.ReadFile(capture)
 	if err != nil || string(prompt) != "inbound body marker" {

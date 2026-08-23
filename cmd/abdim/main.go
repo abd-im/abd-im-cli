@@ -30,6 +30,7 @@ import (
 	"github.com/abd-im/abd-im-cli/internal/profile"
 	messageservice "github.com/abd-im/abd-im-cli/internal/service/message"
 	profileservice "github.com/abd-im/abd-im-cli/internal/service/profile"
+	"github.com/abd-im/abd-im-cli/skills"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
 )
@@ -245,6 +246,10 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
 	}
+	workspaceClassifier, err := bot.GroupSource()
+	if err != nil {
+		return writeLocalErrorForFormat(output, format, requestID, err)
+	}
 	dispatcher, err := daemon.NewDispatcher(item.Name, userMethods, botMethods)
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -252,7 +257,7 @@ func runDaemonServe(ctx context.Context, output io.Writer, roots commandRoots, p
 	inbound, err := daemon.New(daemon.Config{
 		ProfileID: item.Name, UserID: item.User.UserID, BotID: item.Bot.UserID,
 		Ledger: ledger, Runs: runs, UserMessages: userMessages,
-		UserSender: user.Adapter, BotSender: bot.Adapter,
+		UserSender: user.Adapter, BotSender: bot.Adapter, WorkspaceSender: bot.Adapter, WorkspaceClassifier: workspaceClassifier,
 	})
 	if err != nil {
 		return writeLocalErrorForFormat(output, format, requestID, err)
@@ -354,7 +359,11 @@ func agentLaunch(agent string) (agentLaunchSpec, error) {
 }
 
 func agentEnvironment(agent, profileID string) []string {
-	result := []string{"PATH=" + os.Getenv("PATH"), "TERM=dumb", "ABDIM_PROFILE=" + profileID}
+	path := os.Getenv("PATH")
+	if executable := executablePath(); executable != "" {
+		path = filepath.Dir(executable) + string(os.PathListSeparator) + path
+	}
+	result := []string{"PATH=" + path, "TERM=dumb", "ABDIM_PROFILE=" + profileID}
 	if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
 		result = append(result, "HOME="+home)
 	}
@@ -377,6 +386,15 @@ func newAgentProvider(agent, profileID, executable string, args []string, workin
 			Executable: executable, WorkingDir: workingDir, StateDir: filepath.Join(dataDir, "codex"),
 			SourceCodexHome: codexHome, Environment: agentEnvironment(agent, profileID), CLICommand: executablePath(),
 		})
+	}
+	if agent == "hermes" {
+		home, err := os.UserHomeDir()
+		if err != nil || !filepath.IsAbs(home) {
+			return nil, errors.New("resolve Hermes home directory")
+		}
+		if err := skills.InstallABDHermes(filepath.Join(home, ".hermes")); err != nil {
+			return nil, fmt.Errorf("install Hermes ABD IM skill: %w", err)
+		}
 	}
 	return acpprovider.New(acpprovider.Config{
 		Executable: executable, Args: args, WorkingDir: workingDir,

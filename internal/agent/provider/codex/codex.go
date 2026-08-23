@@ -254,12 +254,12 @@ func isThreadNotFound(err error) bool {
 
 type turnState struct {
 	ctx                context.Context
-	output             contracts.TurnOutputSink
-	activity           contracts.TurnActivitySink
+	events             contracts.RunEventSink
 	done               chan struct{}
 	agentMessagePhases map[string]string
-	agentMessageText   map[string]string
-	text               string
+	startedItems       map[string]bool
+	completedItems     map[string]bool
+	itemHasDelta       map[string]bool
 	final              string
 	err                error
 }
@@ -292,8 +292,9 @@ func (s *session) Turn(ctx context.Context, request contracts.TurnRequest) (cont
 		return contracts.TurnResult{}, errors.New("Codex session is unavailable")
 	}
 	turn := &turnState{
-		ctx: ctx, output: request.Output, activity: request.Activity, done: make(chan struct{}),
-		agentMessagePhases: make(map[string]string), agentMessageText: make(map[string]string),
+		ctx: ctx, events: request.Events, done: make(chan struct{}),
+		agentMessagePhases: make(map[string]string), startedItems: make(map[string]bool),
+		completedItems: make(map[string]bool), itemHasDelta: make(map[string]bool),
 	}
 	threadID := s.threadID
 	s.turn = turn
@@ -308,6 +309,7 @@ func (s *session) Turn(ctx context.Context, request contracts.TurnRequest) (cont
 	}
 	select {
 	case <-turn.done:
+		s.completeCodexItems(turn)
 		s.mu.Lock()
 		s.turn = nil
 		final, turnErr := turn.final, turn.err
@@ -507,15 +509,16 @@ func (s *session) handleServerRequest(id json.RawMessage, method string, params 
 		turn := s.turn
 		s.mu.Unlock()
 		if turn != nil {
-			s.deliverActivity(turn, contracts.TurnActivity{
-				Kind: "approval.requested", RequestID: approvalID, Name: "permission",
-				Summary: permissionSummary(params),
+			s.deliverEvent(turn, contracts.PermissionRequestedEvent{
+				EventHeader: contracts.EventHeader{Event: "permission.requested", At: time.Now().UnixMilli()},
+				Request:     contracts.PermissionRequest{ID: approvalID, Title: "Permission", Description: permissionSummary(params), Options: []contracts.PermissionOption{{ID: "allow_once", Kind: "allow_once", Label: "Allow once"}}},
 			})
 		}
 		_ = s.write(map[string]any{"jsonrpc": "2.0", "id": requestID, "result": permissionApproval(params)})
 		if turn != nil {
-			s.deliverActivity(turn, contracts.TurnActivity{
-				Kind: "approval.resolved", RequestID: approvalID, Decision: "accepted",
+			s.deliverEvent(turn, contracts.PermissionResolvedEvent{
+				EventHeader: contracts.EventHeader{Event: "permission.resolved", At: time.Now().UnixMilli()},
+				Resolution:  contracts.PermissionResolution{RequestID: approvalID, Outcome: "selected", OptionID: "allow_once"},
 			})
 		}
 		return
@@ -571,34 +574,50 @@ func (s *session) handleNotification(method string, raw json.RawMessage) {
 	case "item/started":
 		item, _ := params["item"].(map[string]any)
 		s.rememberAgentMessagePhase(turn, item)
-		if activity, ok := codexToolActivity(item, "tool.started"); ok {
-			s.deliverActivity(turn, activity)
-		}
+		s.startCodexItem(turn, item)
 	case "item/agentMessage/delta":
 		s.deliverAgentMessageDelta(turn, params)
+	case "item/reasoning/summaryTextDelta":
+		itemID, _ := params["itemId"].(string)
+		delta, _ := params["delta"].(string)
+		if itemID != "" && delta != "" {
+			s.ensureReasoningStarted(turn, itemID)
+			s.deliverEvent(turn, contracts.NewItemDeltaEvent(time.Now().UnixMilli(), itemID, contracts.TextBlock{Type: "text", Text: delta}))
+			s.markItemDelta(turn, itemID)
+		}
 	case "item/completed":
 		item, _ := params["item"].(map[string]any)
 		itemType, _ := item["type"].(string)
 		phase, _ := item["phase"].(string)
+		itemID, _ := item["id"].(string)
 		s.rememberAgentMessagePhase(turn, item)
 		if itemType == "reasoning" {
-			if summary := codexReasoningSummary(item); summary != "" {
-				s.deliverActivity(turn, contracts.TurnActivity{Kind: "activity.summary", Summary: summary})
+			s.ensureReasoningStarted(turn, itemID)
+			if !s.itemHasDelta(turn, itemID) {
+				if summary := codexReasoningSummary(item); summary != "" {
+					s.deliverEvent(turn, contracts.NewItemDeltaEvent(time.Now().UnixMilli(), itemID, contracts.TextBlock{Type: "text", Text: summary}))
+				}
 			}
+			s.completeItem(turn, itemID, "completed")
 		}
-		if itemType == "agentMessage" && phase == "commentary" {
+		if itemType == "agentMessage" {
+			s.startCodexItem(turn, item)
 			text, _ := item["text"].(string)
-			if summary := boundedSummary(text); summary != "" {
-				s.deliverActivity(turn, contracts.TurnActivity{Kind: "activity.summary", Summary: summary})
+			if !s.itemHasDelta(turn, itemID) && text != "" {
+				s.deliverEvent(turn, contracts.NewItemDeltaEvent(time.Now().UnixMilli(), itemID, contracts.TextBlock{Type: "text", Text: text}))
 			}
+			s.completeItem(turn, itemID, "completed")
 		}
-		if activity, ok := codexToolActivity(item, "tool.completed"); ok {
-			s.deliverActivity(turn, activity)
+		if tool, ok := codexToolItem(item); ok {
+			s.startCodexItem(turn, item)
+			s.deliverEvent(turn, contracts.NewItemUpdatedEvent(time.Now().UnixMilli(), tool.ID, contracts.ToolStateUpdate{
+				Type: "tool.state", Title: tool.Title, Status: tool.Status, Locations: tool.Locations, DurationMS: tool.DurationMS,
+			}))
+			s.completeItem(turn, tool.ID, toolOutcome(tool.Status))
 		}
 		if itemType == "agentMessage" && phase == "final_answer" {
 			text, _ := item["text"].(string)
 			if text != "" {
-				s.deliver(turn, text)
 				s.mu.Lock()
 				turn.final = text
 				s.mu.Unlock()
@@ -634,7 +653,7 @@ func codexTurnError(params map[string]any) error {
 	return fmt.Errorf("Codex turn did not complete: %s", boundedSummary(message))
 }
 
-func codexToolActivity(item map[string]any, kind string) (contracts.TurnActivity, bool) {
+func codexToolItem(item map[string]any) (contracts.ToolItem, bool) {
 	itemType, _ := item["type"].(string)
 	name := map[string]string{
 		"commandExecution": "shell",
@@ -645,14 +664,13 @@ func codexToolActivity(item map[string]any, kind string) (contracts.TurnActivity
 	}[itemType]
 	callID, _ := item["id"].(string)
 	if name == "" || callID == "" {
-		return contracts.TurnActivity{}, false
+		return contracts.ToolItem{}, false
 	}
 	status, _ := item["status"].(string)
-	if kind == "tool.started" {
+	if status == "" {
 		status = "running"
-	} else if status == "" {
-		status = "completed"
 	}
+	status = canonicalToolStatus(status)
 	summary, _ := item["summary"].(string)
 	if summary == "" {
 		for _, key := range []string{"command", "query", "tool", "path"} {
@@ -662,14 +680,33 @@ func codexToolActivity(item map[string]any, kind string) (contracts.TurnActivity
 			}
 		}
 	}
-	return contracts.TurnActivity{
-		Kind:       kind,
-		CallID:     callID,
-		Name:       name,
-		Summary:    boundedSummary(summary),
-		Status:     status,
-		DurationMS: numericInt64(item["durationMs"]),
+	category := map[string]string{"shell": "execute", "file_change": "edit", "mcp": "mcp", "web_search": "search", "image_view": "read"}[name]
+	title := boundedSummary(summary)
+	if title == "" {
+		title = name
+	}
+	return contracts.ToolItem{
+		ID: callID, Type: "tool", Name: name, Title: title, Category: category,
+		Status: status, Content: []contracts.ContentBlock{}, Locations: []contracts.ToolLocation{}, DurationMS: numericInt64(item["durationMs"]),
 	}, true
+}
+
+func canonicalToolStatus(status string) string {
+	switch status {
+	case "completed", "failed", "cancelled", "declined":
+		return status
+	case "canceled":
+		return "cancelled"
+	default:
+		return "running"
+	}
+}
+
+func toolOutcome(status string) string {
+	if status == "failed" || status == "cancelled" || status == "declined" {
+		return status
+	}
+	return "completed"
 }
 
 // Codex exposes summary as the approved, user-visible form of reasoning.
@@ -728,49 +765,31 @@ func (s *session) deliverAgentMessageDelta(turn *turnState, params map[string]an
 		return
 	}
 	s.mu.Lock()
-	if s.turn != turn || turn.err != nil || turn.agentMessagePhases[itemID] != "final_answer" {
+	if s.turn != turn || turn.err != nil {
 		s.mu.Unlock()
 		return
 	}
-	text := turn.agentMessageText[itemID] + delta
-	turn.agentMessageText[itemID] = text
+	phase := turn.agentMessagePhases[itemID]
 	s.mu.Unlock()
-	s.deliver(turn, text)
-}
-
-func (s *session) deliver(turn *turnState, text string) {
-	s.mu.Lock()
-	if s.turn != turn || turn.err != nil || text == turn.text {
-		s.mu.Unlock()
+	if phase == "" {
 		return
 	}
-	turn.text = text
-	output, outputContext := turn.output, turn.ctx
-	s.mu.Unlock()
-	if output != nil {
-		if err := output(outputContext, contracts.TurnOutput{Text: text}); err != nil {
-			s.mu.Lock()
-			if s.turn == turn && turn.err == nil {
-				turn.err = err
-			}
-			s.mu.Unlock()
-			_ = s.Cancel(context.Background())
-		}
-	}
+	s.deliverEvent(turn, contracts.NewItemDeltaEvent(time.Now().UnixMilli(), itemID, contracts.TextBlock{Type: "text", Text: delta}))
+	s.markItemDelta(turn, itemID)
 }
 
-func (s *session) deliverActivity(turn *turnState, activity contracts.TurnActivity) {
+func (s *session) deliverEvent(turn *turnState, event contracts.RunEvent) {
 	s.mu.Lock()
 	if s.turn != turn || turn.err != nil {
 		s.mu.Unlock()
 		return
 	}
-	sink, activityContext := turn.activity, turn.ctx
+	sink, eventContext := turn.events, turn.ctx
 	s.mu.Unlock()
 	if sink == nil {
 		return
 	}
-	if err := sink(activityContext, activity); err != nil {
+	if err := sink(eventContext, event); err != nil {
 		s.mu.Lock()
 		if s.turn == turn && turn.err == nil {
 			turn.err = err
@@ -778,6 +797,106 @@ func (s *session) deliverActivity(turn *turnState, activity contracts.TurnActivi
 		s.mu.Unlock()
 		_ = s.Cancel(context.Background())
 	}
+}
+
+func (s *session) startCodexItem(turn *turnState, item map[string]any) {
+	itemID, _ := item["id"].(string)
+	if itemID == "" || s.itemStarted(turn, itemID) {
+		return
+	}
+	itemType, _ := item["type"].(string)
+	var canonical contracts.RunItem
+	switch itemType {
+	case "agentMessage":
+		phase, _ := item["phase"].(string)
+		if phase == "final_answer" {
+			phase = "final"
+		} else {
+			phase = "commentary"
+		}
+		canonical = contracts.MessageItem{ID: itemID, Type: "message", Role: "assistant", Phase: phase, Content: []contracts.ContentBlock{}}
+	default:
+		tool, ok := codexToolItem(item)
+		if !ok {
+			return
+		}
+		canonical = tool
+	}
+	s.markItemStarted(turn, itemID)
+	s.deliverEvent(turn, contracts.NewItemStartedEvent(time.Now().UnixMilli(), canonical))
+}
+
+func (s *session) ensureReasoningStarted(turn *turnState, itemID string) {
+	if itemID == "" || s.itemStarted(turn, itemID) {
+		return
+	}
+	s.markItemStarted(turn, itemID)
+	s.deliverEvent(turn, contracts.NewItemStartedEvent(time.Now().UnixMilli(), contracts.ReasoningItem{ID: itemID, Type: "reasoning", Content: []contracts.ContentBlock{}}))
+}
+
+func (s *session) completeItem(turn *turnState, itemID, outcome string) {
+	if itemID == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.turn != turn || turn.completedItems[itemID] {
+		s.mu.Unlock()
+		return
+	}
+	turn.completedItems[itemID] = true
+	s.mu.Unlock()
+	s.deliverEvent(turn, contracts.NewItemCompletedEvent(time.Now().UnixMilli(), itemID, outcome))
+}
+
+func (s *session) completeCodexItems(turn *turnState) {
+	s.mu.Lock()
+	if s.turn != turn {
+		s.mu.Unlock()
+		return
+	}
+	outcome := "completed"
+	if turn.err != nil {
+		outcome = "failed"
+	}
+	ids := make([]string, 0, len(turn.startedItems))
+	for itemID := range turn.startedItems {
+		if !turn.completedItems[itemID] {
+			turn.completedItems[itemID] = true
+			ids = append(ids, itemID)
+		}
+	}
+	s.mu.Unlock()
+	for _, itemID := range ids {
+		s.deliverEvent(turn, contracts.NewItemCompletedEvent(time.Now().UnixMilli(), itemID, outcome))
+	}
+}
+
+func (s *session) itemStarted(turn *turnState, itemID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turn != turn || turn.startedItems[itemID]
+}
+
+func (s *session) markItemStarted(turn *turnState, itemID string) {
+	s.mu.Lock()
+	if s.turn == turn {
+		turn.startedItems[itemID] = true
+	}
+	s.mu.Unlock()
+}
+
+func (s *session) itemHasDelta(turn *turnState, itemID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turn == turn && turn.itemHasDelta[itemID]
+}
+
+func (s *session) markItemDelta(turn *turnState, itemID string) {
+	s.mu.Lock()
+	if s.turn == turn {
+		turn.itemHasDelta[itemID] = true
+	}
+	s.mu.Unlock()
 }
 
 func (s *session) finishTurn(turn *turnState, final string, err error) {

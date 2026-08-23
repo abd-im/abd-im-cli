@@ -15,6 +15,7 @@ import (
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
+	"github.com/google/uuid"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
 )
@@ -158,7 +159,7 @@ func (a *Adapter) Start(ctx context.Context, request contracts.StartRequest) (co
 			return nil, errors.New("load ACP session")
 		}
 	} else {
-		created, createErr := session.connection.NewSession(initializeContext, acpsdk.NewSessionRequest{Cwd: paths.work})
+		created, createErr := session.connection.NewSession(initializeContext, acpsdk.NewSessionRequest{Cwd: paths.work, McpServers: []acpsdk.McpServer{}})
 		if createErr != nil {
 			_ = session.Close(context.Background())
 			return nil, errors.New("create ACP session")
@@ -181,12 +182,15 @@ func isSessionNotFound(err error) bool {
 }
 
 type turnState struct {
-	ctx      context.Context
-	output   contracts.TurnOutputSink
-	activity contracts.TurnActivitySink
-	tools    map[string]contracts.TurnActivity
-	text     string
-	err      error
+	ctx       context.Context
+	events    contracts.RunEventSink
+	tools     map[string]contracts.ToolItem
+	started   map[string]bool
+	completed map[string]bool
+	messageID string
+	thoughtID string
+	text      string
+	err       error
 }
 
 type session struct {
@@ -215,7 +219,10 @@ func (s *session) Turn(ctx context.Context, request contracts.TurnRequest) (cont
 		s.mu.Unlock()
 		return contracts.TurnResult{}, errors.New("ACP session is unavailable")
 	}
-	turn := &turnState{ctx: ctx, output: request.Output, activity: request.Activity, tools: make(map[string]contracts.TurnActivity)}
+	turn := &turnState{
+		ctx: ctx, events: request.Events, tools: make(map[string]contracts.ToolItem),
+		started: make(map[string]bool), completed: make(map[string]bool),
+	}
 	s.turn = turn
 	sessionID := s.sessionID
 	s.mu.Unlock()
@@ -224,6 +231,13 @@ func (s *session) Turn(ctx context.Context, request contracts.TurnRequest) (cont
 		SessionId: sessionID,
 		Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock(request.Prompt)},
 	})
+	itemOutcome := "completed"
+	if promptErr != nil {
+		itemOutcome = "failed"
+	} else if response.StopReason == acpsdk.StopReasonCancelled {
+		itemOutcome = "cancelled"
+	}
+	s.completeACPItems(turn, itemOutcome)
 	s.mu.Lock()
 	if s.turn == turn {
 		s.turn = nil
@@ -318,67 +332,89 @@ func (c *client) SessionUpdate(_ context.Context, notification acpsdk.SessionNot
 	}
 	if update := notification.Update.AgentMessageChunk; update != nil && update.Content.Text != nil {
 		turn.text += update.Content.Text.Text
-		text, output, outputContext := turn.text, turn.output, turn.ctx
+		itemID := acpItemID(update.MessageId, &turn.messageID)
+		started := turn.started[itemID]
+		turn.started[itemID] = true
 		s.mu.Unlock()
-		if output == nil {
-			return nil
+		if !started {
+			s.deliverEvent(turn, contracts.NewItemStartedEvent(time.Now().UnixMilli(), contracts.MessageItem{
+				ID: itemID, Type: "message", Role: "assistant", Phase: "final", Content: []contracts.ContentBlock{},
+			}))
 		}
-		if err := output(outputContext, contracts.TurnOutput{Text: text}); err != nil {
-			s.mu.Lock()
-			if s.turn == turn && turn.err == nil {
-				turn.err = err
-			}
-			s.mu.Unlock()
-			_ = s.Cancel(context.Background())
+		s.deliverEvent(turn, contracts.NewItemDeltaEvent(time.Now().UnixMilli(), itemID, contracts.TextBlock{Type: "text", Text: update.Content.Text.Text}))
+		return nil
+	}
+	if update := notification.Update.AgentThoughtChunk; update != nil && update.Content.Text != nil {
+		itemID := acpItemID(update.MessageId, &turn.thoughtID)
+		started := turn.started[itemID]
+		turn.started[itemID] = true
+		s.mu.Unlock()
+		if !started {
+			s.deliverEvent(turn, contracts.NewItemStartedEvent(time.Now().UnixMilli(), contracts.ReasoningItem{
+				ID: itemID, Type: "reasoning", Content: []contracts.ContentBlock{},
+			}))
 		}
+		s.deliverEvent(turn, contracts.NewItemDeltaEvent(time.Now().UnixMilli(), itemID, contracts.TextBlock{Type: "text", Text: update.Content.Text.Text}))
 		return nil
 	}
 	if update := notification.Update.ToolCall; update != nil {
-		activity := contracts.TurnActivity{
-			Kind: "tool.started", CallID: string(update.ToolCallId), Name: acpToolName(update.Kind),
-			Summary: boundedACPSummary(update.Title), Status: string(update.Status),
-		}
-		if activity.Status == "" {
-			activity.Status = "running"
-		}
-		turn.tools[activity.CallID] = activity
+		tool := acpToolItem(string(update.ToolCallId), update.Title, update.Kind, update.Status, update.Locations)
+		turn.tools[tool.ID] = tool
+		turn.started[tool.ID] = true
 		s.mu.Unlock()
-		s.deliverActivity(turn, activity)
+		s.deliverEvent(turn, contracts.NewItemStartedEvent(time.Now().UnixMilli(), tool))
 		return nil
 	}
-	if update := notification.Update.ToolCallUpdate; update != nil && update.Status != nil &&
-		(*update.Status == acpsdk.ToolCallStatusCompleted || *update.Status == acpsdk.ToolCallStatusFailed) {
-		activity := turn.tools[string(update.ToolCallId)]
-		activity.Kind = "tool.completed"
-		activity.CallID = string(update.ToolCallId)
-		activity.Status = string(*update.Status)
+	if update := notification.Update.ToolCallUpdate; update != nil {
+		tool := turn.tools[string(update.ToolCallId)]
+		if tool.ID == "" {
+			tool = acpToolItem(string(update.ToolCallId), "Tool", "", "", nil)
+			turn.started[tool.ID] = true
+		}
 		if update.Title != nil {
-			activity.Summary = boundedACPSummary(*update.Title)
+			tool.Title = boundedACPSummary(*update.Title)
 		}
 		if update.Kind != nil {
-			activity.Name = acpToolName(*update.Kind)
+			tool.Name = acpToolName(*update.Kind)
+			tool.Category = acpToolCategory(*update.Kind)
 		}
-		turn.tools[activity.CallID] = activity
+		if update.Status != nil {
+			tool.Status = acpToolStatus(*update.Status)
+		}
+		if update.Locations != nil {
+			tool.Locations = acpLocations(update.Locations)
+		}
+		turn.tools[tool.ID] = tool
+		terminal := tool.Status == "completed" || tool.Status == "failed"
+		alreadyCompleted := turn.completed[tool.ID]
+		if terminal {
+			turn.completed[tool.ID] = true
+		}
 		s.mu.Unlock()
-		s.deliverActivity(turn, activity)
+		s.deliverEvent(turn, contracts.NewItemUpdatedEvent(time.Now().UnixMilli(), tool.ID, contracts.ToolStateUpdate{
+			Type: "tool.state", Title: tool.Title, Status: tool.Status, Locations: tool.Locations,
+		}))
+		if terminal && !alreadyCompleted {
+			s.deliverEvent(turn, contracts.NewItemCompletedEvent(time.Now().UnixMilli(), tool.ID, acpItemOutcome(tool.Status)))
+		}
 		return nil
 	}
 	s.mu.Unlock()
 	return nil
 }
 
-func (s *session) deliverActivity(turn *turnState, activity contracts.TurnActivity) {
+func (s *session) deliverEvent(turn *turnState, event contracts.RunEvent) {
 	s.mu.Lock()
 	if s.turn != turn || turn.err != nil {
 		s.mu.Unlock()
 		return
 	}
-	sink, activityContext := turn.activity, turn.ctx
+	sink, eventContext := turn.events, turn.ctx
 	s.mu.Unlock()
 	if sink == nil {
 		return
 	}
-	if err := sink(activityContext, activity); err != nil {
+	if err := sink(eventContext, event); err != nil {
 		s.mu.Lock()
 		if s.turn == turn && turn.err == nil {
 			turn.err = err
@@ -386,6 +422,95 @@ func (s *session) deliverActivity(turn *turnState, activity contracts.TurnActivi
 		s.mu.Unlock()
 		_ = s.Cancel(context.Background())
 	}
+}
+
+func (s *session) completeACPItems(turn *turnState, outcome string) {
+	s.mu.Lock()
+	if s.turn != turn {
+		s.mu.Unlock()
+		return
+	}
+	ids := make([]string, 0, len(turn.started))
+	for itemID := range turn.started {
+		if !turn.completed[itemID] {
+			turn.completed[itemID] = true
+			ids = append(ids, itemID)
+		}
+	}
+	s.mu.Unlock()
+	for _, itemID := range ids {
+		s.deliverEvent(turn, contracts.NewItemCompletedEvent(time.Now().UnixMilli(), itemID, outcome))
+	}
+}
+
+func acpItemID(provided *string, fallback *string) string {
+	if provided != nil && strings.TrimSpace(*provided) != "" {
+		return *provided
+	}
+	if *fallback == "" {
+		*fallback = uuid.NewString()
+	}
+	return *fallback
+}
+
+func acpToolItem(id, title string, kind acpsdk.ToolKind, status acpsdk.ToolCallStatus, locations []acpsdk.ToolCallLocation) contracts.ToolItem {
+	title = boundedACPSummary(title)
+	if title == "" {
+		title = "Tool"
+	}
+	return contracts.ToolItem{
+		ID: id, Type: "tool", Name: acpToolName(kind), Title: title,
+		Category: acpToolCategory(kind), Status: acpToolStatus(status), Content: []contracts.ContentBlock{}, Locations: acpLocations(locations),
+	}
+}
+
+func acpToolCategory(kind acpsdk.ToolKind) string {
+	switch kind {
+	case acpsdk.ToolKindExecute:
+		return "execute"
+	case acpsdk.ToolKindRead:
+		return "read"
+	case acpsdk.ToolKindEdit, acpsdk.ToolKindDelete, acpsdk.ToolKindMove:
+		return "edit"
+	case acpsdk.ToolKindSearch:
+		return "search"
+	case acpsdk.ToolKindFetch:
+		return "fetch"
+	default:
+		return "other"
+	}
+}
+
+func acpToolStatus(status acpsdk.ToolCallStatus) string {
+	switch status {
+	case acpsdk.ToolCallStatusCompleted:
+		return "completed"
+	case acpsdk.ToolCallStatusFailed:
+		return "failed"
+	case acpsdk.ToolCallStatusPending:
+		return "pending"
+	default:
+		return "running"
+	}
+}
+
+func acpItemOutcome(status string) string {
+	if status == "failed" || status == "cancelled" || status == "declined" {
+		return status
+	}
+	return "completed"
+}
+
+func acpLocations(locations []acpsdk.ToolCallLocation) []contracts.ToolLocation {
+	result := make([]contracts.ToolLocation, 0, len(locations))
+	for _, location := range locations {
+		line := int64(0)
+		if location.Line != nil {
+			line = int64(*location.Line)
+		}
+		result = append(result, contracts.ToolLocation{Path: location.Path, Line: line})
+	}
+	return result
 }
 
 func acpToolName(kind acpsdk.ToolKind) string {
@@ -409,15 +534,46 @@ func boundedACPSummary(value string) string {
 
 func (c *client) RequestPermission(_ context.Context, request acpsdk.RequestPermissionRequest) (acpsdk.RequestPermissionResponse, error) {
 	c.session.mu.Lock()
-	sessionID := c.session.sessionID
+	sessionID, turn := c.session.sessionID, c.session.turn
+	tool := contracts.ToolItem{}
+	if turn != nil {
+		tool = turn.tools[string(request.ToolCall.ToolCallId)]
+	}
 	c.session.mu.Unlock()
 	if request.SessionId != sessionID {
 		return acpsdk.RequestPermissionResponse{}, acpsdk.NewInvalidParams(map[string]any{"reason": "permission session mismatch"})
 	}
+	requestID := uuid.NewString()
+	if turn != nil {
+		options := make([]contracts.PermissionOption, 0, len(request.Options))
+		for _, option := range request.Options {
+			options = append(options, contracts.PermissionOption{ID: string(option.OptionId), Kind: string(option.Kind), Label: option.Name})
+		}
+		title := tool.Title
+		if title == "" {
+			title = "Permission"
+		}
+		c.session.deliverEvent(turn, contracts.PermissionRequestedEvent{
+			EventHeader: contracts.EventHeader{Event: "permission.requested", At: time.Now().UnixMilli()},
+			Request:     contracts.PermissionRequest{ID: requestID, ItemID: string(request.ToolCall.ToolCallId), Title: title, Options: options},
+		})
+	}
 	for _, option := range request.Options {
 		if option.Kind == acpsdk.PermissionOptionKindAllowOnce || option.Kind == acpsdk.PermissionOptionKindAllowAlways {
+			if turn != nil {
+				c.session.deliverEvent(turn, contracts.PermissionResolvedEvent{
+					EventHeader: contracts.EventHeader{Event: "permission.resolved", At: time.Now().UnixMilli()},
+					Resolution:  contracts.PermissionResolution{RequestID: requestID, Outcome: "selected", OptionID: string(option.OptionId)},
+				})
+			}
 			return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeSelected(option.OptionId)}, nil
 		}
+	}
+	if turn != nil {
+		c.session.deliverEvent(turn, contracts.PermissionResolvedEvent{
+			EventHeader: contracts.EventHeader{Event: "permission.resolved", At: time.Now().UnixMilli()},
+			Resolution:  contracts.PermissionResolution{RequestID: requestID, Outcome: "cancelled", Reason: "no_allowed_option"},
+		})
 	}
 	return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeCancelled()}, nil
 }

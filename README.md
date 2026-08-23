@@ -66,7 +66,8 @@ printf '%s\n' '{"recipient_id":"user-id","text":"hello"}' \
 
 当前 CLI 支持 profile/user、conversation、message、group/member、friend 和 blacklist
 读取，以及文本发送。命令和示例见 [`skills/abd-im`](skills/abd-im/SKILL.md)。Codex run 启动
-时，daemon 会把该静态 Skill 安装到工作区的 `.agents/skills/abd-im`。
+时，daemon 会把该静态 Skill 安装到工作区的 `.agents/skills/abd-im`；Hermes provider 启动时
+安装到 `~/.hermes/skills/abd-im`，且不会覆盖已有的不同内容。
 
 ## 开发
 

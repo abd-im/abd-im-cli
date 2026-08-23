@@ -23,20 +23,13 @@ func TestAdapterRunsV1PromptAndStreamsAgentText(t *testing.T) {
 	}
 	defer session.Close(context.Background())
 	var mu sync.Mutex
-	var updates []string
-	var activities []contracts.TurnActivity
+	var events []contracts.RunEvent
 	result, err := session.Turn(context.Background(), contracts.TurnRequest{
 		RunID: "run-1", EventID: "event-1", Prompt: "hello",
-		Output: func(_ context.Context, output contracts.TurnOutput) error {
+		Events: func(_ context.Context, event contracts.RunEvent) error {
 			mu.Lock()
 			defer mu.Unlock()
-			updates = append(updates, output.Text)
-			return nil
-		},
-		Activity: func(_ context.Context, activity contracts.TurnActivity) error {
-			mu.Lock()
-			defer mu.Unlock()
-			activities = append(activities, activity)
+			events = append(events, event)
 			return nil
 		},
 	})
@@ -47,24 +40,48 @@ func TestAdapterRunsV1PromptAndStreamsAgentText(t *testing.T) {
 		t.Fatalf("Turn() result = %#v", result)
 	}
 	mu.Lock()
-	gotUpdates := append([]string(nil), updates...)
+	gotEvents := append([]contracts.RunEvent(nil), events...)
 	mu.Unlock()
-	wantUpdates := []string{"hel", "hello", "hello world"}
-	if strings.Join(gotUpdates, "|") != strings.Join(wantUpdates, "|") {
-		t.Fatalf("output updates = %#v, want %#v", gotUpdates, wantUpdates)
+	if len(gotEvents) != 10 {
+		t.Fatalf("run events = %#v", gotEvents)
 	}
-	if len(activities) != 2 || activities[0].Kind != "tool.started" || activities[0].CallID != "call-1" ||
-		activities[0].Name != "terminal" || activities[1].Kind != "tool.completed" || activities[1].Status != "completed" {
-		t.Fatalf("activity updates = %#v", activities)
+	var messageStart, toolStart, toolDone, permissionRequested, permissionResolved bool
+	var messageText string
+	for _, event := range gotEvents {
+		switch value := event.(type) {
+		case contracts.ItemStartedEvent:
+			switch item := value.Item.(type) {
+			case contracts.MessageItem:
+				messageStart = item.Phase == "final"
+			case contracts.ToolItem:
+				toolStart = item.ID == "call-1" && item.Category == "execute"
+			}
+		case contracts.ItemDeltaEvent:
+			if block, ok := value.Content.(contracts.TextBlock); ok {
+				messageText += block.Text
+			}
+		case contracts.ItemCompletedEvent:
+			if value.ItemID == "call-1" && value.Outcome == "completed" {
+				toolDone = true
+			}
+		case contracts.PermissionRequestedEvent:
+			permissionRequested = true
+		case contracts.PermissionResolvedEvent:
+			permissionResolved = true
+		}
+	}
+	if !messageStart || messageText != "hello world" || !toolStart || !toolDone || !permissionRequested || !permissionResolved {
+		t.Fatalf("incomplete canonical events = %#v", gotEvents)
 	}
 	payload, err := os.ReadFile(capture)
 	if err != nil {
 		t.Fatalf("read session capture: %v", err)
 	}
 	var params struct {
-		CWD string `json:"cwd"`
+		CWD        string            `json:"cwd"`
+		MCPServers []json.RawMessage `json:"mcpServers"`
 	}
-	if json.Unmarshal(payload, &params) != nil || !filepath.IsAbs(params.CWD) {
+	if json.Unmarshal(payload, &params) != nil || !filepath.IsAbs(params.CWD) || params.MCPServers == nil {
 		t.Fatalf("session/new params = %s", payload)
 	}
 }
@@ -157,7 +174,7 @@ func TestAdapterPropagatesOutputSinkFailure(t *testing.T) {
 	want := errors.New("stream unavailable")
 	_, err = session.Turn(context.Background(), contracts.TurnRequest{
 		RunID: "run-1", EventID: "event-1", Prompt: "hello",
-		Output: func(context.Context, contracts.TurnOutput) error { return want },
+		Events: func(context.Context, contracts.RunEvent) error { return want },
 	})
 	if !errors.Is(err, want) {
 		t.Fatalf("Turn() error = %v, want sink failure", err)

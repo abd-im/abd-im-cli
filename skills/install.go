@@ -14,11 +14,26 @@ var content embed.FS
 
 // InstallABD installs the bundled ABD IM skill in one Agent workspace.
 func InstallABD(workspace string) error {
+	return installABD(filepath.Join(workspace, ".agents", "skills"))
+}
+
+// InstallABDHermes installs the bundled skill in a Hermes home without replacing an existing skill.
+func InstallABDHermes(home string) error {
+	target := filepath.Join(home, "skills", "abd-im")
+	if _, err := os.Lstat(target); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect Hermes ABD IM skill: %w", err)
+	}
+	return installABD(filepath.Join(home, "skills"))
+}
+
+func installABD(skillsDir string) error {
 	return fs.WalkDir(content, "abd-im", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		target := filepath.Join(workspace, ".agents", "skills", filepath.FromSlash(path))
+		target := filepath.Join(skillsDir, filepath.FromSlash(path))
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0o700)
 		}

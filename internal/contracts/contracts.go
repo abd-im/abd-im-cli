@@ -12,6 +12,17 @@ import (
 
 const APIVersionV1 = "v1"
 
+type ConversationKind string
+
+const (
+	ConversationKindChat           ConversationKind = "chat"
+	ConversationKindAgentWorkspace ConversationKind = "agent_workspace"
+)
+
+type ConversationClassifier interface {
+	ConversationKind(context.Context, string) (ConversationKind, error)
+}
+
 var (
 	ErrInvalidContract = errors.New("invalid v1 contract")
 	ErrSessionNotFound = errors.New("provider session not found")
@@ -264,37 +275,10 @@ type TurnRequest struct {
 	EventID string
 	// Prompt is transient provider input derived from the SDK callback.
 	Prompt string
-	// Output receives the complete current user-visible Agent text after each
-	// provider update. It is daemon-owned and cannot select a reply target.
-	Output TurnOutputSink
-	// Activity is optional. Normal chat turns leave it nil; Agent workspace
-	// turns use it for bounded, user-facing lifecycle summaries.
-	Activity TurnActivitySink
+	// Events is optional. Agent workspace turns persist canonical run events;
+	// normal chat turns consume final assistant message deltas.
+	Events RunEventSink
 }
-
-type TurnOutput struct {
-	Text string
-}
-
-type TurnOutputSink func(context.Context, TurnOutput) error
-
-type TurnActivity struct {
-	Kind         string
-	CallID       string
-	RequestID    string
-	Name         string
-	Summary      string
-	Status       string
-	Decision     string
-	Choices      []string
-	DurationMS   int64
-	ArtifactName string
-	MediaType    string
-	Size         int64
-	AttachmentID string
-}
-
-type TurnActivitySink func(context.Context, TurnActivity) error
 
 type TurnResult struct {
 	FinalText   string

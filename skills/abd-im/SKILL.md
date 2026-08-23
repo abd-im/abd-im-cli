@@ -18,6 +18,9 @@ Read [references/identity.md](references/identity.md) when the identity or targe
 
 ## Run commands
 
+Command help is unavailable. Use the command forms documented in this skill and its references
+without `--help`.
+
 Commands return JSON by default. Pass command input as one JSON object on stdin:
 
 ```bash

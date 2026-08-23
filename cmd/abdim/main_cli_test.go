@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -70,4 +72,21 @@ func TestCLIHasNoDynamicCommandCatalog(t *testing.T) {
 			t.Fatalf("private Agent environment remains: %q", entry)
 		}
 	}
+}
+
+func TestAgentEnvironmentPrependsCurrentBinaryDirectory(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "PATH=" + filepath.Dir(executable) + string(os.PathListSeparator)
+	for _, entry := range agentEnvironment("hermes", "work") {
+		if strings.HasPrefix(entry, "PATH=") {
+			if !strings.HasPrefix(entry, want) {
+				t.Fatalf("Agent PATH = %q, want prefix %q", entry, want)
+			}
+			return
+		}
+	}
+	t.Fatal("Agent environment has no PATH")
 }

@@ -39,8 +39,7 @@ type Request struct {
 	ConversationID string
 	EventID        string
 	Prompt         string
-	Output         contracts.TurnOutputSink
-	Activity       contracts.TurnActivitySink
+	Events         contracts.RunEventSink
 	Started        func(context.Context) error
 }
 
@@ -340,7 +339,7 @@ func (m *Manager) execute(item *job) {
 	result, err := session.Turn(turnContext, contracts.TurnRequest{
 		RunID: item.request.ID, EventID: item.request.EventID,
 		Prompt: item.request.Prompt,
-		Output: item.request.Output, Activity: item.request.Activity,
+		Events: item.request.Events,
 	})
 	close(finished)
 	if status, canceled := item.cancellation(); canceled {
