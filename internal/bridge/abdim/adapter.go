@@ -39,6 +39,7 @@ type userContext interface {
 	SetAdvancedMsgListener(open_im_sdk_callback.OnAdvancedMsgListener)
 	SetCustomBusinessListener(open_im_sdk_callback.OnCustomBusinessListener)
 	Login(context.Context, string, string) error
+	MarkConversationMessageAsRead(context.Context, string) error
 	StartStreamMessage(context.Context, open_im_sdk_callback.SendMsgCallBack, string, string, string, string, string) (string, error)
 	AppendStreamMessage(context.Context, string, string, int64, []string, bool) error
 	Logout(context.Context) error
@@ -61,6 +62,10 @@ func (u sdkUserContext) StartStreamMessage(ctx context.Context, callback open_im
 		return "", err
 	}
 	return conversationID, nil
+}
+
+func (u sdkUserContext) MarkConversationMessageAsRead(ctx context.Context, conversationID string) error {
+	return u.Conversation().MarkConversationMessageAsRead(ctx, conversationID)
 }
 
 type Adapter struct {
@@ -252,6 +257,23 @@ func (a *Adapter) emit(event contracts.SDKEvent) {
 	if listener != nil {
 		listener(context.Background(), event)
 	}
+}
+
+func (a *Adapter) MarkConversationRead(ctx context.Context, conversationID string) error {
+	if strings.TrimSpace(conversationID) == "" {
+		return errors.New("conversation ID is required")
+	}
+	user, err := a.currentUser()
+	if err != nil {
+		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	config := a.config
+	ctx = ccontext.WithInfo(ctx, &ccontext.GlobalConfig{UserID: a.userID, Token: a.token, IMConfig: &config})
+	ctx = ccontext.WithOperationID(ctx, uuid.NewString())
+	return user.MarkConversationMessageAsRead(ctx, conversationID)
 }
 
 func (a *Adapter) report(err error) {

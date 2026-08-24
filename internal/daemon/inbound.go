@@ -38,6 +38,11 @@ type ReplySender interface {
 	abdimbridge.TextStreamSender
 }
 
+type botClient interface {
+	ReplySender
+	MarkConversationRead(context.Context, string) error
+}
+
 type Config struct {
 	ProfileID           string
 	UserID              string
@@ -46,7 +51,7 @@ type Config struct {
 	Runs                *run.Manager
 	UserMessages        messageservice.Source
 	UserSender          ReplySender
-	BotSender           ReplySender
+	BotSender           botClient
 	WorkspaceSender     abdimbridge.AgentRunSender
 	WorkspaceClassifier contracts.ConversationClassifier
 	OnError             func(error)
@@ -62,7 +67,7 @@ type Inbound struct {
 	runs                *run.Manager
 	userMessages        messageservice.Source
 	userSender          ReplySender
-	botSender           ReplySender
+	botSender           botClient
 	workspaceSender     abdimbridge.AgentRunSender
 	workspaceClassifier contracts.ConversationClassifier
 	onError             func(error)
@@ -105,10 +110,24 @@ func (d *Inbound) Listener(ctx context.Context, event contracts.SDKEvent) {
 		ctx = context.WithoutCancel(ctx)
 	}
 	go func() {
+		d.markReceivedConversationRead(ctx, event)
 		if _, err := d.Process(ctx, event); err != nil {
 			d.report(err)
 		}
 	}()
+}
+
+func (d *Inbound) markReceivedConversationRead(ctx context.Context, event contracts.SDKEvent) {
+	if event.Type != string(contracts.EventMessageReceived) {
+		return
+	}
+	reference := eventReference(event.Data)
+	if reference.ConversationID == "" || reference.SenderID == d.botID {
+		return
+	}
+	if err := d.botSender.MarkConversationRead(ctx, reference.ConversationID); err != nil {
+		d.report(err)
+	}
 }
 
 func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcome, error) {
@@ -143,7 +162,7 @@ func (d *Inbound) Process(ctx context.Context, event contracts.SDKEvent) (Outcom
 	workspace := false
 	identity := "bot"
 	prompt := directPrompt(d.botID, event.MessageText, event.MessageQuote)
-	sender := d.botSender
+	var sender ReplySender = d.botSender
 	if reference.BusinessConnectionID != "" {
 		mode = ReplyHosted
 		identity = "user"

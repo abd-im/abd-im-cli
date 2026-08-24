@@ -196,6 +196,9 @@ func (*fakeUserContext) InitResources()                                         
 func (*fakeUserContext) SetAdvancedMsgListener(open_im_sdk_callback.OnAdvancedMsgListener)       {}
 func (*fakeUserContext) SetCustomBusinessListener(open_im_sdk_callback.OnCustomBusinessListener) {}
 func (*fakeUserContext) Login(context.Context, string, string) error                             { return nil }
+func (f *fakeUserContext) MarkConversationMessageAsRead(_ context.Context, conversationID string) error {
+	return nil
+}
 func (f *fakeUserContext) StartStreamMessage(_ context.Context, callback open_im_sdk_callback.SendMsgCallBack, streamType string, text, clientMsgID, recipientID, groupID string) (string, error) {
 	f.streamType, f.text, f.clientMsgID, f.recipientID, f.groupID = streamType, text, clientMsgID, recipientID, groupID
 	callback.OnSuccess(`{}`)

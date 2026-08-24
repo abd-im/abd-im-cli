@@ -46,6 +46,20 @@ func TestInboundDirectRepliesThroughBotSDK(t *testing.T) {
 	}
 }
 
+func TestInboundListenerMarksDirectConversationAsRead(t *testing.T) {
+	inbound, _, _, botSender, closeStore := newInboundHarness(t)
+	defer closeStore()
+	inbound.Listener(context.Background(), sdkEvent("direct-read", `{"conversation_id":"conversation-1","message_id":"message-1","sender_id":"peer","session_type":1}`, "hello"))
+	select {
+	case conversationID := <-botSender.read:
+		if conversationID != "conversation-1" {
+			t.Fatalf("read conversation = %q", conversationID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("inbound listener did not mark direct conversation as read")
+	}
+}
+
 func TestInboundRepliesToAgentWorkspaceOnly(t *testing.T) {
 	inbound, _, _, botSender, closeStore := newInboundHarness(t)
 	defer closeStore()
@@ -195,7 +209,7 @@ func newInboundHarness(t *testing.T) (*Inbound, *promptProvider, *captureSender,
 		t.Fatal(err)
 	}
 	userSender := &captureSender{sent: make(chan delivery, 2), texts: make(chan *captureTextStream, 2), runs: make(chan *captureRunStream, 2)}
-	botSender := &captureSender{sent: make(chan delivery, 2), texts: make(chan *captureTextStream, 2), runs: make(chan *captureRunStream, 2)}
+	botSender := &captureSender{sent: make(chan delivery, 2), texts: make(chan *captureTextStream, 2), runs: make(chan *captureRunStream, 2), read: make(chan string, 2)}
 	inbound, err := New(Config{
 		ProfileID: "work", UserID: "owner", BotID: "agent", Ledger: ledger, Runs: runs,
 		UserMessages: fakeMessages{}, UserSender: userSender, BotSender: botSender, WorkspaceSender: botSender,
@@ -261,6 +275,12 @@ type captureSender struct {
 	sent  chan delivery
 	texts chan *captureTextStream
 	runs  chan *captureRunStream
+	read  chan string
+}
+
+func (s *captureSender) MarkConversationRead(_ context.Context, conversationID string) error {
+	s.read <- conversationID
+	return nil
 }
 
 func (s *captureSender) SendText(_ context.Context, text, recipientID, groupID string) error {
