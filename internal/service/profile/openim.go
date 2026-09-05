@@ -11,10 +11,10 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/abd-im/abd-im-protocol/sdkws"
+	pbuser "github.com/abd-im/abd-im-protocol/user"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
 	"github.com/google/uuid"
-	"github.com/openimsdk/protocol/sdkws"
-	pbuser "github.com/openimsdk/protocol/user"
 )
 
 var ErrUserNotFound = errors.New("user not found")

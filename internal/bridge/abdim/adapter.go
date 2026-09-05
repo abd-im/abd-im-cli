@@ -11,14 +11,14 @@ import (
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
+	pbconstant "github.com/abd-im/abd-im-protocol/constant"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk_callback"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/utils"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
+	"github.com/abd-im/abd-im-tools/log"
 	"github.com/google/uuid"
-	pbconstant "github.com/openimsdk/protocol/constant"
-	"github.com/openimsdk/tools/log"
 )
 
 const defaultConnectTimeout = 30 * time.Second

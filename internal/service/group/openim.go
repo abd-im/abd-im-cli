@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
+	pbgroup "github.com/abd-im/abd-im-protocol/group"
+	"github.com/abd-im/abd-im-protocol/sdkws"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/constant"
 	"github.com/google/uuid"
-	pbgroup "github.com/openimsdk/protocol/group"
-	"github.com/openimsdk/protocol/sdkws"
 )
 
 var ErrNotFound = errors.New("group not found")

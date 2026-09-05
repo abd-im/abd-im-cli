@@ -50,15 +50,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Configure private SDK access
+      - name: Configure private module access
         env:
-          SDK_READ_TOKEN: ${{ secrets.ABDIM_SDK_READ_TOKEN }}
+          ABDIM_TOKEN: ${{ secrets.ABDIM_TOKEN }}
         run: |
-          if [[ -z "$SDK_READ_TOKEN" ]]; then
-            echo "::error title=Missing private SDK token::Configure the repository secret ABDIM_SDK_READ_TOKEN with read-only Contents access to abd-im/abd-im-sdk-core."
+          if [[ -z "$ABDIM_TOKEN" ]]; then
+            echo "::error title=Missing private module token::Configure the repository secret ABDIM_TOKEN with read-only Contents access to the required private ABD IM repositories."
             exit 2
           fi
-          git config --global url."https://x-access-token:${SDK_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${ABDIM_TOKEN}@github.com/".insteadOf "https://github.com/"
       - run: go mod download
       - name: Validate controlled integration configuration
         run: |

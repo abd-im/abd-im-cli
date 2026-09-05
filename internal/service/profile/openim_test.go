@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/abd-im/abd-im-protocol/sdkws"
+	pbuser "github.com/abd-im/abd-im-protocol/user"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
-	"github.com/openimsdk/protocol/sdkws"
-	pbuser "github.com/openimsdk/protocol/user"
 )
 
 func TestOpenIMSourceUsesFixedServerUserReadAndRuntimeFacts(t *testing.T) {

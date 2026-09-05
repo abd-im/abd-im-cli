@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
+	pbconstant "github.com/abd-im/abd-im-protocol/constant"
+	"github.com/abd-im/abd-im-protocol/sdkws"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
-	pbconstant "github.com/openimsdk/protocol/constant"
-	"github.com/openimsdk/protocol/sdkws"
 )
 
 func TestSDKSourceUsesOnlyServerReadsAndMapsResponses(t *testing.T) {

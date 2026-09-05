@@ -11,10 +11,10 @@ import (
 	"net/url"
 	"strings"
 
+	pbconstant "github.com/abd-im/abd-im-protocol/constant"
+	pbconversation "github.com/abd-im/abd-im-protocol/conversation"
 	"github.com/abd-im/abd-im-sdk-core/v3/pkg/ccontext"
 	"github.com/google/uuid"
-	pbconstant "github.com/openimsdk/protocol/constant"
-	pbconversation "github.com/openimsdk/protocol/conversation"
 )
 
 var (

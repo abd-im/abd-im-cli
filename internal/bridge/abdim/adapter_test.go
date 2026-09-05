@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
+	pbconstant "github.com/abd-im/abd-im-protocol/constant"
 	"github.com/abd-im/abd-im-sdk-core/v3/open_im_sdk_callback"
 	"github.com/abd-im/abd-im-sdk-core/v3/sdk_struct"
-	pbconstant "github.com/openimsdk/protocol/constant"
 )
 
 func TestMessageListenerNormalizesStableReferences(t *testing.T) {

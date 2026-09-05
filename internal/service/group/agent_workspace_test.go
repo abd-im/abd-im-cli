@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/abd-im/abd-im-cli/internal/contracts"
-	"github.com/openimsdk/protocol/sdkws"
+	"github.com/abd-im/abd-im-protocol/sdkws"
 )
 
 func TestConversationKindFromGroupEx(t *testing.T) {
